@@ -1,0 +1,2690 @@
+/**
+ * TESTES E2E DO CLIENTE WEB — correm contra o servidor Next.js real
+ * (http://localhost:3000) e a base Supabase real.
+ *
+ * Verifica o que o utilizador vê: rotas públicas, redireccionamentos por
+ * perfil, conteúdo renderizado no servidor e o endpoint de registo.
+ *
+ * Uso (com `npm run dev` a correr em apps/web):
+ *   node apps/web/tests/web.e2e.mjs
+ */
+
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { setGlobalDispatcher, Agent } from "undici";
+
+/**
+ * A suite faz centenas de pedidos ao Supabase e, numa ligação lenta, o limite
+ * de 10 s que o `fetch` do Node usa para abrir o socket cortava a meio — o
+ * processo morria com `ConnectTimeoutError`, um problema de rede a passar por
+ * falha de código. Aqui a margem é maior e os erros de rede repetem-se; um erro
+ * do servidor (4xx/5xx) continua a falhar à primeira.
+ */
+setGlobalDispatcher(
+  new Agent({
+    connect: { timeout: 60_000 },
+    headersTimeout: 120_000,
+    bodyTimeout: 120_000,
+  })
+);
+
+const fetchOriginal = globalThis.fetch;
+const REDE = /fetch failed|ConnectTimeout|UND_ERR|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i;
+
+globalThis.fetch = async (entrada, init = {}) => {
+  let ultimo;
+  for (let tentativa = 0; tentativa < 5; tentativa++) {
+    try {
+      return await fetchOriginal(entrada, init);
+    } catch (e) {
+      ultimo = e;
+      const assinatura = `${e?.message ?? ""} ${e?.cause?.code ?? ""}`;
+      if (!REDE.test(assinatura)) throw e;
+      // Espera crescente: uma falha de DNS resolve-se em segundos.
+      await new Promise((r) => setTimeout(r, 1500 * (tentativa + 1)));
+    }
+  }
+  throw ultimo;
+};
+
+const AQUI = dirname(fileURLToPath(import.meta.url));
+const WEB = resolve(AQUI, "..");
+const ROOT = resolve(WEB, "../..");
+const APP = process.env.INUKA_WEB_API ?? "http://localhost:3000";
+
+/**
+ * Sem servidor, todos os testes falhariam com "fetch failed" e esconderiam a
+ * causa. Falhar aqui, uma vez, com a instrução certa é mais útil.
+ * `Connection: close` garante que não fica nenhum socket aberto, para o
+ * processo terminar de forma limpa.
+ */
+const servidor = await fetch(`${APP}/`, { headers: { Connection: "close" } }).catch(() => null);
+if (!servidor) {
+  console.error(`\nO servidor web não está a responder em ${APP}.`);
+  console.error("Use `npm run test:web` — esse comando arranca o servidor sozinho.");
+  console.error("Se está a correr este ficheiro directamente, arranque antes:");
+  console.error("  npm run dev\n");
+  process.exitCode = 2;
+  await new Promise((r) => setTimeout(r, 100));
+  process.exit(2);
+}
+
+function loadEnv() {
+  const env = {};
+  for (const linha of readFileSync(resolve(WEB, ".env.local"), "utf8").split(/\r?\n/)) {
+    const m = linha.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+  }
+  return env;
+}
+
+const env = loadEnv();
+const BASE = env.NEXT_PUBLIC_SUPABASE_URL;
+const ANON = env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const SR = env.SUPABASE_SERVICE_ROLE_KEY;
+const REF = BASE.replace(/^https?:\/\//, "").split(".")[0];
+
+let total = 0;
+let passed = 0;
+const falhas = [];
+
+function ok(label, detail = "") {
+  total++;
+  passed++;
+  console.log(`PASS  ${label}${detail ? `  -> ${detail}` : ""}`);
+}
+function fail(label, detail = "") {
+  total++;
+  falhas.push(`${label} :: ${detail}`);
+  console.log(`FAIL  ${label}  -> ${detail}`);
+}
+async function check(label, fn) {
+  try {
+    const d = await fn();
+    ok(label, typeof d === "string" ? d : "");
+  } catch (e) {
+    fail(label, e.message);
+  }
+}
+function assert(c, m) {
+  if (!c) throw new Error(m);
+}
+
+async function sb(path, { method = "GET", body, key = ANON, jwt, prefer } = {}) {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${jwt ?? key}`,
+      "Content-Type": "application/json",
+      ...(prefer ? { Prefer: prefer } : {}),
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  const txt = await res.text();
+  let data;
+  try {
+    data = txt ? JSON.parse(txt) : null;
+  } catch {
+    data = txt;
+  }
+  return { status: res.status, ok: res.ok, data };
+}
+
+const rpcAdmin = (name, args) =>
+  sb(`/rest/v1/rpc/${name}`, { method: "POST", body: args, key: SR, jwt: SR });
+
+/** Constrói o cookie que o @supabase/ssr lê no servidor. */
+function cookieSessao(sessao) {
+  const payload = JSON.stringify({
+    access_token: sessao.access_token,
+    refresh_token: sessao.refresh_token,
+    expires_at: sessao.expires_at,
+    expires_in: sessao.expires_in,
+    token_type: "bearer",
+    user: sessao.user,
+  });
+  return `sb-${REF}-auth-token=base64-${Buffer.from(payload).toString("base64url")}`;
+}
+
+async function login(phone, password) {
+  const email = `u${phone.replace("+", "")}@inuka.ao`;
+  const res = await sb("/auth/v1/token?grant_type=password", {
+    method: "POST",
+    body: { email, password },
+  });
+  assert(res.ok, `login ${phone}: ${JSON.stringify(res.data)}`);
+  return res.data;
+}
+
+async function registar(full_name, phone, password) {
+  const res = await fetch(`${APP}/api/auth/registo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ full_name, phone, password }),
+  });
+  return { status: res.status, data: await res.json().catch(() => ({})) };
+}
+
+/** GET a uma página da app, sem seguir redireccionamentos. */
+async function pagina(path, cookie) {
+  const res = await fetch(`${APP}${path}`, {
+    headers: cookie ? { cookie } : {},
+    redirect: "manual",
+  });
+  const html = await res.text();
+  return { status: res.status, html, location: res.headers.get("location") };
+}
+
+function texto(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/g, " ")
+    .replace(/<style[\s\S]*?<\/style>/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const PWD = "WebE2e2026!";
+const CLIENTE = { name: "Cliente Web", phone: "+244924200001" };
+const VENDEDOR = { name: "Vendedor Web", phone: "+244924200002" };
+const GESTOR = { name: "Gestor Web", phone: "+244924200003" };
+
+async function apagarConta(phone) {
+  const { data } = await sb(
+    `/rest/v1/profiles?select=id&phone=eq.${encodeURIComponent(phone)}`,
+    { key: SR, jwt: SR },
+  );
+  const id = data?.[0]?.id;
+  if (!id) return;
+  const del = (p) => sb(p, { method: "DELETE", key: SR, jwt: SR, prefer: "return=minimal" });
+  await del(`/rest/v1/products?created_by=eq.${id}`);
+  await del(`/rest/v1/inventory_movements?created_by=eq.${id}`);
+  await del(`/rest/v1/orders?customer_id=eq.${id}`);
+  await del(`/rest/v1/sales?seller_id=eq.${id}`);
+  await del(`/rest/v1/sales?customer_id=eq.${id}`);
+  await del(`/rest/v1/discount_requests?customer_id=eq.${id}`);
+  await del(`/rest/v1/reservations?customer_id=eq.${id}`);
+  await del(`/rest/v1/messages?sender_id=eq.${id}`);
+  await del(`/rest/v1/conversations?created_by=eq.${id}`);
+  await del(`/rest/v1/posts?author_id=eq.${id}`);
+  await del(`/rest/v1/post_comments?author_id=eq.${id}`);
+  await del(`/rest/v1/notifications?user_id=eq.${id}`);
+  await del(`/rest/v1/sync_operations?user_id=eq.${id}`);
+  await del(`/rest/v1/favorites?user_id=eq.${id}`);
+  await del(`/rest/v1/audit_logs?user_id=eq.${id}`);
+  await del(`/rest/v1/seller_customers?seller_id=eq.${id}`);
+  await del(`/rest/v1/seller_customers?customer_id=eq.${id}`);
+  // `assigned_by` também referencia auth.users: um cliente ligado por esta
+  // conta bloqueia a eliminação com 23503 se não for limpo primeiro.
+  await del(`/rest/v1/seller_customers?assigned_by=eq.${id}`);
+  const res = await sb(`/auth/v1/admin/users/${id}`, { method: "DELETE", key: SR, jwt: SR });
+  if (!res.ok) throw new Error(`apagar ${phone}: ${res.status} ${JSON.stringify(res.data)}`);
+}
+
+console.log("=".repeat(64));
+console.log("TESTES E2E — CLIENTE WEB (Next.js + Supabase real)");
+console.log("=".repeat(64));
+
+for (const u of [CLIENTE, VENDEDOR, GESTOR]) await apagarConta(u.phone);
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 1. ROTAS PÚBLICAS (visitante) ---");
+// ---------------------------------------------------------------------------
+const publicas = ["/", "/catalogo", "/carrinho", "/login", "/registo", "/sobre", "/contactos"];
+for (const rota of publicas) {
+  await check(`visitante abre ${rota}`, async () => {
+    const r = await pagina(rota);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    return "200";
+  });
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 1b. APLICAÇÃO NO IPHONE (manifesto, ícones, ecrãs de arranque) ---");
+// ---------------------------------------------------------------------------
+
+/** Largura e altura lidas do IHDR de um PNG — evita uma dependência só para isto. */
+function dimensoesPng(buffer) {
+  if (buffer.length < 24 || buffer.toString("ascii", 1, 4) !== "PNG") return null;
+  return { largura: buffer.readUInt32BE(16), altura: buffer.readUInt32BE(20) };
+}
+
+await check("manifesto é público e descreve uma app instalável", async () => {
+  const r = await pagina("/manifest.json");
+  // Já foi 307 para /login: o proxy apanhava o manifesto e o telefone ficava
+  // sem nome, sem ícones e sem start_url — o ícone no ecrã principal abria
+  // como um marcador e apanhava o portão de acesso (403).
+  assert(r.status === 200, `HTTP ${r.status}${r.location ? ` -> ${r.location}` : ""}`);
+
+  const m = JSON.parse(r.html);
+  assert(m.name === "INUKA Angola", `name=${m.name}`);
+  assert(m.short_name === "INUKA", `short_name=${m.short_name}`);
+  assert(m.display === "standalone", `display=${m.display}`);
+  assert(m.start_url, "sem start_url");
+  // O alojamento só entrega a página a quem apresentar o código. Um ícone que
+  // arranque em "/" abre uma sessão nova, sem o cookie, e leva 403.
+  assert(/sharecode=/.test(m.start_url), `start_url sem código de acesso: ${m.start_url}`);
+  assert(Array.isArray(m.icons) && m.icons.length >= 2, "sem ícones");
+  assert(m.icons.some((i) => i.sizes === "512x512"), "sem ícone 512x512");
+  return `${m.icons.length} ícones · start_url=${m.start_url}`;
+});
+
+await check("ícones têm os tamanhos que o iOS exige", async () => {
+  const alvos = [
+    ["/apple-touch-icon.png", 180, 180],
+    ["/ios/icon-192.png", 192, 192],
+    ["/ios/icon-512.png", 512, 512],
+    ["/ios/icon-1024.png", 1024, 1024],
+  ];
+  for (const [caminho, largura, altura] of alvos) {
+    const res = await fetch(`${APP}${caminho}`);
+    assert(res.status === 200, `${caminho}: HTTP ${res.status}`);
+    const d = dimensoesPng(Buffer.from(await res.arrayBuffer()));
+    assert(d, `${caminho}: não é um PNG válido`);
+    assert(d.largura === largura && d.altura === altura, `${caminho}: ${d.largura}x${d.altura}`);
+  }
+  return `${alvos.length} ícones`;
+});
+
+await check("cabeçalho declara a app iOS e os ecrãs de arranque existem", async () => {
+  const r = await pagina("/");
+  const meta = (nome) => r.html.match(new RegExp(`<meta[^>]*name="${nome}"[^>]*>`))?.[0] ?? "";
+
+  // Sem `capable` o iOS abre o Safari com barra de endereço em vez da app.
+  // O Next 16 só emite o nome standard (`mobile-web-app-capable`), por isso o
+  // nome com prefixo Apple é escrito à mão no layout — os dois têm de estar.
+  assert(/content="yes"/.test(meta("apple-mobile-web-app-capable")), "sem apple-mobile-web-app-capable");
+  assert(/content="yes"/.test(meta("mobile-web-app-capable")), "sem mobile-web-app-capable");
+  assert(/content="INUKA"/.test(meta("apple-mobile-web-app-title")), "sem apple-mobile-web-app-title");
+  // Sem `viewport-fit=cover` o `env(safe-area-inset-*)` fica a zero e o último
+  // botão desaparece debaixo da barra de gestos.
+  assert(/viewport-fit=cover/.test(meta("viewport")), "viewport sem viewport-fit=cover");
+  assert(/rel="apple-touch-icon"/.test(r.html), "sem apple-touch-icon");
+  assert(/rel="manifest"/.test(r.html), "sem rel=manifest");
+
+  const arranques = [...r.html.matchAll(/href="(\/ios\/splash-[^"]+\.png)"/g)].map((m) => m[1]);
+  assert(arranques.length >= 7, `só ${arranques.length} ecrãs de arranque`);
+  for (const caminho of arranques) {
+    const res = await fetch(`${APP}${caminho}`);
+    assert(res.status === 200, `${caminho}: HTTP ${res.status}`);
+  }
+  return `${arranques.length} ecrãs de arranque, todos servidos`;
+});
+
+await check("home é a loja e não o modelo do create-next-app", async () => {
+  const r = await pagina("/");
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  // O ficheiro app/page.tsx (boilerplate) tapava a home real em (public).
+  assert(!/To get started, edit the/i.test(t), "serviu o modelo por omissão do Next");
+  assert(!/create-next-app|vercel\.com\/templates/i.test(r.html), "links do create-next-app na home");
+  assert(/INUKA/.test(t), "sem marca");
+  assert(/Destaques|Em promoção|Categorias/.test(t), "sem secções de loja");
+  return "home real";
+});
+
+await check("páginas públicas têm um só cabeçalho e um só rodapé", async () => {
+  // Os layouts de grupo já os renderizam; as páginas voltaram a renderizá-los
+  // e o resultado foram dois de cada.
+  for (const rota of ["/", "/catalogo", "/sobre", "/contactos", "/privacidade"]) {
+    const r = await pagina(rota);
+    const cabecalhos = (r.html.match(/<header/g) || []).length;
+    const rodapes = (r.html.match(/<footer/g) || []).length;
+    assert(cabecalhos === 1, `${rota}: ${cabecalhos} cabeçalhos`);
+    assert(rodapes === 1, `${rota}: ${rodapes} rodapés`);
+  }
+  return "1 + 1 em 5 páginas";
+});
+
+await check("catálogo lista os produtos da base", async () => {
+  const r = await pagina("/catalogo");
+  const t = texto(r.html);
+  assert(t.includes("Catálogo"), "sem título");
+  assert(/\[DEMO\]/.test(t), "sem produtos [DEMO]");
+  const nomes = t.match(/\[DEMO\][^]*?(?=\s*Kz)/g);
+  return `${(t.match(/\[DEMO\]/g) || []).length} produtos renderizados`;
+});
+
+await check("filtro por categoria reduz o catálogo", async () => {
+  const todos = (texto((await pagina("/catalogo")).html).match(/\[DEMO\]/g) || []).length;
+  const r = await pagina("/catalogo?cat=perfumaria-feminina");
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const filtrados = (texto(r.html).match(/\[DEMO\]/g) || []).length;
+  assert(filtrados > 0, "o filtro não devolveu nada");
+  assert(filtrados < todos, `filtro inerte: ${filtrados} de ${todos}`);
+  assert(/Perfumaria Feminina/.test(texto(r.html)), "sem a categoria no título");
+  return `${filtrados} de ${todos}`;
+});
+
+await check("filtro de preço respeita o preço pago", async () => {
+  // Um produto em promoção conta pelo preço promocional, não pelo oficial.
+  const r = await pagina("/catalogo?max=10000");
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+
+  // Ler apenas dentro dos cartões: os rótulos do filtro também terminam em "Kz".
+  const precos = t
+    .split("[DEMO]")
+    .slice(1)
+    .map((bloco) => {
+      const m = bloco.match(/(\d[\d\s]*)\s*Kz/);
+      return m ? Number(m[1].replace(/\s/g, "")) : null;
+    })
+    .filter((v) => v !== null);
+
+  assert(precos.length > 0, "sem preços nos cartões");
+  assert(precos.every((p) => p <= 10000), `preço acima do filtro: ${precos.join(", ")}`);
+  return `${precos.length} preços ≤ 10 000 (${precos.join(", ")})`;
+});
+
+await check("categoria inexistente não devolve o catálogo inteiro", async () => {
+  const r = await pagina("/catalogo?cat=nao-existe");
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(!/\[DEMO\]/.test(t), "devolveu produtos para uma categoria que não existe");
+  assert(/Nenhum produto/i.test(t), "sem mensagem de vazio");
+  return "vazio, como deve ser";
+});
+
+await check("catálogo não expõe stock interno", async () => {
+  const r = await pagina("/catalogo");
+  assert(!/reserved_quantity|low_stock_threshold/i.test(r.html), "expôs colunas internas");
+  return "sem dados internos";
+});
+
+await check("visitante NÃO entra em /cliente", async () => {
+  const r = await pagina("/cliente");
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  assert((r.location || "").includes("/login"), `redirect: ${r.location}`);
+  return `${r.status} -> ${r.location}`;
+});
+
+await check("visitante NÃO entra em /vendedor", async () => {
+  const r = await pagina("/vendedor");
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  return `${r.status} -> ${r.location}`;
+});
+
+await check("visitante NÃO entra em /gerente", async () => {
+  const r = await pagina("/gerente");
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  return `${r.status} -> ${r.location}`;
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 2. REGISTO E LOGIN (cada perfil) ---");
+// ---------------------------------------------------------------------------
+await check("registo pela app cria conta de cliente", async () => {
+  const r = await registar(CLIENTE.name, CLIENTE.phone, PWD);
+  assert(r.status === 200 || r.status === 201, `HTTP ${r.status} ${JSON.stringify(r.data)}`);
+  return r.data.email;
+});
+
+await check("registo de vendedor", async () => {
+  const r = await registar(VENDEDOR.name, VENDEDOR.phone, PWD);
+  assert(r.status === 200 || r.status === 201, `HTTP ${r.status}`);
+  return r.data.email;
+});
+
+await check("registo de gestor", async () => {
+  const r = await registar(GESTOR.name, GESTOR.phone, PWD);
+  assert(r.status === 200 || r.status === 201, `HTTP ${r.status}`);
+  return r.data.email;
+});
+
+await check("promoção de papéis", async () => {
+  const a = await rpcAdmin("promote_to_seller", { p_phone: VENDEDOR.phone, p_region: "Uíge" });
+  assert(a.ok, JSON.stringify(a.data));
+  const b = await rpcAdmin("promote_to_manager", { p_phone: GESTOR.phone });
+  assert(b.ok, JSON.stringify(b.data));
+  return "seller + manager";
+});
+
+await check("login do cliente devolve sessão", async () => {
+  const s = await login(CLIENTE.phone, PWD);
+  assert(s.access_token, "sem token");
+  return `expira em ${s.expires_in}s`;
+});
+
+await check("palavra-passe errada é recusada", async () => {
+  const res = await sb("/auth/v1/token?grant_type=password", {
+    method: "POST",
+    body: { email: `u${CLIENTE.phone.replace("+", "")}@inuka.ao`, password: "errada" },
+  });
+  assert(!res.ok, "aceitou palavra-passe errada");
+  return `HTTP ${res.status}`;
+});
+
+await check("registo duplicado é recusado", async () => {
+  const r = await registar("Outro", CLIENTE.phone, PWD);
+  assert(r.status === 409, `HTTP ${r.status}`);
+  return r.data.error;
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 3. ÁREA DO CLIENTE ---");
+// ---------------------------------------------------------------------------
+const sCliente = await login(CLIENTE.phone, PWD);
+const sVendedor = await login(VENDEDOR.phone, PWD);
+const sGestor = await login(GESTOR.phone, PWD);
+const cCliente = cookieSessao(sCliente);
+const cVendedor = cookieSessao(sVendedor);
+const cGestor = cookieSessao(sGestor);
+
+await check("cliente entra em /cliente", async () => {
+  const r = await pagina("/cliente", cCliente);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  // A saudação usa o primeiro nome.
+  assert(t.includes(`Olá, ${CLIENTE.name.split(" ")[0]}`), `saudação ausente: ${t.slice(0, 80)}`);
+  return `"Olá, ${CLIENTE.name.split(" ")[0]}"`;
+});
+
+await check("cliente abre reservas", async () => {
+  const r = await pagina("/cliente/reservas", cCliente);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  assert(texto(r.html).includes("Reservas"), "sem título");
+  return "200";
+});
+
+await check("cliente abre encomendas", async () => {
+  const r = await pagina("/cliente/encomendas", cCliente);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  return "200";
+});
+
+await check("cliente abre favoritos", async () => {
+  const r = await pagina("/cliente/favoritos", cCliente);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  return "200";
+});
+
+await check("cliente abre conversas", async () => {
+  const r = await pagina("/cliente/conversas", cCliente);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  return "200";
+});
+
+await check("chat partilhado: /conversas serve todos os perfis", async () => {
+  const visitante = await pagina("/conversas");
+  assert(visitante.status === 307 || visitante.status === 302, `visitante -> ${visitante.status}`);
+  assert((visitante.location || "").includes("/login"), `visitante -> ${visitante.location}`);
+
+  for (const [quem, cookie] of [
+    ["cliente", cCliente],
+    ["vendedor", cVendedor],
+    ["gestor", cGestor],
+  ]) {
+    const r = await pagina("/conversas", cookie);
+    assert(r.status === 200, `${quem} -> ${r.status}`);
+    // O chat é cliente (`useSearchParams`), por isso o HTML pode trazer só o
+    // fallback de Suspense. O que importa é que a rota abre para o perfil.
+    assert(/Mensagens|A carregar/.test(texto(r.html)), `${quem} sem chat`);
+  }
+  return "3 perfis + visitante bloqueado";
+});
+
+await check("cliente NÃO entra em /gerente", async () => {
+  const r = await pagina("/gerente", cCliente);
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  return `${r.status} -> ${r.location}`;
+});
+
+await check("cliente NÃO entra em /vendedor", async () => {
+  const r = await pagina("/vendedor", cCliente);
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  return `${r.status} -> ${r.location}`;
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 4. ÁREA DO VENDEDOR ---");
+// ---------------------------------------------------------------------------
+await check("vendedor entra em /vendedor", async () => {
+  const r = await pagina("/vendedor", cVendedor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  // O painel mudou de "resumo comercial" para um cartão de identidade com a
+  // referência INUKA. Se a migração de colaboradores ainda não estiver
+  // aplicada, a página mostra a instrução em vez do painel — nunca um erro.
+  assert(
+    t.includes("Bem-vindo à INUKA Angola") || t.includes("PATCH_COLABORADORES"),
+    "nem o painel nem o aviso de migração aparecem"
+  );
+  // Colaborador e vendedor são a mesma pessoa; a interface não pode ter
+  // dois nomes para o mesmo papel.
+  // Colaborador e vendedor são a mesma pessoa; a interface não pode ter
+  // dois nomes para o mesmo papel. Nota: a conta de teste chama-se
+  // "Vendedor", por isso o teste procura a etiqueta e não a palavra solta.
+  assert(t.includes("Área de colaborador"), "a área não se identifica como de colaborador");
+  assert(!/Área do [Vv]endedor/.test(t), "a área ainda se chama “Área do vendedor”");
+  assert(!/Vendedores ativos/.test(t), "o painel ainda conta “Vendedores ativos”");
+  return "200";
+});
+
+await check("vendedor abre registar venda", async () => {
+  const r = await pagina("/vendedor/vendas/registar", cVendedor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  return "200";
+});
+
+await check("vendedor abre histórico de vendas", async () => {
+  const r = await pagina("/vendedor/vendas", cVendedor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  return "200";
+});
+
+await check("vendedor abre os seus clientes", async () => {
+  const r = await pagina("/vendedor/clientes", cVendedor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  return "200";
+});
+
+await check("vendedor NÃO entra em /gerente", async () => {
+  const r = await pagina("/gerente", cVendedor);
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  return `${r.status} -> ${r.location}`;
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 5. ÁREA DA GERÊNCIA ---");
+// ---------------------------------------------------------------------------
+await check("gestor entra no painel", async () => {
+  const r = await pagina("/gerente", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(t.includes("Painel de gestão"), "sem painel");
+  assert(/Valor vendido/.test(t), "sem indicador de valor");
+  return "200 com indicadores";
+});
+
+await check("gestor abre produtos", async () => {
+  const r = await pagina("/gerente/produtos", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  return "200";
+});
+
+await check("gestor abre encomendas", async () => {
+  const r = await pagina("/gerente/encomendas", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  return "200";
+});
+
+await check("gestor abre descontos", async () => {
+  const r = await pagina("/gerente/descontos", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  return "200";
+});
+
+await check("gestor acede também às áreas de cliente e vendedor", async () => {
+  for (const rota of ["/cliente", "/vendedor"]) {
+    const r = await pagina(rota, cGestor);
+    assert(r.status === 200, `${rota} -> ${r.status}`);
+  }
+  return "cliente + vendedor";
+});
+
+await check("encomendas do gestor: embed do vendedor válido e cliente juntado por id", async () => {
+  // `orders.customer_id` aponta para auth.users, por isso
+  // `profiles!orders_customer_id_fkey` não existe — foi o erro que deixou a
+  // página de encomendas em branco. O vendedor tem FK real para profiles.
+  const pedidos = await sb(
+    "/rest/v1/orders?select=id,customer_id,seller:profiles!orders_seller_id_fkey(full_name)&limit=5",
+    { jwt: sGestor.access_token }
+  );
+  assert(pedidos.ok, `embed do vendedor: ${JSON.stringify(pedidos.data).slice(0, 140)}`);
+
+  const ids = [...new Set((pedidos.data ?? []).map((o) => o.customer_id).filter(Boolean))];
+  if (ids.length > 0) {
+    const perfis = await sb(`/rest/v1/profiles?select=id,full_name&id=in.(${ids.join(",")})`, {
+      jwt: sGestor.access_token,
+    });
+    assert(perfis.ok, `perfis por id: ${JSON.stringify(perfis.data).slice(0, 140)}`);
+    assert(perfis.data.length === ids.length, `${ids.length} clientes, ${perfis.data.length} perfis`);
+  }
+  return `${(pedidos.data ?? []).length} encomendas · ${ids.length} clientes`;
+});
+
+await check("gestor abre as secções de gestão", async () => {
+  const rotas = [
+    ["/gerente/clientes", "Clientes"],
+    ["/gerente/colaboradores", "pesquisa de colaboradores"],
+    ["/gerente/categorias", "Categorias"],
+    ["/gerente/relatorios", "Relatórios"],
+    ["/gerente/conversas", "Mensagens"],
+  ];
+  for (const [rota, marca] of rotas) {
+    const r = await pagina(rota, cGestor);
+    assert(r.status === 200, `${rota} -> ${r.status}`);
+    assert(texto(r.html).includes(marca), `${rota} sem “${marca}”`);
+  }
+  return `${rotas.length} secções`;
+});
+
+await check("relatórios compara com o período anterior", async () => {
+  const r = await pagina("/gerente/relatorios?periodo=7d", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(/Valor vendido/.test(t), "sem indicador de valor");
+  assert(/Ticket médio/.test(t), "sem ticket médio");
+  assert(/vs\. período anterior|sem base de comparação/.test(t), "sem comparação");
+  return "7 dias com comparação";
+});
+
+await check("vendedor NÃO entra nas secções de gestão", async () => {
+  for (const rota of ["/gerente/clientes", "/gerente/colaboradores", "/gerente/categorias", "/gerente/conversas", "/gerente/relatorios"]) {
+    const r = await pagina(rota, cVendedor);
+    assert(r.status === 307 || r.status === 302, `${rota} -> ${r.status}`);
+    assert((r.location || "").includes("/vendedor"), `${rota} -> ${r.location}`);
+  }
+  return "5 bloqueadas";
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 6. ESTÚDIO DE DESIGN (só gestão) ---");
+// ---------------------------------------------------------------------------
+await check("visitante NÃO entra no estúdio de design", async () => {
+  const r = await pagina("/designer");
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  assert(String(r.location ?? "").includes("/login"), `redirect inesperado: ${r.location}`);
+  return `${r.status} -> ${r.location}`;
+});
+
+await check("cliente NÃO entra no estúdio de design", async () => {
+  // O estúdio é ferramenta de gestão: nem a galeria nem o editor se abrem.
+  const r = await pagina("/designer", cCliente);
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  assert(!String(r.location ?? "").includes("/designer"), `foi para o estúdio: ${r.location}`);
+  return `${r.status} -> ${r.location}`;
+});
+
+await check("colaborador NÃO entra no estúdio de design", async () => {
+  const r = await pagina("/designer", cVendedor);
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  assert(String(r.location ?? "").includes("/vendedor"), `redirect inesperado: ${r.location}`);
+  return `${r.status} -> ${r.location}`;
+});
+
+await check("cliente não cria projeto pela API (guarda na base de dados)", async () => {
+  // Fechar a rota não chegava: sem a guarda na base, um cliente autenticado
+  // chamava `design_create` por REST e enchia a base com projetos que nunca
+  // conseguiria abrir.
+  const r = await sb("/rest/v1/rpc/design_create", {
+    method: "POST",
+    jwt: sCliente.access_token,
+    body: { p_title: "[E2E] intruso", p_format_key: "square", p_width: 1080, p_height: 1080 },
+  });
+  if (r.ok) {
+    // Não deixa lixo para trás: apaga o que não devia ter sido criado.
+    if (r.data?.id) {
+      await sb("/rest/v1/rpc/design_delete", {
+        method: "POST",
+        jwt: sCliente.access_token,
+        body: { p_id: r.data.id },
+      });
+    }
+    throw new Error("a base aceitou o projeto — falta colar supabase/PATCH_designer.sql");
+  }
+  return `${r.status} recusado`;
+});
+
+await check("gestor entra no estúdio de design", async () => {
+  const r = await pagina("/designer", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(t.includes("Estúdio de design"), "sem o título do estúdio");
+  // Se as tabelas do designer faltarem, a página finge estar tudo bem.
+  assert(!/ainda não está ativo/i.test(t), "tabelas do designer em falta na base de dados");
+  return "200 com galeria";
+});
+
+const TITULO_PROJ = "[E2E] Design automático";
+const criado = await sb("/rest/v1/rpc/design_create", {
+  method: "POST",
+  jwt: sGestor.access_token,
+  body: { p_title: TITULO_PROJ, p_format_key: "story", p_width: 1080, p_height: 1920 },
+});
+assert(criado.ok, `design_create: ${JSON.stringify(criado.data)}`);
+const PROJ_ID = criado.data?.id;
+
+await check("criar projeto no estúdio devolve id", async () => {
+  assert(typeof PROJ_ID === "string" && PROJ_ID.length === 36, `id inválido: ${PROJ_ID}`);
+  return PROJ_ID.slice(0, 8) + "…";
+});
+
+await check("projeto novo abre no editor", async () => {
+  const r = await pagina(`/designer/${PROJ_ID}`, cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  assert(texto(r.html).includes("Exportar"), "editor sem barra de ferramentas");
+  return "200 com barra de ferramentas";
+});
+
+await check("projeto novo aparece na galeria", async () => {
+  const r = await pagina("/designer", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  assert(texto(r.html).includes(TITULO_PROJ), "projeto ausente da galeria");
+  return "listado";
+});
+
+await check("projeto inexistente dá 404", async () => {
+  const r = await pagina("/designer/00000000-0000-4000-8000-000000000000", cGestor);
+  assert(r.status === 404, `HTTP ${r.status}`);
+  return "404";
+});
+
+await check("colaborador NÃO abre o editor nem por URL directo", async () => {
+  const r = await pagina(`/designer/${PROJ_ID}`, cVendedor);
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status} (devia redireccionar)`);
+  assert(!String(r.location ?? "").includes("/designer"), `chegou ao editor: ${r.location}`);
+  return `${r.status} fora do estúdio`;
+});
+
+await check("apagar o projeto remove o acesso ao editor", async () => {
+  const del = await sb("/rest/v1/rpc/design_delete", {
+    method: "POST",
+    jwt: sGestor.access_token,
+    body: { p_id: PROJ_ID },
+  });
+  assert(del.ok, JSON.stringify(del.data));
+  const r = await pagina(`/designer/${PROJ_ID}`, cGestor);
+  assert(r.status === 404, `HTTP ${r.status}`);
+  return "apagado -> 404";
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 7. RESILIÊNCIA — imagem externa não derruba o catálogo ---");
+// ---------------------------------------------------------------------------
+await check("produto com imagem de host externo não quebra /catalogo", async () => {
+  const prod = await sb("/rest/v1/products", {
+    method: "POST",
+    key: SR,
+    jwt: SR,
+    prefer: "return=representation",
+    body: { name: "[TESTE] Imagem externa", official_price: 1000, is_active: true },
+  });
+  assert(prod.ok, JSON.stringify(prod.data));
+  const id = prod.data[0].id;
+
+  const img = await sb("/rest/v1/product_images", {
+    method: "POST",
+    key: SR,
+    jwt: SR,
+    prefer: "return=representation",
+    body: {
+      product_id: id,
+      storage_path: "x.png",
+      url: "https://host-inexistente.example.com/foto.png",
+    },
+  });
+  assert(img.ok, JSON.stringify(img.data));
+
+  const r = await pagina("/catalogo");
+  assert(r.status === 200, `catálogo devolveu ${r.status}`);
+
+  await sb(`/rest/v1/products?id=eq.${id}`, { method: "DELETE", key: SR, jwt: SR, prefer: "return=minimal" });
+  return "200 (antes era 500)";
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 8. CHAT ---");
+// ---------------------------------------------------------------------------
+// O bug original: `conversation_members.user_id` e `messages.sender_id` apontam
+// para `auth.users`, não para `public.profiles`, por isso qualquer embed
+// `profiles!...` devolvia
+//   «Could not find a relationship between 'conversation_members' and 'profiles'».
+
+await check("gestor abre /gerente/conversas sem erro de relação", async () => {
+  const r = await pagina("/gerente/conversas", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  assert(!/Could not find a relationship/i.test(r.html), "o embed inválido voltou");
+  assert(/Mensagens/.test(texto(r.html)), "sem o mensageiro");
+  return "200, sem PGRST";
+});
+
+await check("cliente e colaborador abrem /conversas sem erro", async () => {
+  for (const [quem, cookie] of [["cliente", cCliente], ["colaborador", cVendedor]]) {
+    const r = await pagina("/conversas", cookie);
+    assert(r.status === 200, `${quem} -> HTTP ${r.status}`);
+    assert(!/Could not find a relationship/i.test(r.html), `${quem}: embed inválido`);
+  }
+  return "2 perfis";
+});
+
+await check("/api/contactos exige sessão", async () => {
+  const r = await fetch(`${APP}/api/contactos`);
+  assert(r.status === 401, `HTTP ${r.status}`);
+  return "401 sem sessão";
+});
+
+await check("/api/contactos respeita o papel", async () => {
+  const pedir = async (cookie) => {
+    const r = await fetch(`${APP}/api/contactos`, { headers: { cookie } });
+    assert(r.ok, `HTTP ${r.status}`);
+    const corpo = await r.json();
+    return corpo.contactos ?? [];
+  };
+
+  const doCliente = await pedir(cCliente);
+  const doVendedor = await pedir(cVendedor);
+  const doGestor = await pedir(cGestor);
+
+  // Ninguém se vê a si próprio na lista.
+  const eu = (lista, id) => lista.some((c) => c.id === id);
+  assert(!eu(doCliente, sCliente.user.id), "o cliente aparece na sua própria lista");
+  assert(!eu(doGestor, sGestor.user.id), "o gestor aparece na sua própria lista");
+
+  // O cliente vê a gerência; o gestor vê todos.
+  assert(doCliente.some((c) => c.role === "manager"), "o cliente não vê a gerência");
+  assert(doGestor.length >= doCliente.length, "o gestor devia ver mais gente");
+
+  // Nunca expõe telefone nem email.
+  for (const c of [...doCliente, ...doVendedor, ...doGestor]) {
+    assert(!("phone" in c) || c.phone === undefined, "expôs telefone");
+  }
+  return `cliente ${doCliente.length} · colaborador ${doVendedor.length} · gestor ${doGestor.length}`;
+});
+
+await check("conversa directa + mensagem chegam ao destinatário", async () => {
+  const jwtC = sCliente.access_token;
+  const jwtV = sVendedor.access_token;
+
+  const conv = await sb("/rest/v1/rpc/get_or_create_direct_conversation", {
+    method: "POST",
+    body: { p_other_user: sVendedor.user.id },
+    jwt: jwtC,
+  });
+  assert(conv.ok, JSON.stringify(conv.data));
+  const convId = conv.data;
+  assert(typeof convId === "string" && convId.length === 36, `id inesperado: ${convId}`);
+
+  const texto1 = `Olá, preciso de ajuda ${Date.now()}`;
+  const env = await sb("/rest/v1/messages", {
+    method: "POST",
+    jwt: jwtC,
+    prefer: "return=representation",
+    body: { conversation_id: convId, sender_id: sCliente.user.id, content: texto1 },
+  });
+  assert(env.ok, `envio: ${JSON.stringify(env.data)}`);
+
+  // O destinatário lê (RLS: is_conversation_member).
+  const lidas = await sb(`/rest/v1/messages?conversation_id=eq.${convId}&select=content,sender_id`, {
+    jwt: jwtV,
+  });
+  assert(lidas.ok, JSON.stringify(lidas.data));
+  assert(lidas.data.some((m) => m.content === texto1), "o destinatário não viu a mensagem");
+
+  // Reabrir a mesma conversa não duplica.
+  const outra = await sb("/rest/v1/rpc/get_or_create_direct_conversation", {
+    method: "POST",
+    body: { p_other_user: sVendedor.user.id },
+    jwt: jwtC,
+  });
+  assert(outra.data === convId, `duplicou a conversa: ${outra.data} vs ${convId}`);
+
+  globalThis.__convId = convId;
+  globalThis.__textoChat = texto1;
+  return "idempotente";
+});
+
+await check("gestor lê tudo mas só responde depois de entrar", async () => {
+  const convId = globalThis.__convId;
+  const jwtG = sGestor.access_token;
+
+  // Vê (política is_manager) sem ser membro.
+  const leitura = await sb(`/rest/v1/messages?conversation_id=eq.${convId}&select=id`, { jwt: jwtG });
+  assert(leitura.ok && leitura.data.length > 0, "o gestor não conseguiu ler");
+
+  // Escrever exige participação — é intencional.
+  const tentativa = await sb("/rest/v1/messages", {
+    method: "POST",
+    jwt: jwtG,
+    prefer: "return=representation",
+    body: { conversation_id: convId, sender_id: sGestor.user.id, content: "Resposta do gestor" },
+  });
+  assert(tentativa.status === 403, `devia ser recusado, veio ${tentativa.status}`);
+
+  // Depois de entrar, já pode.
+  const entrar = await sb("/rest/v1/conversation_members", {
+    method: "POST",
+    jwt: jwtG,
+    prefer: "return=minimal",
+    body: { conversation_id: convId, user_id: sGestor.user.id },
+  });
+  assert(entrar.ok, `entrar: ${JSON.stringify(entrar.data)}`);
+
+  const agora = await sb("/rest/v1/messages", {
+    method: "POST",
+    jwt: jwtG,
+    prefer: "return=representation",
+    body: { conversation_id: convId, sender_id: sGestor.user.id, content: "Resposta do gestor" },
+  });
+  assert(agora.ok, `depois de entrar: ${JSON.stringify(agora.data)}`);
+  return "403 → entra → 201";
+});
+
+await check("marcar como lida só funciona para membros", async () => {
+  const convId = globalThis.__convId;
+  const r = await sb("/rest/v1/rpc/mark_conversation_read", {
+    method: "POST",
+    body: { p_conversation_id: convId },
+    jwt: sVendedor.access_token,
+  });
+  assert(r.ok, `membro: ${JSON.stringify(r.data)}`);
+
+  const membro = await sb(
+    `/rest/v1/conversation_members?conversation_id=eq.${convId}&user_id=eq.${sVendedor.user.id}&select=last_read_at`,
+    { jwt: sVendedor.access_token }
+  );
+  assert(membro.ok && membro.data[0]?.last_read_at, "last_read_at não foi gravado");
+  return "last_read_at gravado";
+});
+
+await check("anexo: upload, mensagem só com ficheiro e URL assinado", async () => {
+  const convId = globalThis.__convId;
+  const jwt = sCliente.access_token;
+  // Bytes de um PNG (assinatura válida); o Storage não valida o conteúdo, mas
+  // isto mantém o teste honesto quanto ao tipo declarado.
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+  const caminho = `${convId}/${globalThis.crypto.randomUUID()}.png`;
+
+  // A pasta tem de ser o id da conversa: a política lê (foldername)[1].
+  const up = await fetch(`${BASE}/storage/v1/object/message-attachments/${caminho}`, {
+    method: "POST",
+    headers: {
+      apikey: ANON,
+      Authorization: `Bearer ${jwt}`,
+      "Content-Type": "image/png",
+      "x-upsert": "false",
+    },
+    body: bytes,
+  });
+  assert(up.ok, `upload: ${up.status} ${await up.text()}`);
+
+  // `content` nulo: o CHECK messages_content_or_attachment tem de o aceitar
+  // quando existe anexo.
+  const msg = await sb("/rest/v1/messages", {
+    method: "POST",
+    jwt,
+    prefer: "return=representation",
+    body: { conversation_id: convId, sender_id: sCliente.user.id, content: null },
+  });
+  assert(msg.ok, `mensagem sem texto: ${JSON.stringify(msg.data)}`);
+
+  const anexo = await sb("/rest/v1/message_attachments", {
+    method: "POST",
+    jwt,
+    prefer: "return=representation",
+    body: {
+      message_id: msg.data[0].id,
+      storage_path: caminho,
+      file_name: "foto.png",
+      file_type: "image/png",
+      file_size: bytes.length,
+    },
+  });
+  assert(anexo.ok, `anexo: ${JSON.stringify(anexo.data)}`);
+
+  // O destinatário assina e descarrega.
+  const assinar = async (token) =>
+    fetch(`${BASE}/storage/v1/object/sign/message-attachments/${caminho}`, {
+      method: "POST",
+      headers: { apikey: ANON, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ expiresIn: 60 }),
+    });
+
+  const assinado = await assinar(sVendedor.access_token);
+  assert(assinado.ok, `assinar: ${assinado.status}`);
+  const { signedURL } = await assinado.json();
+  const descarregado = await fetch(`${BASE}/storage/v1${signedURL}`);
+  assert(descarregado.ok, `download: ${descarregado.status}`);
+
+  // O bucket é privado: sem sessão não se assina nada.
+  const anonimo = await assinar(ANON);
+  assert(!anonimo.ok, `um anónimo conseguiu assinar (${anonimo.status})`);
+
+  // Higiene: o ficheiro não fica órfão no bucket.
+  await fetch(`${BASE}/storage/v1/object/message-attachments/${caminho}`, {
+    method: "DELETE",
+    headers: { apikey: ANON, Authorization: `Bearer ${jwt}` },
+  });
+
+  return `${bytes.length} B · download ${descarregado.status} · anónimo ${anonimo.status}`;
+});
+
+await check("anexo acima de 20 MB é recusado pela base", async () => {
+  const convId = globalThis.__convId;
+  const msg = await sb("/rest/v1/messages", {
+    method: "POST",
+    jwt: sCliente.access_token,
+    prefer: "return=representation",
+    body: { conversation_id: convId, sender_id: sCliente.user.id, content: "com anexo grande" },
+  });
+  assert(msg.ok, JSON.stringify(msg.data));
+
+  const r = await sb("/rest/v1/message_attachments", {
+    method: "POST",
+    jwt: sCliente.access_token,
+    prefer: "return=representation",
+    body: {
+      message_id: msg.data[0].id,
+      storage_path: `${convId}/grande.bin`,
+      file_name: "grande.bin",
+      file_type: "application/octet-stream",
+      file_size: 21 * 1024 * 1024,
+    },
+  });
+  assert(r.status === 400, `devia recusar com 400, veio ${r.status}`);
+
+  await sb(`/rest/v1/messages?id=eq.${msg.data[0].id}`, {
+    method: "DELETE",
+    jwt: sCliente.access_token,
+    prefer: "return=minimal",
+  });
+  return "400 acima de 20 MB";
+});
+
+await check("apagar mensagem: autor pode, terceiro não, gestor pode", async () => {
+  const convId = globalThis.__convId;
+
+  const criar = async (texto) => {
+    const r = await sb("/rest/v1/messages", {
+      method: "POST",
+      jwt: sCliente.access_token,
+      prefer: "return=representation",
+      body: { conversation_id: convId, sender_id: sCliente.user.id, content: texto },
+    });
+    assert(r.ok, JSON.stringify(r.data));
+    return r.data[0].id;
+  };
+
+  const apagar = (id, cookie) =>
+    fetch(`${APP}/api/mensagens/${id}`, { method: "DELETE", headers: { cookie } });
+
+  // 1. O autor apaga a sua.
+  const minha = await criar("mensagem para apagar (autor)");
+  const r1 = await apagar(minha, cCliente);
+  assert(r1.status === 200, `autor: HTTP ${r1.status}`);
+
+  const ficou = await sb(`/rest/v1/messages?id=eq.${minha}&select=id`, {
+    key: SR,
+    jwt: SR,
+  });
+  assert(ficou.data.length === 0, "a mensagem não desapareceu");
+
+  // 2. O colaborador não apaga a mensagem do cliente.
+  const doCliente = await criar("mensagem que o colaborador não pode apagar");
+  const r2 = await apagar(doCliente, cVendedor);
+  assert(r2.status === 403, `terceiro: devia ser 403, veio ${r2.status}`);
+
+  // 3. A gerência apaga a mensagem de outra pessoa.
+  const r3 = await apagar(doCliente, cGestor);
+  assert(r3.status === 200, `gestor: HTTP ${r3.status}`);
+
+  // 4. Sem sessão, nada.
+  const r4 = await apagar(doCliente, "");
+  assert(r4.status === 401, `anónimo: devia ser 401, veio ${r4.status}`);
+
+  return "autor 200 · terceiro 403 · gestor 200 · anónimo 401";
+});
+
+await check("apagar conversa: só a gerência, e limpa os ficheiros", async () => {
+  const convId = globalThis.__convId;
+
+  // Um ficheiro na pasta da conversa, sem linha na base — o apagar tem de o
+  // apanhar de qualquer forma, senão ficava lixo no bucket.
+  const caminho = `${convId}/orfao.bin`;
+  const up = await fetch(`${BASE}/storage/v1/object/message-attachments/${caminho}`, {
+    method: "POST",
+    headers: {
+      apikey: ANON,
+      Authorization: `Bearer ${sCliente.access_token}`,
+      "Content-Type": "application/octet-stream",
+      "x-upsert": "false",
+    },
+    body: Buffer.from([1, 2, 3, 4]),
+  });
+  assert(up.ok, `upload: ${up.status}`);
+
+  const apagar = (cookie) =>
+    fetch(`${APP}/api/conversas/${convId}`, { method: "DELETE", headers: { cookie } });
+
+  // O colaborador é membro, mas não é gerência.
+  const negado = await apagar(cVendedor);
+  assert(negado.status === 403, `colaborador: devia ser 403, veio ${negado.status}`);
+
+  const feito = await apagar(cGestor);
+  assert(feito.status === 200, `gestor: HTTP ${feito.status}`);
+  const corpo = await feito.json();
+  assert(corpo.ficheiros >= 1, `não limpou os ficheiros: ${JSON.stringify(corpo)}`);
+
+  // A conversa e tudo o que estava dentro desapareceu (CASCADE).
+  const msgs = await sb(`/rest/v1/messages?conversation_id=eq.${convId}&select=id`, { key: SR, jwt: SR });
+  assert(msgs.data.length === 0, "sobraram mensagens");
+  const membros = await sb(`/rest/v1/conversation_members?conversation_id=eq.${convId}&select=id`, {
+    key: SR,
+    jwt: SR,
+  });
+  assert(membros.data.length === 0, "sobraram membros");
+
+  // A pasta do bucket ficou vazia.
+  const lista = await fetch(`${BASE}/storage/v1/object/list/message-attachments`, {
+    method: "POST",
+    headers: { apikey: SR, Authorization: `Bearer ${SR}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ prefix: `${convId}/`, limit: 100 }),
+  });
+  const ficheiros = await lista.json();
+  assert(Array.isArray(ficheiros) && ficheiros.length === 0, `restaram ${JSON.stringify(ficheiros)}`);
+
+  return "colaborador 403 · gestor 200 · 0 mensagens · 0 ficheiros";
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 9. PRODUTOS — IMAGEM (upload, URL e catálogo) ---");
+// ---------------------------------------------------------------------------
+await check("gestor guarda imagem do produto e o catálogo mostra-a", async () => {
+  const jwt = sGestor.access_token;
+
+  const criado = await sb("/rest/v1/products", {
+    method: "POST",
+    jwt,
+    prefer: "return=representation",
+    body: { name: "[TESTE] Produto com imagem", official_price: 12000, is_active: true },
+  });
+  assert(criado.ok, `criar produto: ${JSON.stringify(criado.data)}`);
+  const produtoId = criado.data[0].id;
+
+  // PNG mínimo mas válido.
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+  const nomeFicheiro = `${globalThis.crypto.randomUUID()}.png`;
+  const caminho = `${produtoId}/${nomeFicheiro}`;
+
+  const up = await fetch(`${BASE}/storage/v1/object/product-images/${caminho}`, {
+    method: "POST",
+    headers: {
+      apikey: ANON,
+      Authorization: `Bearer ${jwt}`,
+      "Content-Type": "image/png",
+      "x-upsert": "false",
+    },
+    body: bytes,
+  });
+  assert(up.ok, `upload: ${up.status} ${await up.text()}`);
+
+  const url = `${BASE}/storage/v1/object/public/product-images/${caminho}`;
+
+  const linha = await sb("/rest/v1/product_images", {
+    method: "POST",
+    jwt,
+    prefer: "return=representation",
+    body: {
+      product_id: produtoId,
+      storage_path: caminho,
+      url,
+      is_primary: true,
+      sort_order: 0,
+    },
+  });
+  assert(linha.ok, `product_images: ${JSON.stringify(linha.data)}`);
+
+  // O bucket é público: o URL serve a imagem sem sessão.
+  const servida = await fetch(url);
+  assert(servida.ok, `imagem pública: ${servida.status}`);
+
+  // E o catálogo renderiza-a (o next/image pode reescrever o src, por isso o
+  // marcador é o nome do ficheiro, que aparece em qualquer das formas).
+  const catalogo = await pagina("/catalogo");
+  assert(catalogo.status === 200, `catálogo: ${catalogo.status}`);
+  assert(
+    catalogo.html.includes(nomeFicheiro),
+    "a imagem não chegou ao catálogo"
+  );
+
+  // Limpeza: apagar o produto leva a linha (CASCADE); o ficheiro sai à mão.
+  await sb(`/rest/v1/products?id=eq.${produtoId}`, {
+    method: "DELETE",
+    jwt,
+    prefer: "return=minimal",
+  });
+  await fetch(`${BASE}/storage/v1/object/product-images/${caminho}`, {
+    method: "DELETE",
+    headers: { apikey: ANON, Authorization: `Bearer ${jwt}` },
+  });
+
+  const sobrou = await sb(`/rest/v1/product_images?product_id=eq.${produtoId}&select=id`, {
+    key: SR,
+    jwt: SR,
+  });
+  assert(sobrou.data.length === 0, "a linha de imagem ficou órfã");
+
+  return `${bytes.length} B · URL público ${servida.status} · no catálogo`;
+});
+
+await check("URL externo de imagem é aceite (sem upload)", async () => {
+  const jwt = sGestor.access_token;
+  const criado = await sb("/rest/v1/products", {
+    method: "POST",
+    jwt,
+    prefer: "return=representation",
+    body: { name: "[TESTE] Produto com URL", official_price: 5000, is_active: true },
+  });
+  assert(criado.ok, JSON.stringify(criado.data));
+  const produtoId = criado.data[0].id;
+
+  // É assim que a página grava quando a gerência cola um URL: `storage_path`
+  // leva o próprio URL porque a coluna é NOT NULL e nada a usa para renderizar.
+  const url = "https://exemplo.invalido/foto-do-produto.jpg";
+  const linha = await sb("/rest/v1/product_images", {
+    method: "POST",
+    jwt,
+    prefer: "return=representation",
+    body: { product_id: produtoId, storage_path: url, url, is_primary: true, sort_order: 0 },
+  });
+  assert(linha.ok, JSON.stringify(linha.data));
+
+  const lido = await sb(`/rest/v1/product_images?product_id=eq.${produtoId}&select=url`, {
+    key: SR,
+    jwt: SR,
+  });
+  assert(lido.data[0]?.url === url, `url não gravado: ${JSON.stringify(lido.data)}`);
+
+  await sb(`/rest/v1/products?id=eq.${produtoId}`, { method: "DELETE", jwt, prefer: "return=minimal" });
+  return "gravado tal e qual";
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 10. IDENTIDADE E GESTÃO DE COLABORADORES ---");
+// ---------------------------------------------------------------------------
+await check("gestor abre a pesquisa de colaboradores", async () => {
+  const r = await pagina("/gerente/colaboradores", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(t.includes("Gestão e pesquisa de colaboradores"), "sem o título da pesquisa");
+  assert(t.includes("Referência INUKA") || t.includes("referência"), "sem menção à referência");
+  return "200";
+});
+
+await check("gestor abre a ficha individual do colaborador", async () => {
+  const r = await pagina(`/gerente/colaboradores/${sVendedor.user.id}`, cGestor);
+  // 404 é o resultado correcto quando a migração de colaboradores ainda não
+  // foi aplicada; o que não pode acontecer é um erro de servidor.
+  assert(r.status === 200 || r.status === 404, `HTTP ${r.status}`);
+  if (r.status === 200) {
+    const t = texto(r.html);
+    assert(/INK-[A-Z]{3}-\d{5}/.test(t), "a ficha não mostra a referência INK");
+    assert(t.includes("Acções da gestão"), "sem acções de gestão");
+  }
+  return `${r.status}`;
+});
+
+await check("aba de referência mostra o código e os contactos da INUKA", async () => {
+  const r = await pagina("/referencia", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(t.includes("Código de referência"), "sem o bloco do código");
+  assert(/INK-[A-Z]{3}-\d{5}/.test(t), "sem a referência INK");
+  // Os dois números de atendimento: o cartão "Telefone" mostrava o telefone
+  // do próprio utilizador, não os contactos da INUKA.
+  assert(t.includes("927 991 441"), "sem o número 927 991 441");
+  assert(t.includes("930 800 698"), "sem o número 930 800 698");
+  return "200 · INK + 2 números";
+});
+
+await check("colaborador abre o próprio perfil", async () => {
+  const r = await pagina("/vendedor/perfil", cVendedor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(
+    t.includes("Dados pessoais") || t.includes("PATCH_COLABORADORES"),
+    "sem perfil nem aviso de migração"
+  );
+  return "200";
+});
+
+await check("colaborador não abre a ficha de outro colaborador", async () => {
+  const r = await pagina(`/gerente/colaboradores/${sVendedor.user.id}`, cVendedor);
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  return `${r.status}`;
+});
+
+await check("painel do gestor mostra a rede de colaboradores", async () => {
+  const r = await pagina("/gerente", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(
+    t.includes("Rede de colaboradores") || t.includes("Painel de gestão"),
+    "sem secção de rede"
+  );
+  return "200";
+});
+
+await check("gestor abre a lista de clientes com criação e edição", async () => {
+  const r = await pagina("/gerente/clientes", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(t.includes("Clientes"), "sem título");
+  assert(t.includes("Novo cliente"), "sem botão de criação");
+  assert(t.includes("editar"), "sem acção de edição por linha");
+  return "200 · criar + editar";
+});
+
+// --- CRUD de contas pela gestão (colaboradores e clientes) ---
+const NOVO = { name: "Cliente Criado Web", phone: "+244924200004" };
+const NOVO_TEL = "+244924200005";
+// Colaborador criado pelo gestor com telefone + palavra-passe definidos à mão:
+// é o caso "abrir conta directamente pelo gestor" (aba Acesso).
+const COLAB_TEL = "+244924200006";
+const COLAB_PWD = "Provisoria2026!";
+await apagarConta(NOVO.phone);
+await apagarConta(NOVO_TEL);
+await apagarConta(COLAB_TEL);
+
+let idNovo = null;
+
+await check("gestor cria um cliente pela API de gestão", async () => {
+  const r = await fetch(`${APP}/api/gerente/utilizadores`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie: cGestor },
+    body: JSON.stringify({
+      role: "customer",
+      full_name: NOVO.name,
+      phone: NOVO.phone,
+      password: PWD,
+      neighborhood: "Talatona",
+    }),
+  });
+  const dados = await r.json().catch(() => ({}));
+  assert(r.ok, `HTTP ${r.status} ${dados.error ?? ""}`);
+  assert(dados.id, "sem id na resposta");
+  idNovo = dados.id;
+
+  // A conta criada tem de servir para entrar — senão criámos uma linha morta.
+  const s = await login(NOVO.phone, PWD);
+  assert(s.access_token, "a conta criada não consegue entrar");
+  return `${dados.id.slice(0, 8)} · login ok`;
+});
+
+await check("gestor abre a conta do colaborador com telefone e palavra-passe", async () => {
+  const r = await fetch(`${APP}/api/gerente/utilizadores`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie: cGestor },
+    body: JSON.stringify({
+      role: "seller",
+      full_name: "Colaborador Criado Web",
+      phone: COLAB_TEL,
+      password: COLAB_PWD,
+      job_title: "Colaborador de vendas",
+      municipio: "Belas",
+      commission_rate: 0.05,
+    }),
+  });
+  const dados = await r.json().catch(() => ({}));
+  assert(r.ok, `HTTP ${r.status} ${dados.error ?? ""}`);
+  assert(dados.referencia, "sem referência INUKA na resposta");
+
+  // O essencial: a pessoa entra com o telefone e a palavra-passe que o gestor
+  // escreveu — sem registo, sem email, sem confirmação.
+  const sessao = await login(COLAB_TEL, COLAB_PWD);
+  assert(sessao.access_token, "a conta criada não consegue entrar");
+
+  const cColab = cookieSessao(sessao);
+
+  // É colaborador: entra na área de colaborador e não na de cliente.
+  const vend = await pagina("/vendedor", cColab);
+  assert(vend.status === 200, `/vendedor: HTTP ${vend.status}`);
+  assert(
+    texto(vend.html).includes(dados.referencia),
+    "a área de colaborador não mostra a referência criada"
+  );
+
+  const cli = await pagina("/cliente", cColab);
+  assert(cli.status === 307 || cli.status === 302, `/cliente devia redireccionar: ${cli.status}`);
+
+  return `${dados.referencia} · login ok · /vendedor`;
+});
+
+await check("colaborador não pode criar contas", async () => {
+  const r = await fetch(`${APP}/api/gerente/utilizadores`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie: cVendedor },
+    body: JSON.stringify({ role: "customer", full_name: "Intruso", phone: "+244924200099", password: PWD }),
+  });
+  assert(r.status === 403, `HTTP ${r.status}`);
+  return "403";
+});
+
+await check("gestor edita o cliente e o telefone passa a ser o novo acesso", async () => {
+  const r = await fetch(`${APP}/api/gerente/utilizadores/${idNovo}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", cookie: cGestor },
+    body: JSON.stringify({ full_name: "Cliente Editado Web", phone: NOVO_TEL }),
+  });
+  const dados = await r.json().catch(() => ({}));
+  assert(r.ok, `HTTP ${r.status} ${dados.error ?? ""}`);
+
+  const s = await login(NOVO_TEL, PWD);
+  assert(s.access_token, "o telefone novo não serve para entrar");
+
+  const { data } = await sb(
+    `/rest/v1/profiles?select=full_name,phone&id=eq.${idNovo}`,
+    { key: SR, jwt: SR }
+  );
+  assert(data?.[0]?.full_name === "Cliente Editado Web", `nome: ${data?.[0]?.full_name}`);
+  return `${data[0].full_name} · ${data[0].phone}`;
+});
+
+await check("gestor carrega a fotografia de um cliente", async () => {
+  // 1x1 PNG — o que interessa é a política do bucket, não a imagem.
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64"
+  );
+  const caminho = `${idNovo}/web-e2e.png`;
+
+  const up = await fetch(`${BASE}/storage/v1/object/avatars/${caminho}`, {
+    method: "POST",
+    headers: {
+      apikey: ANON,
+      Authorization: `Bearer ${sGestor.access_token}`,
+      "Content-Type": "image/png",
+      "x-upsert": "true",
+    },
+    body: png,
+  });
+  assert(up.ok, `upload HTTP ${up.status} ${await up.text()}`);
+
+  const publico = `${BASE}/storage/v1/object/public/avatars/${caminho}`;
+  const put = await sb(`/rest/v1/profiles?id=eq.${idNovo}`, {
+    method: "PATCH",
+    key: ANON,
+    jwt: sGestor.access_token,
+    prefer: "return=minimal",
+    body: { avatar_url: publico },
+  });
+  assert(put.ok, `perfil HTTP ${put.status} ${JSON.stringify(put.data)}`);
+
+  const ver = await fetch(publico);
+  assert(ver.ok, `URL público HTTP ${ver.status}`);
+
+  await fetch(`${BASE}/storage/v1/object/avatars/${caminho}`, {
+    method: "DELETE",
+    headers: { apikey: ANON, Authorization: `Bearer ${sGestor.access_token}` },
+  });
+
+  return `upload · URL 200`;
+});
+
+await check("gestor apaga o cliente criado", async () => {
+  const r = await fetch(`${APP}/api/gerente/utilizadores/${idNovo}`, {
+    method: "DELETE",
+    headers: { cookie: cGestor },
+  });
+  assert(r.ok, `HTTP ${r.status} ${JSON.stringify(await r.json().catch(() => ({})))}`);
+
+  const s = await sb("/auth/v1/token?grant_type=password", {
+    method: "POST",
+    body: { email: `u${NOVO_TEL.replace("+", "")}@inuka.ao`, password: PWD },
+  });
+  assert(!s.ok, "a conta apagada ainda entra");
+  return "apagado · login recusado";
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 10B. CARTEIRA DO COLABORADOR ---");
+// ---------------------------------------------------------------------------
+
+const CARTEIRA_TEL = "+244924200007";
+await apagarConta(CARTEIRA_TEL);
+
+let idCarteira = null;
+
+await check("colaborador abre a sua carteira", async () => {
+  const r = await pagina("/vendedor/clientes", cVendedor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(t.includes("A minha carteira"), "sem o título da carteira");
+  assert(/Abrir conta de cliente/i.test(t), "sem a opção de abrir conta");
+  assert(/Já tem conta/i.test(t), "sem a opção de associar conta existente");
+  return "200 com as duas entradas";
+});
+
+await check("colaborador acrescenta um cliente novo à carteira", async () => {
+  const r = await fetch(`${APP}/api/vendedor/clientes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie: cVendedor },
+    body: JSON.stringify({
+      full_name: "Cliente Carteira Web",
+      phone: CARTEIRA_TEL,
+      neighborhood: "Benfica",
+    }),
+  });
+  const dados = await r.json().catch(() => ({}));
+  assert(r.ok, `HTTP ${r.status} ${dados.error ?? ""}`);
+  assert(dados.id, "sem id na resposta");
+  assert(dados.password, "sem palavra-passe provisória para comunicar ao cliente");
+  assert(dados.existente === false, "devia ser conta nova");
+  idCarteira = dados.id;
+
+  // A conta tem de servir para entrar: senão é uma linha morta.
+  const s = await login(CARTEIRA_TEL, dados.password);
+  assert(s.access_token, "a conta criada pelo colaborador não entra");
+
+  // O papel é sempre cliente e a província é a do colaborador que a criou.
+  const perfil = await sb(
+    `/rest/v1/profiles?select=role,provincia_id,full_name&id=eq.${idCarteira}`,
+    { key: SR, jwt: SR }
+  );
+  assert(perfil.data[0].role === "customer", `papel ${perfil.data[0].role}`);
+
+  const vinculo = await sb(
+    `/rest/v1/seller_customers?select=seller_id,is_active,assigned_by&customer_id=eq.${idCarteira}`,
+    { key: SR, jwt: SR }
+  );
+  assert(vinculo.data.length === 1, `${vinculo.data.length} vínculos`);
+  assert(vinculo.data[0].seller_id === sVendedor.user.id, "não ficou na carteira do colaborador");
+  assert(vinculo.data[0].is_active === true, "vínculo inactivo");
+  assert(vinculo.data[0].assigned_by === sVendedor.user.id, "sem registo de quem ligou");
+
+  return `${dados.referencia ?? "sem referência"} · ${dados.provincia ?? "província herdada"}`;
+});
+
+await check("a província do cliente é a do colaborador", async () => {
+  const colab = await sb(
+    `/rest/v1/profiles?select=provincia_id&id=eq.${sVendedor.user.id}`,
+    { key: SR, jwt: SR }
+  );
+  const cli = await sb(`/rest/v1/profiles?select=provincia_id&id=eq.${idCarteira}`, {
+    key: SR,
+    jwt: SR,
+  });
+  assert(
+    cli.data[0].provincia_id === colab.data[0].provincia_id,
+    `cliente ${cli.data[0].provincia_id} ≠ colaborador ${colab.data[0].provincia_id}`
+  );
+  return "mesma província";
+});
+
+await check("repetir o mesmo telefone não cria segunda conta", async () => {
+  const r = await fetch(`${APP}/api/vendedor/clientes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie: cVendedor },
+    body: JSON.stringify({ full_name: "Cliente Carteira Web", phone: CARTEIRA_TEL }),
+  });
+  const dados = await r.json().catch(() => ({}));
+  assert(r.ok, `HTTP ${r.status} ${dados.error ?? ""}`);
+  assert(dados.existente === true, "devia reconhecer a conta existente");
+  assert(dados.id === idCarteira, `id diferente: ${dados.id}`);
+
+  const contas = await sb(
+    `/rest/v1/profiles?select=id&phone=eq.${encodeURIComponent(CARTEIRA_TEL)}`,
+    { key: SR, jwt: SR }
+  );
+  assert(contas.data.length === 1, `${contas.data.length} contas com o mesmo telefone`);
+  return "1 conta · vínculo reaproveitado";
+});
+
+await check("cliente não pode acrescentar ninguém à carteira", async () => {
+  const r = await fetch(`${APP}/api/vendedor/clientes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie: cCliente },
+    body: JSON.stringify({ full_name: "Intruso Carteira", phone: "+244924200008" }),
+  });
+  assert(r.status === 403, `HTTP ${r.status}`);
+  return "403";
+});
+
+await check("a carteira mostra o cliente e o que ele já comprou", async () => {
+  const r = await pagina("/vendedor/clientes", cVendedor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(t.includes("Cliente Carteira Web"), "cliente ausente da carteira");
+  assert(/Ligar|WhatsApp|Conversar na INUKA/i.test(t), "sem acções de contacto");
+  return "cliente com contactos";
+});
+
+await check("gestor vê o cliente com o colaborador e quem o ligou", async () => {
+  const r = await pagina("/gerente/clientes", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(t.includes("Cliente Carteira Web"), "cliente ausente na gestão");
+  assert(t.includes(VENDEDOR.name), "a gestão não mostra o colaborador do cliente");
+  return "cliente + colaborador";
+});
+
+await check("gestor muda o colaborador e o vínculo antigo fica inactivo", async () => {
+  // Trocar não pode apagar a história: a linha antiga fica `is_active = false`
+  // e nasce/activa-se a nova. É o que permite à gestão reconstruir a carteira.
+  const outroColab = await sb(
+    `/rest/v1/profiles?select=id&phone=eq.${encodeURIComponent(COLAB_TEL)}`,
+    { key: SR, jwt: SR }
+  );
+  const outroId = outroColab.data?.[0]?.id;
+  assert(outroId, "o colaborador auxiliar não existe nesta fase do teste");
+
+  const desactivar = await sb(
+    `/rest/v1/seller_customers?customer_id=eq.${idCarteira}&is_active=eq.true`,
+    {
+      method: "PATCH",
+      key: SR,
+      jwt: SR,
+      body: { is_active: false },
+      prefer: "return=minimal",
+    }
+  );
+  assert(desactivar.ok, `desactivar: ${desactivar.status}`);
+
+  const nova = await sb("/rest/v1/seller_customers", {
+    method: "POST",
+    key: SR,
+    jwt: SR,
+    body: {
+      seller_id: outroId,
+      customer_id: idCarteira,
+      assigned_by: sGestor.user.id,
+      is_active: true,
+    },
+    prefer: "return=representation",
+  });
+  assert(nova.ok, `nova ligação: ${JSON.stringify(nova.data).slice(0, 140)}`);
+
+  const linhas = await sb(
+    `/rest/v1/seller_customers?select=seller_id,is_active&customer_id=eq.${idCarteira}`,
+    { key: SR, jwt: SR }
+  );
+  const activos = linhas.data.filter((l) => l.is_active);
+  assert(activos.length === 1, `${activos.length} vínculos activos`);
+  assert(activos[0].seller_id === outroId, "o activo não é o novo colaborador");
+  assert(linhas.data.length >= 2, "a história do vínculo foi apagada");
+
+  return `${linhas.data.length} linhas · 1 activa`;
+});
+
+await check("o cliente antigo deixa de ver o vínculo como seu", async () => {
+  const r = await sb("/rest/v1/seller_customers?select=customer_id,is_active", {
+    jwt: sVendedor.access_token,
+  });
+  const doAntigo = (r.data ?? []).filter(
+    (l) => l.seller_id === sVendedor.user.id && l.is_active
+  );
+  assert(
+    !doAntigo.some((l) => l.customer_id === idCarteira),
+    "o colaborador antigo continua com o cliente activo"
+  );
+  return "carteira antiga libertada";
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 11. CONTEÚDOS, PROMOÇÕES E FORMAÇÃO ---");
+// ---------------------------------------------------------------------------
+// Percorre os seis cenários de aceitação do pedido de evolução do estúdio:
+// catálogo → conteúdo publicado → destino certo (colaborador, cliente, loja),
+// com datas, províncias, progresso e permissões verificadas a sério.
+
+// Sem a migração 0007 estas tabelas não existem e todos os testes abaixo
+// falhariam com "404" — o que esconderia a causa. Falhar uma vez, com a
+// instrução certa, é mais útil do que 26 falhas iguais.
+const sondaConteudos = await sb("/rest/v1/content_items?select=id&limit=1", { key: SR, jwt: SR });
+const TEM_CONTEUDOS = sondaConteudos.status !== 404;
+
+if (!TEM_CONTEUDOS) {
+  console.log(`
+  ATENÇÃO — a base de dados ainda não tem a migração 0007 (conteúdos e formação).
+  Abra o Supabase -> SQL Editor e cole, por esta ordem:
+      supabase/PATCH_CONTEUDOS.sql
+      supabase/PATCH_designer.sql   (guarda do estúdio: só a gestão escreve)
+  Os testes desta secção ficam por correr — não são dados como aprovados.
+`);
+}
+
+const GESTOR_ID = sGestor.user.id;
+const VENDEDOR_ID = sVendedor.user.id;
+const criados = [];
+
+if (TEM_CONTEUDOS) {
+  const SUF = Date.now().toString().slice(-6);
+  const AGORA = Date.now();
+  const iso = (ms) => new Date(ms).toISOString();
+  const ONTEM = iso(AGORA - 86400000);
+  const AMANHA = iso(AGORA + 86400000);
+  const PASSADO = iso(AGORA - 5 * 86400000);
+
+  /** INSERT como gestor autenticado (prova que o RLS deixa; o service_role não provaria). */
+  const inserir = (tabela, campos) =>
+    sb(`/rest/v1/${tabela}`, {
+      method: "POST",
+      jwt: sGestor.access_token,
+      prefer: "return=representation",
+      body: campos,
+    });
+
+  const produtoQ = await sb(
+    "/rest/v1/products?select=id,name,official_price&is_active=eq.true&order=created_at&limit=1",
+    { key: SR, jwt: SR }
+  );
+  const PRODUTO = produtoQ.data?.[0] ?? null;
+
+  const provQ = await sb("/rest/v1/provincias?select=id,nome&order=codigo&limit=1", { key: SR, jwt: SR });
+  const PROVINCIA = provQ.data?.[0] ?? null;
+
+  const perfilClienteQ = await sb(
+    `/rest/v1/profiles?select=provincia_id&id=eq.${sCliente.user.id}`,
+    { key: SR, jwt: SR }
+  );
+  const PROV_CLIENTE = perfilClienteQ.data?.[0]?.provincia_id ?? null;
+
+
+  // --- 11.1 Estúdio: catálogo e publicação sem perder trabalho -----------------
+  await check("o painel do catálogo devolve produtos com imagem", async () => {
+    // É exactamente a consulta que o CatalogoPanel faz: produtos activos com a
+    // imagem principal embutida. Se o embed não existir, o painel fica vazio.
+    const r = await sb(
+      "/rest/v1/products?select=id,name,official_price,promotional_price,sku,product_images(url,is_primary,sort_order)&is_active=eq.true&limit=5",
+      { jwt: sGestor.access_token }
+    );
+    assert(r.ok, `consulta do catálogo: ${JSON.stringify(r.data).slice(0, 140)}`);
+    assert(Array.isArray(r.data) && r.data.length > 0, "catálogo vazio para a gestão");
+    return `${r.data.length} produtos`;
+  });
+
+  const projEstudio = await sb("/rest/v1/rpc/design_create", {
+    method: "POST",
+    jwt: sGestor.access_token,
+    body: {
+      p_title: `[E2E] Base do comunicado ${SUF}`,
+      p_format_key: "square",
+      p_width: 1080,
+      p_height: 1080,
+      p_pages: [{ id: "p1", name: "Página 1", background: { type: "solid", color: "#0A0A0A" }, elements: [] }],
+    },
+  });
+  assert(projEstudio.ok, `design_create: ${JSON.stringify(projEstudio.data)}`);
+  const PROJ_CONTEUDO = projEstudio.data.id;
+
+  await check("publicar a partir do estúdio não altera o projeto", async () => {
+    // O requisito é não perder trabalho ao importar/publicar. Publicar escreve em
+    // content_items, nunca em design_projects — a versão tem de ficar igual.
+    const antes = await sb(
+      `/rest/v1/design_projects?select=version,pages&id=eq.${PROJ_CONTEUDO}`,
+      { jwt: sGestor.access_token }
+    );
+    const pub = await inserir("content_items", {
+      kind: "comunicado",
+      title: `[E2E] Publicado do estúdio ${SUF}`,
+      status: "publicado",
+      project_id: PROJ_CONTEUDO,
+    });
+    assert(pub.ok, `publicar: ${JSON.stringify(pub.data).slice(0, 140)}`);
+    criados.push(["content_items", pub.data[0].id]);
+
+    const depois = await sb(
+      `/rest/v1/design_projects?select=version,pages&id=eq.${PROJ_CONTEUDO}`,
+      { jwt: sGestor.access_token }
+    );
+    assert(
+      depois.data[0].version === antes.data[0].version,
+      `versão mudou: ${antes.data[0].version} -> ${depois.data[0].version}`
+    );
+    assert(
+      JSON.stringify(depois.data[0].pages) === JSON.stringify(antes.data[0].pages),
+      "as páginas do projeto mudaram ao publicar"
+    );
+    return `versão ${depois.data[0].version} intacta`;
+  });
+
+  await check("o mesmo projeto não gera uma segunda publicação", async () => {
+    // A regra anti-duplicação vive num índice único parcial (project_id), por
+    // isso a segunda publicação falha na base e não depende do cliente.
+    const segunda = await inserir("content_items", {
+      kind: "comunicado",
+      title: `[E2E] Duplicado ${SUF}`,
+      status: "publicado",
+      project_id: PROJ_CONTEUDO,
+    });
+    assert(!segunda.ok, `devia recusar, devolveu ${segunda.status}`);
+
+    const contagem = await sb(
+      `/rest/v1/content_items?select=id&project_id=eq.${PROJ_CONTEUDO}`,
+      { key: SR, jwt: SR }
+    );
+    assert(contagem.data.length === 1, `${contagem.data.length} publicações para o mesmo projeto`);
+    return "1 publicação por projeto";
+  });
+
+  // --- 11.2 Comunicado da gestão → feed do colaborador ------------------------
+  const TITULO_COM = `[E2E] Comunicado ${SUF}`;
+  const comunicado = await inserir("content_items", {
+    kind: "comunicado",
+    title: TITULO_COM,
+    subtitle: "Aviso interno da gestão",
+    body: "Reunião geral na delegação na sexta-feira, às 9h.",
+    status: "publicado",
+    is_pinned: true,
+    allow_reactions: true,
+    allow_comments: true,
+  });
+  assert(comunicado.ok, `comunicado: ${JSON.stringify(comunicado.data).slice(0, 140)}`);
+  criados.push(["content_items", comunicado.data[0].id]);
+  const COM_ID = comunicado.data[0].id;
+
+  await check("publicar um comunicado sela a data de publicação", async () => {
+    const r = await sb(`/rest/v1/content_items?select=status,published_at&id=eq.${COM_ID}`, {
+      jwt: sGestor.access_token,
+    });
+    assert(r.data[0].status === "publicado", r.data[0].status);
+    assert(!!r.data[0].published_at, "sem published_at");
+    return String(r.data[0].published_at).slice(0, 10);
+  });
+
+  await check("colaborador vê o comunicado no feed", async () => {
+    const r = await pagina("/vendedor/comunicados", cVendedor);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+    assert(t.includes(TITULO_COM), "comunicado ausente do feed");
+    assert(/Importante|Fixado/i.test(t), "sem marca de destaque");
+    return "200 com o comunicado";
+  });
+
+  await check("comunicado fixado vem primeiro no feed", async () => {
+    const r = await sb("/rest/v1/rpc/conteudo_feed", {
+      method: "POST",
+      jwt: sVendedor.access_token,
+      body: { p_kind: "comunicado", p_limit: 40 },
+    });
+    assert(r.ok, JSON.stringify(r.data).slice(0, 140));
+    const lista = r.data ?? [];
+    const meu = lista.find((c) => c.id === COM_ID);
+    assert(meu, "o comunicado não veio no feed do colaborador");
+    assert(meu.is_pinned === true, "não veio fixado");
+    return `${lista.length} comunicados · fixado em ${lista.findIndex((c) => c.id === COM_ID) + 1}.º`;
+  });
+
+  await check("cliente NÃO abre o feed de comunicados", async () => {
+    const r = await pagina("/vendedor/comunicados", cCliente);
+    assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+    assert(!String(r.location ?? "").includes("/vendedor"), `entrou: ${r.location}`);
+    return `${r.status} bloqueado`;
+  });
+
+  await check("cliente não lê comunicados nem pela API", async () => {
+    const r = await sb("/rest/v1/content_items?select=id,title&kind=eq.comunicado", {
+      jwt: sCliente.access_token,
+    });
+    const linhas = Array.isArray(r.data) ? r.data : [];
+    assert(linhas.length === 0, `${linhas.length} comunicados expostos ao cliente`);
+    return "0 linhas";
+  });
+
+  // --- 11.3 Testemunho → área de cliente --------------------------------------
+  const TITULO_TEST = `[E2E] Testemunho ${SUF}`;
+  const testemunho = await inserir("content_items", {
+    kind: "testemunho",
+    title: TITULO_TEST,
+    body: "Uso os perfumes INUKA há dois anos e a diferença é visível.",
+    status: "publicado",
+    author_name: "Cliente E2E",
+    allow_reactions: true,
+    allow_comments: true,
+  });
+  assert(testemunho.ok, `testemunho: ${JSON.stringify(testemunho.data).slice(0, 140)}`);
+  criados.push(["content_items", testemunho.data[0].id]);
+  const TEST_ID = testemunho.data[0].id;
+
+  await check("cliente vê o testemunho publicado", async () => {
+    const r = await pagina("/cliente/testemunhos", cCliente);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+    assert(t.includes(TITULO_TEST), "testemunho ausente da área de cliente");
+    assert(t.includes("Cliente E2E"), "sem o nome de quem testemunha");
+    return "200 com o testemunho";
+  });
+
+  const RASCUNHO_TEST = `[E2E] Testemunho por aprovar ${SUF}`;
+  const rascunho = await inserir("content_items", {
+    kind: "testemunho",
+    title: RASCUNHO_TEST,
+    body: "Ainda por aprovar.",
+    status: "rascunho",
+  });
+  assert(rascunho.ok, JSON.stringify(rascunho.data).slice(0, 140));
+  criados.push(["content_items", rascunho.data[0].id]);
+
+  await check("testemunho em rascunho NÃO aparece ao cliente", async () => {
+    // Só o que está publicado chega ao cliente: um rascunho é trabalho interno.
+    const p = await pagina("/cliente/testemunhos", cCliente);
+    assert(!texto(p.html).includes(RASCUNHO_TEST), "rascunho exposto na página");
+
+    const api = await sb("/rest/v1/content_items?select=id&id=eq." + rascunho.data[0].id, {
+      jwt: sCliente.access_token,
+    });
+    assert((api.data ?? []).length === 0, "rascunho legível pela API");
+    return "invisível em página e API";
+  });
+
+  // --- 11.4 Promoção → loja, datas e província --------------------------------
+  const TITULO_PROMO = `[E2E] Campanha nacional ${SUF}`;
+  const promo = await inserir("content_items", {
+    kind: "promocao",
+    title: TITULO_PROMO,
+    subtitle: "Preços especiais por tempo limitado",
+    body: "Campanha de teste automatizado.",
+    status: "publicado",
+    starts_at: ONTEM,
+    ends_at: AMANHA,
+    cta_label: "Ver catálogo",
+    cta_href: "/catalogo",
+  });
+  assert(promo.ok, `promoção: ${JSON.stringify(promo.data).slice(0, 140)}`);
+  criados.push(["content_items", promo.data[0].id]);
+  const PROMO_ID = promo.data[0].id;
+
+  if (PRODUTO) {
+    const lig = await inserir("content_products", {
+      item_id: PROMO_ID,
+      product_id: PRODUTO.id,
+      sort_order: 0,
+    });
+    assert(lig.ok, `ligar produto: ${JSON.stringify(lig.data).slice(0, 140)}`);
+  }
+
+  await check("promoção ativa aparece na loja com o produto real", async () => {
+    const r = await pagina("/promocoes");
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+    assert(t.includes(TITULO_PROMO), "campanha ausente de /promocoes");
+    assert(/Em curso/i.test(t), "sem estado “Em curso”");
+    if (PRODUTO) assert(t.includes(PRODUTO.name), "produto ligado não apareceu na campanha");
+    return PRODUTO ? `200 com “${PRODUTO.name}”` : "200";
+  });
+
+  const TITULO_EXPIRADA = `[E2E] Campanha encerrada ${SUF}`;
+  const expirada = await inserir("content_items", {
+    kind: "promocao",
+    title: TITULO_EXPIRADA,
+    status: "publicado",
+    starts_at: iso(AGORA - 20 * 86400000),
+    ends_at: PASSADO,
+  });
+  assert(expirada.ok, JSON.stringify(expirada.data).slice(0, 140));
+  criados.push(["content_items", expirada.data[0].id]);
+
+  await check("campanha terminada não aparece ao visitante", async () => {
+    // Quem não tem sessão não vê campanhas fora do prazo: na loja não pode
+    // parecer que ainda está a decorrer.
+    const r = await pagina("/promocoes");
+    assert(!texto(r.html).includes(TITULO_EXPIRADA), "campanha terminada exposta ao visitante");
+    return "oculta";
+  });
+
+  const TITULO_PROVINCIA = `[E2E] Campanha provincial ${SUF}`;
+  let promoProvinciaId = null;
+  if (PROVINCIA) {
+    const provincial = await inserir("content_items", {
+      kind: "promocao",
+      title: TITULO_PROVINCIA,
+      status: "publicado",
+      starts_at: ONTEM,
+      ends_at: AMANHA,
+      provincia_id: PROVINCIA.id,
+    });
+    assert(provincial.ok, JSON.stringify(provincial.data).slice(0, 140));
+    promoProvinciaId = provincial.data[0].id;
+    criados.push(["content_items", promoProvinciaId]);
+  }
+
+  await check("campanha provincial fica fora da loja pública", async () => {
+    // A loja pública só mostra o que é nacional; a campanha de uma província
+    // continua a existir, mas não se mistura com as nacionais.
+    const r = await pagina("/promocoes");
+    assert(!texto(r.html).includes(TITULO_PROVINCIA), "campanha provincial exposta ao visitante");
+    return "fora da loja pública";
+  });
+
+  await check("campanha provincial respeita a província de quem vê", async () => {
+    if (!promoProvinciaId) return "sem províncias na base";
+    const r = await sb("/rest/v1/rpc/conteudo_feed", {
+      method: "POST",
+      jwt: sCliente.access_token,
+      body: { p_kind: "promocao", p_limit: 40 },
+    });
+    assert(r.ok, JSON.stringify(r.data).slice(0, 140));
+    const viu = (r.data ?? []).some((c) => c.id === promoProvinciaId);
+    // Um cliente sem província é tratado como nacional (vê tudo); com província,
+    // só vê a sua e a nacional.
+    const deviaVer = PROV_CLIENTE === null || PROV_CLIENTE === PROVINCIA.id;
+    assert(viu === deviaVer, `viu=${viu}, esperado=${deviaVer} (província ${PROV_CLIENTE})`);
+    return deviaVer ? "cliente da província vê" : "cliente de outra província não vê";
+  });
+
+  // --- 11.5 Formação INUKA ----------------------------------------------------
+  const TITULO_CURSO = `[E2E] Curso ${SUF}`;
+  const curso = await inserir("training_courses", {
+    title: TITULO_CURSO,
+    description: "Curso criado pelo teste automático.",
+    level: "iniciacao",
+    status: "publicado",
+    duration_min: 45,
+  });
+  assert(curso.ok, `curso: ${JSON.stringify(curso.data).slice(0, 200)}`);
+  const CURSO_ID = curso.data[0].id;
+  criados.push(["training_courses", CURSO_ID]);
+
+  await check("o curso ganha registo de conteúdo (reações e comentários)", async () => {
+    const r = await sb(`/rest/v1/training_courses?select=content_id&id=eq.${CURSO_ID}`, {
+      jwt: sGestor.access_token,
+    });
+    assert(!!r.data[0].content_id, "curso sem content_id");
+    return r.data[0].content_id.slice(0, 8) + "…";
+  });
+  const CURSO_CONTENT = (await sb(`/rest/v1/training_courses?select=content_id&id=eq.${CURSO_ID}`, {
+    jwt: sGestor.access_token,
+  })).data[0].content_id;
+
+  const aula1 = await inserir("training_lessons", {
+    course_id: CURSO_ID,
+    title: "Aula 1 — Boas-vindas",
+    body: "Como usar a plataforma.",
+    kind: "texto",
+    duration_min: 10,
+    sort_order: 0,
+  });
+  const aula2 = await inserir("training_lessons", {
+    course_id: CURSO_ID,
+    title: "Aula 2 — Atendimento",
+    body: "Receber bem é vender melhor.",
+    kind: "texto",
+    duration_min: 15,
+    sort_order: 1,
+  });
+  assert(aula1.ok && aula2.ok, `aulas: ${JSON.stringify(aula1.data ?? aula1)}`);
+
+  await check("colaborador vê a formação e as aulas por ordem", async () => {
+    const r = await sb("/rest/v1/rpc/formacao_curso", {
+      method: "POST",
+      jwt: sVendedor.access_token,
+      body: { p_id: CURSO_ID },
+    });
+    assert(r.ok, JSON.stringify(r.data).slice(0, 160));
+    const aulas = r.data?.aulas ?? [];
+    assert(aulas.length === 2, `${aulas.length} aulas`);
+    assert(aulas[0].title.startsWith("Aula 1"), "ordem trocada");
+    return `${aulas.length} aulas ordenadas`;
+  });
+
+  await check("formação aparece na área do colaborador com slider", async () => {
+    const r = await pagina("/vendedor/formacao", cVendedor);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+    assert(t.includes(TITULO_CURSO), "curso ausente da área de formação");
+    assert(/Continuar a aprender|Novas formações/i.test(t), "sem as faixas horizontais");
+    return "200 com o curso";
+  });
+
+  await check("concluir uma aula dá 50%", async () => {
+    const r = await sb("/rest/v1/rpc/formacao_concluir_aula", {
+      method: "POST",
+      jwt: sVendedor.access_token,
+      body: { p_lesson_id: aula1.data[0].id, p_concluida: true },
+    });
+    assert(r.ok, JSON.stringify(r.data).slice(0, 160));
+    assert(r.data.percentagem === 50, `percentagem ${r.data.percentagem}`);
+    assert(r.data.curso_concluido === false, "deu o curso por concluído cedo de mais");
+    return `${r.data.concluidas}/${r.data.total} = ${r.data.percentagem}%`;
+  });
+
+  await check("concluir a última aula fecha o curso", async () => {
+    const r = await sb("/rest/v1/rpc/formacao_concluir_aula", {
+      method: "POST",
+      jwt: sVendedor.access_token,
+      body: { p_lesson_id: aula2.data[0].id, p_concluida: true },
+    });
+    assert(r.ok, JSON.stringify(r.data).slice(0, 160));
+    assert(r.data.percentagem === 100, `percentagem ${r.data.percentagem}`);
+    assert(r.data.curso_concluido === true, "curso não foi dado por concluído");
+    return "100% · concluído";
+  });
+
+  await check("a página do curso mostra o progresso real", async () => {
+    const r = await pagina(`/vendedor/formacao/${CURSO_ID}`, cVendedor);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+    assert(t.includes("Aula 1"), "aulas ausentes na página do curso");
+    // O HTML separa os nós de texto: «100» e «%» podem vir com espaço no meio.
+    assert(/100\s*%/.test(t), "progresso não reflectido na página");
+    return "200 com 100%";
+  });
+
+  await check("colaborador reage e comenta a formação", async () => {
+    const re = await sb("/rest/v1/content_reactions", {
+      method: "POST",
+      jwt: sVendedor.access_token,
+      prefer: "return=representation",
+      body: { item_id: CURSO_CONTENT, reaction: "util" },
+    });
+    assert(re.ok, `reação: ${JSON.stringify(re.data).slice(0, 140)}`);
+
+    const co = await sb("/rest/v1/content_comments", {
+      method: "POST",
+      jwt: sVendedor.access_token,
+      prefer: "return=representation",
+      body: { item_id: CURSO_CONTENT, body: "Muito útil, obrigado." },
+    });
+    assert(co.ok, `comentário: ${JSON.stringify(co.data).slice(0, 140)}`);
+
+    const feed = await sb("/rest/v1/rpc/conteudo_feed", {
+      method: "POST",
+      jwt: sVendedor.access_token,
+      body: { p_kind: "formacao", p_limit: 40 },
+    });
+    const meu = (feed.data ?? []).find((c) => c.id === CURSO_CONTENT);
+    assert(meu, "curso fora do feed de formação");
+    assert(Number(meu.reacoes) >= 1, "reação não contada");
+    assert(Number(meu.comentarios) >= 1, "comentário não contado");
+    assert(meu.minha_reacao === "util", "a minha reação não foi devolvida");
+    return `${meu.reacoes} reação · ${meu.comentarios} comentário`;
+  });
+
+  await check("reagir duas vezes ao mesmo conteúdo é recusado", async () => {
+    const r = await sb("/rest/v1/content_reactions", {
+      method: "POST",
+      jwt: sVendedor.access_token,
+      body: { item_id: CURSO_CONTENT, reaction: "adoro" },
+    });
+    assert(!r.ok, `aceitou reação duplicada (${r.status})`);
+    return `${r.status} recusado`;
+  });
+
+  await check("cliente NÃO entra na formação", async () => {
+    const p = await pagina(`/vendedor/formacao/${CURSO_ID}`, cCliente);
+    assert(p.status === 307 || p.status === 302, `HTTP ${p.status}`);
+
+    const r = await sb("/rest/v1/rpc/formacao_curso", {
+      method: "POST",
+      jwt: sCliente.access_token,
+      body: { p_id: CURSO_ID },
+    });
+    assert(!r.ok, `cliente abriu o curso pela API (${r.status})`);
+    return "página e API bloqueadas";
+  });
+
+  await check("gestão vê estatísticas da formação", async () => {
+    const r = await sb("/rest/v1/rpc/formacao_estatisticas", {
+      method: "POST",
+      jwt: sGestor.access_token,
+      body: { p_course_id: CURSO_ID },
+    });
+    assert(r.ok, JSON.stringify(r.data).slice(0, 160));
+    // A função devolve uma lista (uma linha por curso), não um objecto.
+    const lista = Array.isArray(r.data) ? r.data : [r.data];
+    const linha = lista.find((l) => l.course_id === CURSO_ID) ?? lista[0];
+    assert(linha, "o curso não veio nas estatísticas");
+    assert(Number(linha.inscritos) >= 1, "sem inscritos");
+    assert(Number(linha.concluidos) >= 1, "sem concluídos");
+    return `${linha.inscritos} inscritos · ${linha.concluidos} concluídos`;
+  });
+
+  await check("gestor abre a lista de conteúdos e a de formação", async () => {
+    for (const [rota, marca] of [
+      ["/gerente/conteudos", "Conteúdos"],
+      ["/gerente/formacao", "Formação"],
+    ]) {
+      const r = await pagina(rota, cGestor);
+      assert(r.status === 200, `${rota} -> ${r.status}`);
+      assert(texto(r.html).includes(marca), `${rota} sem “${marca}”`);
+    }
+    const lista = await pagina("/gerente/conteudos", cGestor);
+    assert(texto(lista.html).includes(TITULO_COM), "o comunicado não aparece na gestão");
+    return "2 secções";
+  });
+
+  await check("colaborador NÃO entra na gestão de conteúdos", async () => {
+    for (const rota of ["/gerente/conteudos", "/gerente/formacao"]) {
+      const r = await pagina(rota, cVendedor);
+      assert(r.status === 307 || r.status === 302, `${rota} -> ${r.status}`);
+    }
+    return "2 bloqueadas";
+  });
+
+  // --- 11.6 Testemunho em tamanho completo ------------------------------------
+  await check("cliente abre um testemunho em tamanho completo", async () => {
+    const r = await pagina(`/cliente/testemunhos/${TEST_ID}`, cCliente);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+    assert(t.includes(TITULO_TEST), "título ausente na página do testemunho");
+    assert(t.includes("Uso os perfumes INUKA"), "mensagem ausente");
+    assert(t.includes("Cliente E2E"), "autor ausente");
+    return "200 com mensagem e autor";
+  });
+
+  await check("testemunho em rascunho não abre nem por ligação directa", async () => {
+    // A página lê a mesma tabela: se o RLS não devolver a linha, responde 404 em
+    // vez de revelar que o testemunho existe.
+    const r = await pagina(`/cliente/testemunhos/${rascunho.data[0].id}`, cCliente);
+    assert(r.status === 404, `HTTP ${r.status}`);
+    return "404";
+  });
+
+  // --- 11.7 Questionário respondível ------------------------------------------
+  const QUIZ_BODY = JSON.stringify([
+    {
+      pergunta: "Qual é o primeiro passo do atendimento?",
+      opcoes: ["Cumprimentar o cliente", "Mostrar o preço", "Pedir o telefone"],
+      correta: 0,
+      explicacao: "O cumprimento abre a conversa.",
+    },
+    {
+      pergunta: "Conhecer o produto serve para…",
+      opcoes: ["Encher a conversa", "Apresentar benefícios", "Evitar perguntas"],
+      correta: 1,
+    },
+  ]);
+  const aulaQuiz = await inserir("training_lessons", {
+    course_id: CURSO_ID,
+    title: "Aula 3 — Questionário de atendimento",
+    kind: "quiz",
+    body: QUIZ_BODY,
+    duration_min: 5,
+    sort_order: 2,
+  });
+  assert(aulaQuiz.ok, `aula quiz: ${JSON.stringify(aulaQuiz.data ?? aulaQuiz).slice(0, 160)}`);
+
+  await check("a aula de questionário chega ao colaborador com as opções", async () => {
+    const r = await pagina(`/vendedor/formacao/${CURSO_ID}`, cVendedor);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+    assert(t.includes("Questionário de atendimento"), "aula ausente");
+    assert(t.includes("Qual é o primeiro passo do atendimento?"), "pergunta não renderizada");
+    assert(t.includes("Cumprimentar o cliente"), "opções não renderizadas");
+    assert(/Verificar respostas|Responda a todas/i.test(t), "sem botão de correção");
+    return "pergunta e opções presentes";
+  });
+
+  await check("a pergunta é lida como JSON válido (não como texto corrido)", async () => {
+    // Se o parser falhar, a página mostra o JSON em bruto. Este teste garante
+    // que o formato guardado é o que o componente sabe ler.
+    const r = await sb(`/rest/v1/training_lessons?select=body&id=eq.${aulaQuiz.data[0].id}`, {
+      jwt: sGestor.access_token,
+    });
+    const bruto = r.data[0].body;
+    const lido = JSON.parse(bruto);
+    assert(Array.isArray(lido) && lido.length === 2, "formato inesperado");
+    assert(lido[0].correta === 0 && lido[1].correta === 1, "respostas certas perdidas");
+    return `${lido.length} perguntas`;
+  });
+
+  // --- 11.8 Guardar para estudar depois ---------------------------------------
+  await check("colaborador guarda um curso para estudar depois", async () => {
+    const g = await sb("/rest/v1/training_bookmarks", {
+      method: "POST",
+      jwt: sVendedor.access_token,
+      prefer: "return=representation",
+      body: { course_id: CURSO_ID },
+    });
+    assert(g.ok, `guardar: ${JSON.stringify(g.data).slice(0, 140)}`);
+
+    const p = await pagina("/vendedor/formacao", cVendedor);
+    assert(p.status === 200, `HTTP ${p.status}`);
+    assert(texto(p.html).includes("Guardados para depois"), "faixa de guardados ausente");
+    return "guardado e visível";
+  });
+
+  await check("guardar duas vezes não duplica nem falha", async () => {
+    const g = await sb("/rest/v1/training_bookmarks", {
+      method: "POST",
+      jwt: sVendedor.access_token,
+      body: { course_id: CURSO_ID },
+    });
+    // A chave primária é (user_id, course_id): repetir dá 409, que a aplicação
+    // trata como «já estava guardado» em vez de mostrar um erro.
+    assert(g.status === 409, `esperava 409, veio ${g.status}`);
+    const c = await sb(
+      `/rest/v1/training_bookmarks?select=course_id&course_id=eq.${CURSO_ID}`,
+      { key: SR, jwt: SR }
+    );
+    assert(c.data.length === 1, `${c.data.length} linhas`);
+    return "1 linha";
+  });
+
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 12. LIMPEZA ---");
+// ---------------------------------------------------------------------------
+await check("remover conteúdos e formação criados", async () => {
+  if (!TEM_CONTEUDOS) return "nada a remover (migração em falta)";
+  const del = (p) => sb(p, { method: "DELETE", key: SR, jwt: SR, prefer: "return=minimal" });
+  // A ordem importa: filhos antes dos pais.
+  for (const [tabela, id] of criados.filter(([t]) => t === "content_items")) {
+    await del(`/rest/v1/content_comments?item_id=eq.${id}`);
+    await del(`/rest/v1/content_reactions?item_id=eq.${id}`);
+    await del(`/rest/v1/content_products?item_id=eq.${id}`);
+  }
+  for (const [, id] of criados.filter(([t]) => t === "training_courses")) {
+    await del(`/rest/v1/training_lessons?course_id=eq.${id}`);
+  }
+  await del(`/rest/v1/content_items?created_by=eq.${GESTOR_ID}`);
+  await del(`/rest/v1/training_courses?created_by=eq.${GESTOR_ID}`);
+  await del(`/rest/v1/design_projects?owner_id=eq.${GESTOR_ID}`);
+  // Progresso e inscrições do colaborador de teste.
+  await del(`/rest/v1/training_progress?user_id=eq.${VENDEDOR_ID}`);
+  await del(`/rest/v1/training_enrollments?user_id=eq.${VENDEDOR_ID}`);
+  await del(`/rest/v1/training_bookmarks?user_id=eq.${VENDEDOR_ID}`);
+  return `${criados.length} conteúdos/cursos`;
+});
+
+// ---------------------------------------------------------------------------
+console.log("\n--- 13. TAXA DE COMISSÃO, PEDIDOS E REVENDEDORES ---");
+// ---------------------------------------------------------------------------
+
+// Sonda à tabela nova. Sem a migração 0008 o formulário responde 503 com a
+// instrução — os testes que dependem dela ficam por correr, não são aprovados.
+const sondaRevendedor = await sb("/rest/v1/reseller_applications?select=id&limit=1", {
+  key: SR,
+  jwt: SR,
+});
+const TEM_REVENDEDOR = sondaRevendedor.status !== 404;
+
+// A mesma migração traz a taxa da empresa e a confirmação da entrega pelo
+// comprador. `taxa_comissao_global()` só existe depois da 0008 — é a sonda
+// mais directa, porque a versão antiga de `update_order_status()` existe
+// sempre e responderia 200 mesmo sem o patch.
+const sondaTaxa = await rpcAdmin("taxa_comissao_global", {});
+const TEM_TAXAS = sondaTaxa.status === 200;
+
+if (!TEM_REVENDEDOR || !TEM_TAXAS) {
+  console.log(`
+  ATENÇÃO — a base de dados ainda não tem a migração 0008.
+  Abra o Supabase -> SQL Editor e cole:
+      supabase/PATCH_TAXAS_PEDIDOS.sql
+
+  Por correr, porque dependem dela:
+      candidaturas a revendedor           ${TEM_REVENDEDOR ? "ok" : "tabela em falta"}
+      confirmação da entrega pelo cliente ${TEM_TAXAS ? "ok" : "função em falta"}
+`);
+}
+
+const CAND_TEL = "+244924200077";
+
+await check("a página de revendedor mostra o formulário", async () => {
+  const r = await pagina("/revendedor");
+  assert(r.status === 200, `status ${r.status}`);
+  const t = texto(r.html);
+  assert(/Quero ser revendedor INUKA/.test(t), "sem título do formulário");
+  assert(/Telefone/.test(t), "sem campo de telefone");
+  return "formulário servido a visitantes";
+});
+
+await check("a página inicial tem o botão de revendedor", async () => {
+  const r = await pagina("/");
+  assert(r.status === 200, `status ${r.status}`);
+  assert(/Quero ser revendedor/.test(texto(r.html)), "sem botão na página inicial");
+  assert(/href="\/revendedor"/.test(r.html), "sem ligação para /revendedor");
+  return "botão presente na entrada da loja";
+});
+
+await check("o formulário recusa um telefone inválido", async () => {
+  const res = await fetch(`${APP}/api/revendedor`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ full_name: "Candidato Teste", phone: "123" }),
+  });
+  const dados = await res.json().catch(() => ({}));
+  assert(res.status === 400, `status ${res.status}`);
+  assert(/telefone/i.test(dados.error ?? ""), JSON.stringify(dados));
+  return "400 com mensagem sobre o telefone";
+});
+
+await check("o formulário recusa um nome vazio", async () => {
+  const res = await fetch(`${APP}/api/revendedor`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ full_name: " ", phone: CAND_TEL }),
+  });
+  assert(res.status === 400, `status ${res.status}`);
+  return "400 sem nome";
+});
+
+if (TEM_REVENDEDOR) {
+  await check("visitante envia candidatura e a gestão recebe", async () => {
+    const res = await fetch(`${APP}/api/revendedor`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        full_name: "Candidato Web",
+        phone: CAND_TEL,
+        message: "Vendo em Viana, quero começar.",
+      }),
+    });
+    assert(res.status === 200, `status ${res.status}: ${await res.text()}`);
+
+    const { data } = await sb(
+      `/rest/v1/reseller_applications?select=id,status,full_name&phone=eq.${encodeURIComponent(CAND_TEL)}`,
+      { key: SR, jwt: SR },
+    );
+    assert(Array.isArray(data) && data.length === 1, `linhas: ${JSON.stringify(data)}`);
+    assert(data[0].status === "novo", `estado ${data[0].status}`);
+    return `${data[0].full_name} · estado novo`;
+  });
+
+  await check("repetir a candidatura no mesmo número não duplica", async () => {
+    const res = await fetch(`${APP}/api/revendedor`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ full_name: "Candidato Web", phone: CAND_TEL }),
+    });
+    const dados = await res.json().catch(() => ({}));
+    assert(res.status === 200, `status ${res.status}`);
+    assert(dados.repetido === true, JSON.stringify(dados));
+
+    const { data } = await sb(
+      `/rest/v1/reseller_applications?select=id&phone=eq.${encodeURIComponent(CAND_TEL)}`,
+      { key: SR, jwt: SR },
+    );
+    assert(data.length === 1, `linhas: ${data.length}`);
+    return "uma só linha por número";
+  });
+
+  await check("o cliente não lê as candidaturas dos outros", async () => {
+    const { status, data } = await sb("/rest/v1/reseller_applications?select=id", {
+      jwt: sCliente.access_token,
+    });
+    assert(status === 200, `status ${status}`);
+    assert(Array.isArray(data) && data.length === 0, `linhas: ${JSON.stringify(data)}`);
+    return "0 linhas para o cliente";
+  });
+
+  await check("a gestão vê a candidatura", async () => {
+    const { status, data } = await sb(
+      `/rest/v1/reseller_applications?select=id,status&phone=eq.${encodeURIComponent(CAND_TEL)}`,
+      { jwt: sGestor.access_token },
+    );
+    assert(status === 200, `status ${status}`);
+    assert(Array.isArray(data) && data.length === 1, `linhas: ${JSON.stringify(data)}`);
+    return "gestão vê a candidatura";
+  });
+}
+
+await check("a gestão abre a página de candidaturas", async () => {
+  const r = await pagina("/gerente/revendedores", cookieSessao(sGestor));
+  assert(r.status === 200, `status ${r.status}`);
+  assert(/Candidaturas a revendedor/.test(texto(r.html)), "sem título da página");
+  return "página servida à gestão";
+});
+
+await check("o cliente não entra nas candidaturas", async () => {
+  const r = await pagina("/gerente/revendedores", cookieSessao(sCliente));
+  assert(r.status === 307 || r.status === 302, `status ${r.status}`);
+  return `redireccionado (${r.status})`;
+});
+
+await check("o colaborador tem a lista de encomendas da carteira", async () => {
+  const r = await pagina("/vendedor/encomendas", cookieSessao(sVendedor));
+  assert(r.status === 200, `status ${r.status}`);
+  assert(/Encomendas da minha carteira/.test(texto(r.html)), "sem título da página");
+  return "página servida ao colaborador";
+});
+
+await check("o cliente não entra nas encomendas do colaborador", async () => {
+  const r = await pagina("/vendedor/encomendas", cookieSessao(sCliente));
+  assert(r.status === 307 || r.status === 302, `status ${r.status}`);
+  return `redireccionado (${r.status})`;
+});
+
+// -----------------------------------------------------------------------------
+// O CICLO DA ENCOMENDA — a metade que faltava: a gestão muda o estado, o
+// comprador vê e confirma que recebeu.
+// -----------------------------------------------------------------------------
+let ENCOMENDA = null;
+
+await check("o cliente cria uma encomenda para acompanhar", async () => {
+  // Um produto com stock na base. `place_order` reserva a quantidade, por isso
+  // sem stock a chamada falhava por uma razão que não tem a ver com o teste.
+  const { data: stock } = await sb(
+    "/rest/v1/inventory?select=product_id&quantity=gt.5&limit=25",
+    { key: SR, jwt: SR },
+  );
+  const ids = [...new Set((stock ?? []).map((l) => l.product_id))];
+  assert(ids.length > 0, "sem stock para encomendar");
+
+  const { data: prods } = await sb(
+    `/rest/v1/products?select=id,name&is_active=eq.true&id=in.(${ids.join(",")})&limit=1`,
+    { key: SR, jwt: SR },
+  );
+  assert(prods?.length === 1, "sem produto activo com stock");
+  const produto = prods[0];
+
+  const { status, data } = await sb("/rest/v1/rpc/place_order", {
+    method: "POST",
+    jwt: sCliente.access_token,
+    body: { p_items: [{ product_id: produto.id, quantity: 1 }], p_delivery_method: "pickup" },
+  });
+  assert(status === 200, `status ${status}: ${JSON.stringify(data).slice(0, 160)}`);
+  assert(data?.order_id, `sem id: ${JSON.stringify(data).slice(0, 160)}`);
+  ENCOMENDA = data.order_id;
+  return `${produto.name} · ${data.reference}`;
+});
+
+await check("a gestão faz sair a encomenda para entrega", async () => {
+  const { status, data } = await sb("/rest/v1/rpc/update_order_status", {
+    method: "POST",
+    jwt: sGestor.access_token,
+    body: { p_order_id: ENCOMENDA, p_status: "in_delivery" },
+  });
+  assert(status === 200, `status ${status}: ${JSON.stringify(data).slice(0, 160)}`);
+  assert(data?.changed === true, JSON.stringify(data).slice(0, 160));
+  return "pendente -> em entrega";
+});
+
+await check("o cliente vê o estado novo, o histórico e a confirmação", async () => {
+  const r = await pagina("/cliente/encomendas", cookieSessao(sCliente));
+  assert(r.status === 200, `status ${r.status}`);
+  const t = texto(r.html);
+  assert(/Em entrega/.test(t), "sem o estado «Em entrega»");
+  assert(/Histórico/.test(t), "sem histórico da encomenda");
+  assert(/Já recebi a encomenda/.test(t), "sem botão para confirmar a recepção");
+  return "estado, histórico e confirmação";
+});
+
+await check("o cliente confirma a entrega e a encomenda conclui", async () => {
+  // Sem a 0008 a função em vigor é a antiga e responde 42501 — não é uma
+  // regressão, é a migração que falta.
+  if (!TEM_TAXAS) return "saltado (falta a migração 0008)";
+  const { status, data } = await sb("/rest/v1/rpc/update_order_status", {
+    method: "POST",
+    jwt: sCliente.access_token,
+    body: { p_order_id: ENCOMENDA, p_status: "completed", p_notes: "Recebida pelo cliente" },
+  });
+  assert(status === 200, `status ${status}: ${JSON.stringify(data).slice(0, 160)}`);
+  assert(data?.pelo_cliente === true, JSON.stringify(data).slice(0, 160));
+  assert(data?.status === "completed", JSON.stringify(data).slice(0, 160));
+  return "concluída pelo comprador";
+});
+
+await check("a encomenda concluída aparece fechada ao cliente", async () => {
+  if (!TEM_TAXAS) return "saltado (falta a migração 0008)";
+  const r = await pagina("/cliente/encomendas", cookieSessao(sCliente));
+  assert(r.status === 200, `status ${r.status}`);
+  const t = texto(r.html);
+  assert(/Concluída/.test(t), "sem o estado «Concluída»");
+  assert(!/Já recebi a encomenda/.test(t), "botão de confirmação ainda visível");
+  return "concluída e sem botão";
+});
+
+await check("a referência do cliente chama-se «Falar com a equipa INUKA»", async () => {
+  const r = await pagina("/referencia", cookieSessao(sCliente));
+  assert(r.status === 200, `status ${r.status}`);
+  const t = texto(r.html);
+  assert(/Falar com a equipa INUKA/.test(t), "título antigo ainda em uso");
+  assert(!/O meu colaborador/.test(t), "ainda mostra «O meu colaborador»");
+  return "título novo";
+});
+
+await check("a taxa de comissão da empresa aparece na área de colaborador", async () => {
+  const r = await pagina("/vendedor", cookieSessao(sVendedor));
+  assert(r.status === 200, `status ${r.status}`);
+  const t = texto(r.html);
+  assert(/por venda/.test(t), "sem indicação da taxa");
+  assert(/\d+\s*%/.test(t), "sem percentagem");
+  return "taxa visível no painel";
+});
+
+await check("a página de promoções tem o novo ambiente", async () => {
+  const r = await pagina("/promocoes");
+  assert(r.status === 200, `status ${r.status}`);
+  const t = texto(r.html);
+  assert(/Beleza que chega/.test(t), "sem o novo cabeçalho");
+  assert(/Ver o catálogo/.test(t), "sem ligação ao catálogo");
+  return "cabeçalho e chamada presentes";
+});
+
+await check("remover a candidatura de teste", async () => {
+  if (!TEM_REVENDEDOR) return "nada a remover (migração em falta)";
+  const { status } = await sb(
+    `/rest/v1/reseller_applications?phone=eq.${encodeURIComponent(CAND_TEL)}`,
+    { method: "DELETE", key: SR, jwt: SR },
+  );
+  assert(status === 204 || status === 200, `status ${status}`);
+  return "candidatura removida";
+});
+
+await check("remover a encomenda de teste", async () => {
+  if (!ENCOMENDA) return "nada a remover";
+  // Se a confirmação do cliente não correu (0008 em falta), a encomenda ficou
+  // com a quantidade reservada no inventário. Apagar a linha directamente
+  // deixava a reserva presa para sempre; cancelar primeiro liberta-a.
+  const { data: actual } = await sb(`/rest/v1/orders?select=status&id=eq.${ENCOMENDA}`, {
+    key: SR,
+    jwt: SR,
+  });
+  const estado = actual?.[0]?.status;
+  if (estado && estado !== "completed" && estado !== "cancelled") {
+    await rpcAdmin("update_order_status", { p_order_id: ENCOMENDA, p_status: "cancelled" });
+  }
+  const { status } = await sb(`/rest/v1/orders?id=eq.${ENCOMENDA}`, {
+    method: "DELETE",
+    key: SR,
+    jwt: SR,
+  });
+  assert(status === 204 || status === 200, `status ${status}`);
+  return "encomenda e linhas removidas";
+});
+
+await check("remover contas de teste", async () => {
+  for (const u of [CLIENTE, VENDEDOR, GESTOR]) await apagarConta(u.phone);
+  // O cliente que o colaborador abriu na carteira.
+  await apagarConta(CARTEIRA_TEL);
+  // As contas do CRUD podem ter ficado a meio de uma falha.
+  await apagarConta(NOVO.phone);
+  await apagarConta(NOVO_TEL);
+  await apagarConta(COLAB_TEL);
+  return "3 contas removidas (+ carteira e sobras do CRUD)";
+});
+
+console.log("\n" + "=".repeat(64));
+console.log(`Total: ${total}  |  Passou: ${passed}  |  Falhou: ${total - passed}`);
+if (falhas.length) {
+  console.log("\nFALHAS:");
+  for (const f of falhas) console.log(`  - ${f}`);
+}
+console.log("=".repeat(64));
+process.exit(falhas.length ? 1 : 0);

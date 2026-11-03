@@ -1,0 +1,140 @@
+@import "tailwindcss";
+
+:root {
+  --inuka-gold: #C9A962;
+  --inuka-gold-light: #E3D5A7;
+  --inuka-dark: #0A0A0A;
+  --inuka-charcoal: #1A1A1A;
+  --inuka-surface: #262626;
+  --inuka-text: #F5F5F5;
+  --inuka-muted: #A3A3A3;
+  --inuka-danger: #DC2626;
+  --inuka-success: #16A34A;
+}
+
+@theme inline {
+  --color-inuka-gold: var(--inuka-gold);
+  --color-inuka-gold-light: var(--inuka-gold-light);
+  --color-inuka-dark: var(--inuka-dark);
+  --color-inuka-charcoal: var(--inuka-charcoal);
+  --color-inuka-surface: var(--inuka-surface);
+  --color-inuka-text: var(--inuka-text);
+  --color-inuka-muted: var(--inuka-muted);
+  --color-inuka-danger: var(--inuka-danger);
+  --color-inuka-success: var(--inuka-success);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  background-color: var(--inuka-dark);
+  color: var(--inuka-text);
+  font-family: var(--font-sans);
+}
+
+/* Scrollbar elegante */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--inuka-charcoal);
+}
+::-webkit-scrollbar-thumb {
+  background: #404040;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #525252;
+}
+
+/* Animações suaves */
+.fade-in {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ==========================================================================
+   TELEMÓVEL
+   A loja e a área de gestão são usadas sobretudo no telemóvel. Estas regras
+   valem para todo o site e evitam os três defeitos clássicos em mobile.
+   ========================================================================== */
+
+/* 1. iOS faz zoom automático ao focar um campo com letra < 16px. O zoom
+      desalinha a página e o utilizador fica preso num enquadramento errado.
+      Só nos ecrãs pequenos — no computador os 14px ficam como estão. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+    line-height: 1.4;
+  }
+
+  /* 2. Áreas seguras do iPhone (entalhe e barra inferior): sem isto o último
+        botão fica debaixo da barra de gestos. */
+  body {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+/* 3. Toque: sem atraso de 300 ms e sem realce azul/cinza do sistema. */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+button,
+a,
+[role="button"],
+summary,
+select {
+  touch-action: manipulation;
+}
+
+/* Alvos de toque: um botão de 24px é impossível de acertar com o dedo.
+   Aplicado só em ecrãs de toque para não engordar o desktop. */
+@media (pointer: coarse) {
+  button:not([data-compacto]),
+  a[role="button"],
+  summary {
+    min-height: 40px;
+  }
+  /* Um botão só com ícone continua quadrado. */
+  button:not([data-compacto]):has(> svg:only-child) {
+    min-width: 40px;
+  }
+}
+
+/* 4. Tabelas largas: em vez de rebentar o layout, deslizam na horizontal
+      dentro do próprio cartão. A primeira coluna fica presa, para não se
+      perder de vista de quem é a linha. */
+.tabela-deslizante {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.tabela-deslizante > table {
+  min-width: 100%;
+}
+.tabela-deslizante > table > thead > tr > th:first-child,
+.tabela-deslizante > table > tbody > tr > td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: #1a1a1a;
+}
+.tabela-deslizante > table > thead > tr > th:first-child {
+  background: #141414;
+  z-index: 2;
+}
+
+/* 5. Nunca deixar a página inteira deslizar para o lado por causa de um
+      elemento que transborda. */
+html,
+body {
+  max-width: 100%;
+  overflow-x: clip;
+}

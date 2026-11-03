@@ -1,0 +1,60 @@
+# =============================================================================
+#  NETLIFY — INUKA Angola (Next.js com servidor)
+# =============================================================================
+#  Este ficheiro vive DENTRO de apps/web de propósito. Quando o `base` está no
+#  netlify.toml da raiz do monorepo, o caminho `publish` é resolvido contra a
+#  raiz e o runtime do Next não encontra `.next` (erro "Your publish directory
+#  was not found"). Aqui não há `base`: o directório do projecto é este.
+#
+#  NÃO tentes publicar arrastando a pasta para https://app.netlify.com/drop.
+#  O Drop só aceita ficheiros estáticos, e esta app tem Server Components,
+#  rotas `/api/*`, middleware (`src/proxy.ts`) e sessão em cookie — precisa de
+#  um servidor Node. É por isso que o Drop responde
+#  "We couldn't deploy the files you dropped" e depois "Access Denied".
+#
+#  SITUAÇÃO CONHECIDA (2026-11-03) — este ficheiro está correcto, mas o deploy
+#  falha na mesma, e não é configuração:
+#    `@netlify/plugin-nextjs` 5.16.6 gera um handler de edge para o middleware
+#    Node (`___netlify-edge-handler-node-middleware`) cujo bundle faz
+#    `require('next/dist/server/node-environment')`, mas o `deno.json` que o
+#    plugin escreve NÃO tem um único mapeamento `next`. Resultado:
+#    "Could not load edge function". É incompatibilidade com o Next 16, e um
+#    build por Git falha no mesmo ponto.
+#
+#  Já testado sem resultado:
+#    • `next build --webpack` — o bundle continua a externalizar
+#      `next/dist/server/...` (13 requires), por isso o Deno falha igual.
+#    • 5.16.6 é a versão mais recente publicada; não há canary mais nova.
+#
+#  Enquanto não sair correcção no opennextjs-netlify, publica-se por WorkBuddy
+#  Sites (ver README) ou por Vercel, que corre Next 16 sem runtime próprio.
+#
+#  Publicar:
+#    a) CLI, a partir de apps/web:
+#         npx netlify-cli deploy --build --prod --site <site-id>
+#    b) Git: em Netlify, Base directory = `apps/web` e Build command =
+#       `npm run build`. O Netlify lê este ficheiro a partir da base.
+#
+#  Variáveis de ambiente no site (Site configuration > Environment variables):
+#      NEXT_PUBLIC_SUPABASE_URL        (build + runtime)
+#      NEXT_PUBLIC_SUPABASE_ANON_KEY   (build + runtime)
+#      SUPABASE_SERVICE_ROLE_KEY       (segredo, só runtime)
+# =============================================================================
+
+[build]
+  # A instalação de dependências é um passo próprio do Netlify (`npm ci` a
+  # partir do package-lock.json). Repeti-la aqui apagava `node_modules` a meio
+  # do build sem necessidade.
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  # Next 16 exige Node >= 20.9.
+  NODE_VERSION = "22"
+  NEXT_TELEMETRY_DISABLED = "1"
+
+# Runtime oficial: converte as rotas do Next em funções do Netlify, serve os
+# estáticos e mantém o middleware. Sem este plugin o deploy publica apenas
+# `.next/static` e todas as páginas dão 404.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
