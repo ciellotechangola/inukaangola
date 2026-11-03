@@ -1,0 +1,28 @@
+{
+  "name": "inuka-angola",
+  "private": true,
+  "description": "INUKA Angola — plataforma web + mobile (Next.js, Flutter, Supabase)",
+  "scripts": {
+    "dev": "npm --prefix apps/web run dev",
+    "build": "npm --prefix apps/web run build",
+    "start": "npm --prefix apps/web run start",
+    "seed": "node supabase/seed.mjs",
+    "seed:cats": "node supabase/seed.mjs --cats",
+    "seed:limpar": "node supabase/seed.mjs --limpar",
+    "seed:chat": "node supabase/seed-chat.mjs",
+    "seed:provincias": "node supabase/seed-provincias.mjs",
+    "seed:provincias:limpar": "node supabase/seed-provincias.mjs --limpar",
+    "setup:sql": "node supabase/build-setup.mjs",
+    "test": "npm --prefix supabase/tests run check",
+    "test:sql": "npm --prefix supabase/tests run check",
+    "test:live": "node scripts/com-servidor.mjs supabase/tests/live.test.mjs",
+    "test:crud": "node scripts/com-servidor.mjs supabase/tests/crud.test.mjs",
+    "test:web": "node scripts/com-servidor.mjs apps/web/tests/web.e2e.mjs",
+    "test:designer": "node supabase/tests/designer.test.mjs",
+    "test:mobile": "cd apps/mobile && flutter test",
+    "test:all": "node scripts/test-all.mjs"
+  },
+  "devDependencies": {
+    "undici": "^8.12.3"
+  }
+}

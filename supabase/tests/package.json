@@ -1,0 +1,14 @@
+{
+  "name": "inuka-db-tests",
+  "private": true,
+  "type": "module",
+  "description": "Validação do SQL da INUKA Angola sobre PostgreSQL real (PGlite)",
+  "scripts": {
+    "validate": "node validate.mjs ..",
+    "test": "node functional.test.mjs ..",
+    "check": "node validate.mjs .. && node functional.test.mjs .."
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.17"
+  }
+}

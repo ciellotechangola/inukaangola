@@ -1,0 +1,23 @@
+# Dependências
+node_modules/
+
+# Projecto nativo gerado (existe em qualquer Mac depois de `npx cap add ios`)
+ios/App/Pods/
+ios/App/Podfile.lock
+ios/App/App/public/
+ios/App/build/
+ios/DerivedData/
+ios/App/output/
+
+# Artefactos de assinatura — nunca versionar
+*.ipa
+*.dSYM.zip
+*.mobileprovision
+*.p12
+*.cer
+*.pem
+*.key
+ExportOptions.plist
+
+# macOS
+.DS_Store

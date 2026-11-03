@@ -1,0 +1,15 @@
+# Normaliza as quebras de linha. Sem isto, cada gravação no Windows converte
+# os ficheiros para CRLF e o Git mostra o repositório inteiro como alterado.
+* text=auto eol=lf
+
+# Binários: o Git não deve tentar tratar como texto.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.ttf binary
+*.woff2 binary
+*.jks binary
+*.ipa binary
+*.jar binary

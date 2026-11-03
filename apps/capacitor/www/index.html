@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="pt">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>INUKA</title>
+    <meta name="theme-color" content="#0A0A0A" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0a0a0a;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      img {
+        width: 128px;
+        height: 128px;
+        border-radius: 28px;
+      }
+    </style>
+  </head>
+  <body>
+    <img src="logo-inuka.png" alt="INUKA" />
+    <!--
+      Esta página só aparece em duas situações: se o `server.url` do
+      capacitor.config.ts for removido, ou como rede de segurança do Capacitor.
+      Com `server.url` definido, a app abre directamente o site.
+    -->
+    <script>
+      location.replace(
+        "https://inuka-angola.apps.workbuddy.host/?sharecode=J27FVBMTIH",
+      );
+    </script>
+  </body>
+</html>

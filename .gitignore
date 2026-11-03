@@ -1,0 +1,52 @@
+# ============================================================================
+# Segredos — nunca versionar. O repositório é público.
+# ============================================================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+key.properties
+*.mobileprovision
+ExportOptions.plist
+apps/mobile/android/local.properties
+
+# Os exemplos ficam: são o que diz a quem chega quais variáveis preencher.
+!.env.example
+!**/.env.local.example
+!**/.env.example
+
+# ============================================================================
+# Dependências e resultados de compilação
+# ============================================================================
+node_modules/
+supabase/tests/node_modules/
+supabase/tests/package-lock.json
+.next/
+.netlify/
+out/
+dist/
+build/
+.gradle/
+apps/mobile/.dart_tool/
+apps/mobile/.flutter-plugins
+apps/mobile/.flutter-plugins-dependencies
+apps/capacitor/ios/App/Pods/
+apps/capacitor/ios/App/Podfile.lock
+apps/capacitor/ios/App/App/public/
+
+# ============================================================================
+# Ferramentas locais e ruído
+# ============================================================================
+.wbapp_*.genie
+.workbuddy-ai/
+.workbuddy/
+.idea/
+*.iml
+*.log
+.DS_Store
+Thumbs.db
+openapi.tmp.json
