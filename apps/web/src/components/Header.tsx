@@ -61,10 +61,17 @@ export default function Header() {
   // formação) o menu passava a não caber a partir de 768 px.
   const navLinks: { href: string; label: string; desde?: "md" | "lg" }[] = [
     { href: "/catalogo", label: "Catálogo" },
+    // Pedidos fica logo a seguir ao catálogo: é a página que o cliente e a
+    // gestão abrem todos os dias. Cada perfil vê a que lhe compete — o cliente
+    // os seus, o gestor os de toda a operação.
+    ...(profile?.role === "customer"
+      ? [{ href: "/cliente/encomendas", label: "Pedidos" }]
+      : []),
     // O estúdio de design é ferramenta de gestão: não aparece ao cliente nem
     // ao colaborador.
     ...(profile?.role === "manager"
       ? [
+          { href: "/gerente/encomendas", label: "Pedidos" },
           { href: "/designer", label: "Designer" },
           { href: "/gerente/conteudos", label: "Conteúdos" },
           { href: "/gerente/formacao", label: "Formação" },

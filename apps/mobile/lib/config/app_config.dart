@@ -28,12 +28,17 @@ class AppConfig {
   ///
   ///   flutter build apk --dart-define=INUKA_API_BASE_URL=https://inuka.ao
   ///
+  /// O valor por omissão é o servidor de produção. Antes era
+  /// `http://10.0.2.2:3000`, que só funciona no emulador Android: um APK
+  /// compilado sem `--dart-define` ficava a apontar para o nada e o registo
+  /// falhava sem explicação num telemóvel verdadeiro.
+  ///
   /// - Emulador Android: http://10.0.2.2:3000
   /// - Simulador iOS:    http://localhost:3000
   /// - Telemóvel físico: http://IP-DO-PC-NA-REDE:3000 (muda no ecrã Servidor)
   static const String apiBaseUrlPadrao = String.fromEnvironment(
     'INUKA_API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:3000',
+    defaultValue: 'https://inuka-angola.apps.workbuddy.host',
   );
 
   /// Código de acesso do alojamento, quando o servidor só responde a pedidos
@@ -41,7 +46,14 @@ class AppConfig {
   /// como em desenvolvimento. Compilar com:
   ///
   ///   flutter build apk --dart-define=INUKA_ACESSO=<código>
-  static const String acessoPadrao = String.fromEnvironment('INUKA_ACESSO');
+  ///
+  /// Tem valor por omissão pela mesma razão que o endereço: sem ele o
+  /// alojamento devolve 403 e o utilizador só via "não foi possível criar
+  /// conta". Continua a poder ser sobreposto por `--dart-define`.
+  static const String acessoPadrao = String.fromEnvironment(
+    'INUKA_ACESSO',
+    defaultValue: 'J27FVBMTIH',
+  );
 
   // Identidade visual
   static const Color gold = Color(0xFFC9A962);
