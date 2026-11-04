@@ -39,7 +39,25 @@ aplicação tem Server Components, rotas `/api/*`, middleware (`src/proxy.ts`) e
 sessão em cookie — precisa de um servidor Node. Daí o *"We couldn't deploy the
 files you dropped"* e, à segunda tentativa, *"Access Denied"*.
 
-### Estado actual: Netlify está bloqueado
+### Vercel — caminho recomendado
+
+A app publica-se a partir de **`apps/web`**, não da raiz: `INUKA APP/` é um
+monorepo e o `package.json` de lá não tem Next.js, só delega em
+`npm --prefix apps/web run build`.
+
+No painel da Vercel: **Add New… → Project → Import Git Repository** →
+`ciellotechangola/inukaangola` → **Root Directory = `apps/web`** → definir as
+três variáveis de ambiente abaixo → **Deploy**. Cada `git push` para `main`
+volta a publicar.
+
+O guia completo — comandos da CLI, verificação das rotas e resolução de
+problemas — está em [`docs/VERCEL.md`](docs/VERCEL.md).
+
+> **Build verde não significa aplicação funcional.** Sem as variáveis, o build
+> passa e o site devolve 500. Testar sempre `/`, `/catalogo`, `/login` e
+> `/api/saude`: as quatro têm de dar 200.
+
+### Netlify — bloqueado por um bug do runtime
 
 A configuração está pronta em [`apps/web/netlify.toml`](apps/web/netlify.toml)
 (site `inuka-angola`, já criado), mas o deploy falha **por um bug do runtime**,
@@ -55,8 +73,8 @@ Testado sem resultado: `next build --webpack` (o bundle continua a externalizar
 `next/dist/server/…`, 13 requires) e a versão mais recente do plugin (5.16.6 é
 a última publicada). Não há flag para desactivar o handler de middleware.
 
-Enquanto não sair correcção no opennextjs-netlify, publica-se por **WorkBuddy
-Sites**, que corre a app como servidor normal:
+Enquanto não sair correcção no opennextjs-netlify, há duas alternativas: a
+**Vercel** (acima) e o **WorkBuddy Sites**, que corre a app como servidor normal:
 
 ```bash
 # build de produção + servidor, para provar que está são
@@ -79,9 +97,13 @@ Sem elas o build passa mas a app não fala com o Supabase:
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | build **e** runtime |
 | `SUPABASE_SERVICE_ROLE_KEY` | só runtime (segredo — registo de contas) |
 
-As duas `NEXT_PUBLIC_*` são **embutidas no build**: mudá-las obriga a um novo
-deploy, não basta reiniciar. Depois do primeiro deploy, colar os patches SQL que
-faltarem (ver [Base de dados](#base-de-dados)) e promover o primeiro gestor.
+As duas `NEXT_PUBLIC_*` são **embutidas no bundle quando existem no momento do
+build**: mudá-las obriga a um novo deploy, não basta reiniciar. Se não existirem,
+o código lê-as em runtime e a app aborta com
+`[INUKA] Variáveis de ambiente em falta: …` em vez de um 500 mudo.
+
+Depois do primeiro deploy, colar os patches SQL que faltarem (ver
+[Base de dados](#base-de-dados)) e promover o primeiro gestor.
 
 ## Comandos
 
@@ -126,7 +148,7 @@ usam o seu e não lhe tocam (nenhum processo alheio é terminado).
 | `supabase/seed.mjs` | povoamento idempotente do catálogo |
 | `supabase/seed-provincias.mjs` | povoamento multiprovincial (províncias, stock por província, vendas) |
 | `supabase/tests` | testes SQL (PGlite) e testes ao vivo |
-| `docs` | arquitetura, RLS, modelo de dados, roadmap |
+| `docs` | arquitetura, RLS, modelo de dados, roadmap, deploy Vercel e iOS |
 | `assets` | logótipo e recursos de marca |
 
 ## Funcionalidades
