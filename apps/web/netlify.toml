@@ -12,22 +12,41 @@
 #  um servidor Node. É por isso que o Drop responde
 #  "We couldn't deploy the files you dropped" e depois "Access Denied".
 #
-#  SITUAÇÃO CONHECIDA (2026-11-03) — este ficheiro está correcto, mas o deploy
-#  falha na mesma, e não é configuração:
-#    `@netlify/plugin-nextjs` 5.16.6 gera um handler de edge para o middleware
-#    Node (`___netlify-edge-handler-node-middleware`) cujo bundle faz
-#    `require('next/dist/server/node-environment')`, mas o `deno.json` que o
-#    plugin escreve NÃO tem um único mapeamento `next`. Resultado:
-#    "Could not load edge function". É incompatibilidade com o Next 16, e um
-#    build por Git falha no mesmo ponto.
+#  SITUAÇÃO CONHECIDA — actualizado a 2026-11-04 com build real do Netlify
+#  (`npx netlify-cli build`, @netlify/build 37.7.5, plugin 5.16.6).
+#
+#  O build do Next passa; falha sempre no passo "Bundling of edge function".
+#  O plugin gera um handler de edge para o middleware Node e copia
+#  `.next/server/middleware.js` para dentro dele **sem os ficheiros irmãos**
+#  de que esse ficheiro depende. O erro concreto muda com o bundler:
+#
+#    • Turbopack (omissão no Next 16):
+#        Error: Cannot find module './chunks/[turbopack]_runtime.js'
+#        (Require stack: .../server/.next/server/middleware.js)
+#
+#    • Webpack (`next build --webpack`):
+#        Error: Failed to compile CJS module: .../server/.next/server/middleware.js
+#        [cause]: Error: Cannot find module './webpack-runtime.js'
+#
+#  Confirmação de que é do plugin e não do build: `.next/server/webpack-runtime.js`
+#  existe no build normal, mas a pasta `server/.next/server/` do edge function
+#  fica sem nada. É o plugin a copiar mal, não o Next a produzir mal.
 #
 #  Já testado sem resultado:
-#    • `next build --webpack` — o bundle continua a externalizar
-#      `next/dist/server/...` (13 requires), por isso o Deno falha igual.
-#    • 5.16.6 é a versão mais recente publicada; não há canary mais nova.
+#    • `next build --webpack` — troca um erro pelo outro (ver acima).
+#    • 5.16.6 é a versão mais recente publicada (2026-11-03 19:49 UTC); não há
+#      canary mais nova, e não existe adaptador alternativo no npm
+#      (`@opennextjs/netlify` e `opennextjs-netlify` não existem).
+#    • O Drop (arrastar a pasta) nunca vai funcionar: só aceita estáticos.
 #
-#  Enquanto não sair correcção no opennextjs-netlify, publica-se por WorkBuddy
-#  Sites (ver README) ou por Vercel, que corre Next 16 sem runtime próprio.
+#  Mesmo que os ficheiros fossem copiados, o `middleware.js` ainda faz
+#  `require("next/dist/server/…external.js")` (9 módulos), que o runtime Deno
+#  do Netlify teria de resolver. Não vale a pena forçar: seria remendar um bug
+#  de terceiros com um plugin caseiro, frágil a cada actualização.
+#
+#  Enquanto não sair correcção no @netlify/plugin-nextjs, publica-se por
+#  WorkBuddy Sites (ver README) ou por Vercel, que corre Next 16 sem runtime
+#  próprio.
 #
 #  Publicar:
 #    a) CLI, a partir de apps/web:
