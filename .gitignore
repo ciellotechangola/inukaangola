@@ -41,6 +41,8 @@ apps/capacitor/ios/App/App/public/
 # ============================================================================
 # Ferramentas locais e ruído
 # ============================================================================
+# Estado de ligação da CLI da Vercel (projectId/orgId desta máquina).
+.vercel/
 .wbapp_*.genie
 .workbuddy-ai/
 .workbuddy/

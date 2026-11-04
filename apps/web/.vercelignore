@@ -1,0 +1,25 @@
+# =============================================================================
+#  .vercelignore — o que NÃO sobe quando publicas com a CLI (`vercel --prod`)
+# =============================================================================
+#  O `vercel` envia a pasta tal como está, e não lê o `.gitignore`. Sem este
+#  ficheiro, o `.env.local` — que tem a SUPABASE_SERVICE_ROLE_KEY — ia dentro do
+#  upload, e o `.next` (centenas de MB) tornava cada envio lentíssimo.
+#
+#  Publicar pelo GitHub não precisa disto: aí só sobem os ficheiros que estão
+#  no repositório, e o `.env.local` já está no `.gitignore`.
+# =============================================================================
+
+# Segredos — nunca saem da máquina
+.env
+.env.local
+.env.*.local
+
+# Artefactos de build: a Vercel compila do zero
+.next/
+.netlify/
+node_modules/
+out/
+
+# Ruído
+*.log
+.DS_Store
