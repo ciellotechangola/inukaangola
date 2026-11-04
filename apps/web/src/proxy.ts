@@ -17,6 +17,38 @@ const PUBLIC_ROUTES = [
   "/revendedor",
 ];
 
+/**
+ * O proxy precisa do Supabase em **todos** os pedidos que não sejam de API, para
+ * saber se há sessão. Sem estas duas variáveis o `createServerClient` atira
+ * "Your project's URL and Key are required to create a Supabase client!", que
+ * não diz qual delas falta nem onde a pôr — e o sintoma no browser é só
+ * "Internal Server Error" em todas as páginas.
+ *
+ * O `!` que aqui estava dizia ao TypeScript para confiar que o valor existia.
+ * Não existia, e o erro aparecia três camadas abaixo. Passamos a verificar.
+ */
+const URL_SUPABASE = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const CHAVE_SUPABASE = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+function exigirConfiguracao() {
+  const emFalta = [
+    URL_SUPABASE ? null : "NEXT_PUBLIC_SUPABASE_URL",
+    CHAVE_SUPABASE ? null : "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  ].filter(Boolean);
+
+  if (emFalta.length === 0) return;
+
+  throw new Error(
+    `[INUKA] Variáveis de ambiente em falta: ${emFalta.join(", ")}.\n\n` +
+      "O proxy (middleware) lê-as em cada pedido e sem elas nenhuma página abre.\n\n" +
+      "No Vercel: Settings → Environment Variables → adicionar com âmbito " +
+      "Production. Depois é OBRIGATÓRIO fazer Redeploy: o Next substitui " +
+      "NEXT_PUBLIC_* pelo valor no momento do build, por isso criar a variável " +
+      "sem refazer o deployment não altera o que está a correr.\n\n" +
+      "A chave anon está em Supabase → Project Settings → API.",
+  );
+}
+
 export default async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -26,11 +58,13 @@ export default async function proxy(request: NextRequest) {
     return NextResponse.next({ request });
   }
 
+  exigirConfiguracao();
+
   const response = NextResponse.next({ request });
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    URL_SUPABASE!,
+    CHAVE_SUPABASE!,
     {
       cookies: {
         getAll() {
