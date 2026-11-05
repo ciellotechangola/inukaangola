@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Plus, Trash2, Check } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
-import { registerSale, linkCustomerByPhone, type PaymentStatus } from "@/lib/api";
+import { registerSale, registerSaleByPhone, linkCustomerByPhone, type PaymentStatus } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 
 interface ProductOption {
@@ -80,34 +80,41 @@ export default function RegisterSalePage() {
     setSaving(true);
     try {
       let customerId: string | null = null;
+      let semConta = false;
+      const telefone = customerPhone.trim();
 
-      if (customerPhone.trim()) {
-        const link = await linkCustomerByPhone(customerPhone.trim());
+      if (telefone) {
+        const link = await linkCustomerByPhone(telefone);
         if (!link.found) {
-          setError("Cliente não encontrado. Peça ao cliente para criar conta na app.");
-          setSaving(false);
-          return;
-        }
-        if (link.linked === false) {
+          // Ainda não tem conta: a venda não se perde nem se inventa uma conta.
+          // Grava-se com o telefone e o cliente fica reservado.
+          semConta = true;
+        } else if (link.linked === false) {
           setError(link.message ?? "Cliente associado a outro colaborador.");
           setSaving(false);
           return;
+        } else {
+          customerId = link.customer_id ?? null;
         }
-        customerId = link.customer_id ?? null;
       }
 
-      const sale = await registerSale(lines, {
-        customerId,
-        paymentMethod,
-        paymentStatus,
-        notes: notes || undefined,
-      });
+      const detalhes = { paymentMethod, paymentStatus, notes: notes || undefined };
+
+      const sale = semConta
+        ? await registerSaleByPhone(lines, telefone, detalhes)
+        : await registerSale(lines, { ...detalhes, customerId });
 
       setResult({ reference: sale.reference, total: Number(sale.total) });
       setLines([]);
       setNotes("");
       setCustomerPhone("");
-      setInfo(sale.duplicated ? "Operação já registada anteriormente." : "Venda registada com sucesso.");
+      setInfo(
+        sale.duplicated
+          ? "Operação já registada anteriormente."
+          : semConta
+            ? "Venda registada. O cliente ficou reservado na sua carteira e recebe esta compra quando abrir conta com este número."
+            : "Venda registada com sucesso."
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Não foi possível registar a venda.");
     } finally {
@@ -236,7 +243,8 @@ export default function RegisterSalePage() {
 
         <p className="mt-3 text-xs text-[#525252]">
           O stock e os preços são validados no servidor. Vendas repetidas com a mesma referência não são
-          duplicadas.
+          duplicadas. Se o cliente ainda não tiver conta, a venda fica registada com o telefone e ele
+          passa a estar reservado na sua carteira — recebe-a no dia em que se registar.
         </p>
       </div>
     </main>

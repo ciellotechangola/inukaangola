@@ -65,7 +65,12 @@ export default function Header() {
     // gestão abrem todos os dias. Cada perfil vê a que lhe compete — o cliente
     // os seus, o gestor os de toda a operação.
     ...(profile?.role === "customer"
-      ? [{ href: "/cliente/encomendas", label: "Pedidos" }]
+      ? [
+          { href: "/cliente/encomendas", label: "Pedidos" },
+          // Compras = o que um colaborador registou em nome deste número,
+          // incluindo antes de a conta existir.
+          { href: "/cliente/compras", label: "Compras" },
+        ]
       : []),
     // O estúdio de design é ferramenta de gestão: não aparece ao cliente nem
     // ao colaborador.

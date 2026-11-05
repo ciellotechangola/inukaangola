@@ -23,6 +23,7 @@ const PARTES = [
   { ficheiro: "migrations/0006_colaboradores.sql", titulo: "IDENTIDADE E GESTÃO DE COLABORADORES" },
   { ficheiro: "migrations/0007_conteudos.sql", titulo: "CONTEÚDOS PUBLICADOS E FORMAÇÃO" },
   { ficheiro: "migrations/0008_taxas_pedidos.sql", titulo: "TAXA DE COMISSÃO, PEDIDOS E REVENDEDORES" },
+  { ficheiro: "migrations/0009_reservas_clientes.sql", titulo: "RESERVA DE CLIENTES E COMPRAS DO CLIENTE" },
 ];
 
 const cabecalho = `-- =============================================================================

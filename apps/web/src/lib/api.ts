@@ -56,8 +56,21 @@ export interface DashboardStats {
   top_products: { name: string; units: number; value: number }[];
 }
 
-function rpcError(error: { message: string } | null): never | void {
-  if (error) throw new Error(error.message);
+function rpcError(error: { message: string; code?: string } | null): never | void {
+  if (!error) return;
+
+  // PGRST202 = a função não existe no PostgREST. Na prática é sempre a mesma
+  // coisa: falta aplicar uma migração. Sem esta tradução, o utilizador via
+  // "Could not find the function public.register_sale_by_phone(...)" e não
+  // tinha como saber que a correcção era colar um ficheiro SQL.
+  if (error.code === "PGRST202" || /Could not find the function/i.test(error.message)) {
+    throw new Error(
+      "Esta operação precisa de uma actualização da base de dados que ainda não foi aplicada. " +
+        "Cole os ficheiros supabase/PATCH_*.sql que faltarem (por ordem, ver supabase/README.md) no SQL Editor do Supabase."
+    );
+  }
+
+  throw new Error(error.message);
 }
 
 /** Cria uma encomenda. O preço e o stock são validados no servidor. */
@@ -141,6 +154,64 @@ export async function registerSale(
   return data as SaleResult;
 }
 
+/**
+ * Regista uma venda para um telefone que ainda não tem conta.
+ *
+ * O `register_sale` normal exige um `customer_id`, que só existe depois do
+ * registo. Esta variante grava o telefone na própria venda e reserva o cliente
+ * para este colaborador — quando a pessoa se registar, a compra passa a ser
+ * dela (ver `ligar_reserva_ao_cliente`).
+ */
+export async function registerSaleByPhone(
+  items: CartLine[],
+  phone: string,
+  options: {
+    paymentMethod?: string;
+    paymentStatus?: PaymentStatus;
+    notes?: string;
+    clientRef?: string;
+  } = {}
+): Promise<SaleResult & { customer_phone: string; reservado: boolean }> {
+  const supabase = createClientBrowser();
+  const { data, error } = await supabase.rpc("register_sale_by_phone", {
+    p_items: items,
+    p_customer_phone: phone,
+    p_payment_method: options.paymentMethod ?? null,
+    p_payment_status: options.paymentStatus ?? "pending",
+    p_notes: options.notes ?? null,
+    p_client_ref: options.clientRef ?? crypto.randomUUID(),
+  });
+  rpcError(error);
+  return data as SaleResult & { customer_phone: string; reservado: boolean };
+}
+
+export interface CompraDoCliente {
+  id: string;
+  reference: string;
+  created_at: string;
+  total: number | string;
+  payment_status: string;
+  payment_method: string | null;
+  seller_name: string | null;
+  seller_phone: string | null;
+  provincia: string | null;
+  items: {
+    name: string;
+    sku: string | null;
+    quantity: number;
+    unit_price: number | string;
+    total_price: number | string;
+  }[];
+}
+
+/** As compras do próprio cliente, com quem vendeu e o que levou. */
+export async function getMinhasCompras(): Promise<CompraDoCliente[]> {
+  const supabase = createClientBrowser();
+  const { data, error } = await supabase.rpc("minhas_compras");
+  rpcError(error);
+  return (data ?? []) as CompraDoCliente[];
+}
+
 export async function getSellerStats(from?: string, to?: string): Promise<SellerStats> {
   const supabase = createClientBrowser();
   const { data, error } = await supabase.rpc("seller_stats", {
@@ -165,7 +236,8 @@ export async function linkCustomerByPhone(phone: string) {
   const supabase = createClientBrowser();
   const { data, error } = await supabase.rpc("link_customer_by_phone", { p_phone: phone });
   rpcError(error);
-  return data as {
+
+  const res = data as {
     found: boolean;
     linked?: boolean;
     reason?: string;
@@ -173,30 +245,43 @@ export async function linkCustomerByPhone(phone: string) {
     customer_id?: string;
     phone?: string;
   };
+
+  // Depois de vincular, fecha a reserva que exista para este número e entrega
+  // as compras registadas antes do registo. Sem reserva, não faz nada.
+  if (res.found && res.linked !== false && res.customer_id) {
+    const { error: erroLigacao } = await supabase.rpc("ligar_reserva_ao_cliente", {
+      p_customer_id: res.customer_id,
+    });
+    if (erroLigacao) console.warn("[INUKA] ligar_reserva_ao_cliente:", erroLigacao.message);
+  }
+
+  return res;
 }
 
 export interface RespostaNovoCliente {
   ok: boolean;
+  /** O telefone já tinha conta: foi só vinculado. */
   existente: boolean;
+  /** O telefone não tinha conta: ficou reservado à espera do registo. */
+  reservado: boolean;
   id: string;
   nome: string;
   telefone: string;
-  referencia?: string | null;
-  password?: string;
   provincia?: string | null;
 }
 
 /**
- * O colaborador acrescenta um cliente à carteira.
+ * O colaborador acrescenta alguém à carteira.
  *
- * Vai pela rota de servidor (não por RPC) porque criar conta exige a Admin API.
- * Se o telefone já tiver conta, a rota só faz o vínculo e devolve
- * `existente: true` — nesse caso não há palavra-passe nova para comunicar.
+ * Já não cria contas: se o telefone tiver conta, vincula; se não tiver, deixa
+ * uma reserva que o registo do próprio cliente fecha. Ver
+ * `POST /api/vendedor/clientes`.
  */
 export async function criarClienteNaCarteira(entrada: {
   full_name: string;
   phone: string;
   neighborhood?: string;
+  notes?: string;
 }): Promise<RespostaNovoCliente> {
   const res = await fetch("/api/vendedor/clientes", {
     method: "POST",

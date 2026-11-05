@@ -5,11 +5,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ChevronDown,
+  Clock,
   Loader2,
   MessageCircle,
   Phone,
   Plus,
   Search,
+  Trash2,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -21,15 +23,23 @@ import {
 } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 
-export interface ClienteCarteira {
-  vinculoId: string;
+/**
+ * Uma linha da carteira. `tipo` distingue o que é uma conta real do que é
+ * apenas uma reserva à espera de registo — a diferença decide que acções
+ * aparecem (um reservado não pode receber mensagens: não tem sessão).
+ */
+export interface LinhaCarteira {
+  id: string;
+  tipo: "cliente" | "reservado";
   desde: string;
-  cliente: {
-    id: string;
-    full_name: string;
-    phone: string | null;
-    neighborhood: string | null;
-  } | null;
+  nome: string;
+  telefone: string | null;
+  bairro: string | null;
+  provincia: string | null;
+  customerId: string | null;
+  notas: string | null;
+  comprasPendentes: number;
+  valorPendente: number;
 }
 
 export interface TotaisCliente {
@@ -41,16 +51,23 @@ export interface TotaisCliente {
 const ENTRADA =
   "w-full rounded-lg border border-[#333] bg-[#0F0F0F] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none";
 
+const BOTAO_ACCAO =
+  "inline-flex items-center gap-1.5 rounded-lg border border-[#333] px-2.5 py-1.5 text-[11px] text-[#D4D4D4] transition";
+
 /** `+244923111222` → `244923111222` (o formato que o wa.me espera). */
 function soDigitos(telefone: string): string {
   return telefone.replace(/\D/g, "");
+}
+
+function dataCurta(iso: string): string {
+  return new Date(iso).toLocaleDateString("pt-PT");
 }
 
 /**
  * A carteira, do lado do browser.
  *
  * Os dados chegam já lidos do servidor (`page.tsx`); este componente só trata
- * do que precisa de interacção — abrir conta, associar, procurar e contactar.
+ * do que precisa de interacção — reservar, associar, procurar e contactar.
  * Depois de escrever, `router.refresh()` volta a pedir a lista ao servidor, em
  * vez de a reconstruir à mão e arriscar divergir.
  */
@@ -59,7 +76,7 @@ export function CarteiraClientes({
   totaisIniciais,
   erroInicial,
 }: {
-  iniciais: ClienteCarteira[];
+  iniciais: LinhaCarteira[];
   totaisIniciais: Record<string, TotaisCliente>;
   erroInicial: string | null;
 }) {
@@ -72,6 +89,7 @@ export function CarteiraClientes({
   const [nome, setNome] = useState("");
   const [telefone, setTelefone] = useState("");
   const [bairro, setBairro] = useState("");
+  const [notas, setNotas] = useState("");
   const [telefoneExistente, setTelefoneExistente] = useState("");
   const [aGuardar, setAGuardar] = useState(false);
   const [criado, setCriado] = useState<RespostaNovoCliente | null>(null);
@@ -80,15 +98,19 @@ export function CarteiraClientes({
     const q = procura.trim().toLowerCase();
     if (!q) return iniciais;
     return iniciais.filter(
-      (r) =>
-        (r.cliente?.full_name ?? "").toLowerCase().includes(q) ||
-        (r.cliente?.phone ?? "").includes(q)
+      (r) => r.nome.toLowerCase().includes(q) || (r.telefone ?? "").includes(q)
     );
   }, [iniciais, procura]);
 
-  const totalCarteira = Object.values(totaisIniciais).reduce((n, t) => n + t.total, 0);
+  const clientes = iniciais.filter((l) => l.tipo === "cliente");
+  const reservados = iniciais.filter((l) => l.tipo === "reservado");
+  const totalCarteira = clientes.reduce(
+    (n, l) => n + (l.customerId ? totaisIniciais[l.customerId]?.total ?? 0 : 0),
+    0
+  );
+  const totalPendente = reservados.reduce((n, l) => n + l.valorPendente, 0);
 
-  async function abrirConta(e: React.FormEvent) {
+  async function reservar(e: React.FormEvent) {
     e.preventDefault();
     if (aGuardar) return;
     setErro("");
@@ -100,20 +122,22 @@ export function CarteiraClientes({
         full_name: nome,
         phone: telefone,
         neighborhood: bairro,
+        notes: notas,
       });
       setCriado(res);
       setAviso(
         res.existente
           ? `${res.nome} já tinha conta e ficou na sua carteira.`
-          : `${res.nome} foi acrescentado à sua carteira.`
+          : `${res.nome} ficou reservado.`
       );
       setNome("");
       setTelefone("");
       setBairro("");
+      setNotas("");
       setPainel(null);
       router.refresh();
     } catch (err) {
-      setErro(err instanceof Error ? err.message : "Não foi possível acrescentar.");
+      setErro(err instanceof Error ? err.message : "Não foi possível reservar.");
     } finally {
       setAGuardar(false);
     }
@@ -129,7 +153,7 @@ export function CarteiraClientes({
       const res = await linkCustomerByPhone(telefoneExistente);
       if (!res.found) {
         setErro(
-          "Nenhuma conta com este telefone. Use «Abrir conta de cliente» para a criar."
+          "Nenhuma conta com este telefone. Use «Reservar cliente»: a pessoa abre a conta quando quiser."
         );
       } else if (res.linked === false) {
         setErro(res.message ?? "Cliente já associado a outro colaborador.");
@@ -146,12 +170,29 @@ export function CarteiraClientes({
     }
   }
 
+  async function cancelarReserva(id: string, nomeCliente: string) {
+    if (!window.confirm(`Cancelar a reserva de ${nomeCliente}? O número fica livre.`)) return;
+    setErro("");
+    setAviso("");
+    try {
+      const res = await fetch(`/api/vendedor/clientes?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      const corpo = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(corpo.error ?? "Não foi possível cancelar a reserva.");
+      setAviso(`Reserva de ${nomeCliente} cancelada.`);
+      router.refresh();
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : "Não foi possível cancelar a reserva.");
+    }
+  }
+
   async function conversar(customerId: string) {
     try {
       const convId = await getOrCreateConversation(customerId);
       // `/cliente/conversas` é área de cliente: um colaborador é desviado de
       // lá. A caixa de mensagens comum serve os dois papéis.
-      window.location.href = `/conversas?c=${convId}`;
+      router.push(`/conversas?c=${convId}`);
     } catch (e) {
       setErro(e instanceof Error ? e.message : "Não foi possível abrir a conversa.");
     }
@@ -170,9 +211,23 @@ export function CarteiraClientes({
         <div>
           <h1 className="text-3xl font-light text-[#F5F5F5]">A minha carteira</h1>
           <p className="mt-1 text-sm text-[#A3A3A3]">
-            {iniciais.length} {iniciais.length === 1 ? "cliente" : "clientes"} ·{" "}
+            {clientes.length} {clientes.length === 1 ? "cliente" : "clientes"}
+            {reservados.length > 0 && (
+              <>
+                {" · "}
+                <span className="text-[#C9A962]">
+                  {reservados.length} por activar
+                </span>
+              </>
+            )}
+            {" · "}
             {formatCurrency(totalCarteira)} vendidos por si
           </p>
+          {totalPendente > 0 && (
+            <p className="mt-1 text-[11px] text-[#6F6F6F]">
+              {formatCurrency(totalPendente)} em compras à espera de o cliente abrir conta.
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -184,7 +239,7 @@ export function CarteiraClientes({
             }}
             className="inline-flex items-center gap-2 rounded-lg bg-[#C9A962] px-4 py-2 text-sm font-medium text-[#0A0A0A] transition hover:bg-[#D8BC7A]"
           >
-            <UserPlus className="h-4 w-4" /> Abrir conta de cliente
+            <UserPlus className="h-4 w-4" /> Reservar cliente
           </button>
           <button
             type="button"
@@ -211,27 +266,39 @@ export function CarteiraClientes({
         </div>
       )}
 
-      {criado && !criado.existente && criado.password && (
+      {criado && (
         <div className="mb-4 rounded-xl border border-[#C9A962]/40 bg-[#1A1710] p-4">
-          <p className="text-xs uppercase tracking-wider text-[#C9A962]">Acesso do cliente</p>
-          <p className="mt-1 text-sm text-[#F5F5F5]">
-            {criado.nome} entra com o telefone <strong>{criado.telefone}</strong> e a palavra-passe{" "}
-            <strong className="font-mono text-[#C9A962]">{criado.password}</strong>.
+          <p className="text-xs uppercase tracking-wider text-[#C9A962]">
+            {criado.reservado ? "Cliente reservado" : "Cliente associado"}
           </p>
-          <p className="mt-1 text-[11px] text-[#8A8A8A]">
-            Mostre esta palavra-passe uma vez — não volta a aparecer. O cliente pode alterá-la
-            depois em «Perfil». A conta fica na província {criado.provincia ?? "da sua delegação"}.
-          </p>
+          {criado.reservado ? (
+            <>
+              <p className="mt-1 text-sm text-[#F5F5F5]">
+                {criado.nome} ainda não tem conta. É <strong>ele</strong> que a abre, em
+                «Criar conta», com o número <strong>{criado.telefone}</strong>.
+              </p>
+              <p className="mt-1 text-[11px] text-[#8A8A8A]">
+                Quando o fizer, fica automaticamente na sua carteira e recebe as compras
+                que já tenha registado com este número. Não há palavra-passe para
+                comunicar — nem nada para decorar.
+              </p>
+            </>
+          ) : (
+            <p className="mt-1 text-sm text-[#F5F5F5]">
+              {criado.nome} já tinha conta e ficou na sua carteira. As compras anteriores
+              com este número passaram para o histórico dele.
+            </p>
+          )}
         </div>
       )}
 
       {painel === "novo" && (
         <form
-          onSubmit={abrirConta}
+          onSubmit={reservar}
           className="mb-6 rounded-xl border border-[#262626] bg-[#141414] p-4"
         >
           <p className="mb-3 text-[10px] uppercase tracking-wider text-[#8A8A8A]">
-            Abrir conta de cliente
+            Reservar cliente
           </p>
           <div className="grid gap-3 sm:grid-cols-3">
             <input
@@ -256,9 +323,16 @@ export function CarteiraClientes({
               className={ENTRADA}
             />
           </div>
+          <input
+            value={notas}
+            onChange={(e) => setNotas(e.target.value)}
+            placeholder="Nota para si (opcional) — ex.: comprou óleo em Outubro"
+            className={`${ENTRADA} mt-3`}
+          />
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[11px] text-[#6F6F6F]">
-              A conta é criada na sua província. Se o telefone já tiver conta, fica só associada.
+            <p className="max-w-md text-[11px] text-[#6F6F6F]">
+              Não cria conta nenhuma. Fica registado com a província da sua delegação; o
+              acesso é aberto pelo próprio cliente, com este número.
             </p>
             <button
               type="submit"
@@ -270,7 +344,7 @@ export function CarteiraClientes({
               ) : (
                 <UserPlus className="h-3.5 w-3.5" />
               )}
-              {aGuardar ? "A criar…" : "Criar e associar"}
+              {aGuardar ? "A reservar…" : "Reservar"}
             </button>
           </div>
         </form>
@@ -331,76 +405,114 @@ export function CarteiraClientes({
             {procura ? "Nenhum cliente corresponde à procura." : "Ainda não tem clientes na carteira."}
           </p>
           <p className="max-w-sm text-xs text-[#5F5F5F]">
-            Abra conta a quem ainda não tem, ou associe quem já se registou. O vínculo fica
+            Reserve quem ainda não tem conta, ou associe quem já se registou. O vínculo fica
             visível para a gestão.
           </p>
         </div>
       ) : (
         <ul className="space-y-2">
-          {visiveis.map((row) => {
-            const c = row.cliente;
-            const t = c ? totaisIniciais[c.id] : undefined;
-            const tel = c?.phone ? soDigitos(c.phone) : "";
+          {visiveis.map((linha) => {
+            const tel = linha.telefone ? soDigitos(linha.telefone) : "";
+            const t = linha.customerId ? totaisIniciais[linha.customerId] : undefined;
+            const reservado = linha.tipo === "reservado";
 
             return (
               <li
-                key={row.vinculoId}
-                className="rounded-xl border border-[#262626] bg-[#141414] p-4 transition hover:border-[#333]"
+                key={linha.id}
+                className={`rounded-xl border p-4 transition ${
+                  reservado
+                    ? "border-[#3A3324] bg-[#151310] hover:border-[#C9A962]/40"
+                    : "border-[#262626] bg-[#141414] hover:border-[#333]"
+                }`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-[#F5F5F5]">{c?.full_name ?? "Cliente"}</p>
+                    <p className="flex flex-wrap items-center gap-2 text-[#F5F5F5]">
+                      {linha.nome}
+                      {reservado && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-[#C9A962]/40 px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#C9A962]">
+                          <Clock className="h-2.5 w-2.5" /> por activar
+                        </span>
+                      )}
+                    </p>
                     <p className="mt-0.5 text-xs text-[#6F6F6F]">
-                      {c?.phone ?? "sem telefone"}
-                      {c?.neighborhood ? ` · ${c.neighborhood}` : ""}
+                      {linha.telefone ?? "sem telefone"}
+                      {linha.bairro ? ` · ${linha.bairro}` : ""}
+                      {linha.provincia ? ` · ${linha.provincia}` : ""}
                     </p>
                     <p className="mt-1 text-[11px] text-[#525252]">
-                      na carteira desde {new Date(row.desde).toLocaleDateString("pt-PT")}
+                      {reservado ? "reservado em " : "na carteira desde "}
+                      {dataCurta(linha.desde)}
                     </p>
+                    {reservado && linha.notas && (
+                      <p className="mt-1 text-[11px] italic text-[#6F6F6F]">“{linha.notas}”</p>
+                    )}
                   </div>
 
                   <div className="text-right">
-                    <p className="text-sm text-[#C9A962]">{formatCurrency(t?.total ?? 0)}</p>
-                    <p className="text-[10px] text-[#5F5F5F]">
-                      {t?.compras
-                        ? `${t.compras} ${t.compras === 1 ? "compra" : "compras"}`
-                        : "sem compras"}
-                      {t?.ultima
-                        ? ` · última ${new Date(t.ultima).toLocaleDateString("pt-PT")}`
-                        : ""}
-                    </p>
+                    {reservado ? (
+                      linha.comprasPendentes > 0 ? (
+                        <>
+                          <p className="text-sm text-[#C9A962]">
+                            {formatCurrency(linha.valorPendente)}
+                          </p>
+                          <p className="text-[10px] text-[#5F5F5F]">
+                            {linha.comprasPendentes}{" "}
+                            {linha.comprasPendentes === 1 ? "compra" : "compras"} à espera do registo
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-[10px] text-[#5F5F5F]">sem compras registadas</p>
+                      )
+                    ) : (
+                      <>
+                        <p className="text-sm text-[#C9A962]">{formatCurrency(t?.total ?? 0)}</p>
+                        <p className="text-[10px] text-[#5F5F5F]">
+                          {t?.compras
+                            ? `${t.compras} ${t.compras === 1 ? "compra" : "compras"}`
+                            : "sem compras"}
+                          {t?.ultima ? ` · última ${dataCurta(t.ultima)}` : ""}
+                        </p>
+                      </>
+                    )}
                   </div>
                 </div>
 
-                {c?.id && (
-                  <div className="mt-3 flex flex-wrap gap-1.5 border-t border-[#242424] pt-3">
-                    {tel && (
-                      <a
-                        href={`tel:${tel}`}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-[#333] px-2.5 py-1.5 text-[11px] text-[#D4D4D4] transition hover:border-[#C9A962]/50 hover:text-[#C9A962]"
-                      >
-                        <Phone className="h-3 w-3" /> Ligar
-                      </a>
-                    )}
-                    {tel && (
-                      <a
-                        href={`https://wa.me/${tel}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-[#333] px-2.5 py-1.5 text-[11px] text-[#D4D4D4] transition hover:border-[#25D366]/60 hover:text-[#25D366]"
-                      >
-                        <MessageCircle className="h-3 w-3" /> WhatsApp
-                      </a>
-                    )}
+                <div className="mt-3 flex flex-wrap gap-1.5 border-t border-[#242424] pt-3">
+                  {tel && (
+                    <a href={`tel:${tel}`} className={`${BOTAO_ACCAO} hover:border-[#C9A962]/50 hover:text-[#C9A962]`}>
+                      <Phone className="h-3 w-3" /> Ligar
+                    </a>
+                  )}
+                  {tel && (
+                    <a
+                      href={`https://wa.me/${tel}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`${BOTAO_ACCAO} hover:border-[#25D366]/60 hover:text-[#25D366]`}
+                    >
+                      <MessageCircle className="h-3 w-3" /> WhatsApp
+                    </a>
+                  )}
+                  {!reservado && linha.customerId && (
                     <button
                       type="button"
-                      onClick={() => void conversar(c.id)}
+                      onClick={() => void conversar(linha.customerId as string)}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-[#C9A962]/50 px-2.5 py-1.5 text-[11px] text-[#C9A962] transition hover:bg-[#C9A962] hover:text-[#0A0A0A]"
                     >
                       <ChevronDown className="h-3 w-3 -rotate-90" /> Conversar na INUKA
                     </button>
-                  </div>
-                )}
+                  )}
+                  {reservado && (
+                    <button
+                      type="button"
+                      onClick={() => void cancelarReserva(linha.id, linha.nome)}
+                      className={`${BOTAO_ACCAO} hover:border-[#DC2626]/60 hover:text-[#DC2626]`}
+                    >
+                      <Trash2 className="h-3 w-3" /> Cancelar reserva
+                    </button>
+                  )}
+                </div>
               </li>
             );
           })}
@@ -408,9 +520,10 @@ export function CarteiraClientes({
       )}
 
       <p className="mt-6 text-xs leading-relaxed text-[#525252]">
-        Tudo o que faz aqui é visível para a gestão: quem abriu a conta, quando, e a quem está
-        associada. A gestão pode mudar o colaborador de um cliente a qualquer momento em
-        Clientes.
+        Tudo o que faz aqui é visível para a gestão: quem reservou ou abriu a conta, quando, e a
+        quem está associada. Um cliente por activar ainda não tem acesso à INUKA — o acesso é
+        criado por ele, com o número reservado. A gestão pode mudar o colaborador de um cliente a
+        qualquer momento em Clientes.
       </p>
     </main>
   );

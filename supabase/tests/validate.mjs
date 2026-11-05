@@ -13,6 +13,7 @@ const files = [
   "migrations/0006_colaboradores.sql",
   "migrations/0007_conteudos.sql",
   "migrations/0008_taxas_pedidos.sql",
+  "migrations/0009_reservas_clientes.sql",
 ];
 
 const db = new PGlite();

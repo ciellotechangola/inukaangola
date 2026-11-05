@@ -116,10 +116,10 @@ Depois do primeiro deploy, colar os patches SQL que faltarem (ver
 | `npm run seed:chat` | cria o grupo da empresa e conversas directas de demonstração |
 | `npm run seed:provincias` | atribui províncias às contas de demonstração, cria stock em Luanda e no Uíge e vendas no Uíge |
 | `npm run seed:provincias:limpar` | repõe as contas em “sem província” |
-| `npm run test:sql` | 225 testes sobre PostgreSQL real (PGlite) |
+| `npm run test:sql` | 243 testes sobre PostgreSQL real (PGlite) |
 | `npm run test:live` | 30 testes de aceitação contra o Supabase real |
 | `npm run test:crud` | 112 testes CRUD por perfil contra o Supabase real |
-| `npm run test:web` | 152 testes E2E do cliente web |
+| `npm run test:web` | 153 testes E2E do cliente web |
 | `npm run test:designer` | 29 testes do estúdio de design |
 | `npm run test:mobile` | 13 testes do cliente Flutter |
 | `npm run test:all` | toda a suite (exceto mobile) |
@@ -144,6 +144,7 @@ usam o seu e não lhe tocam (nenhum processo alheio é terminado).
 | `supabase/PATCH_COLABORADORES.sql` | **obrigatório** para referências, comissões, metas e perfis de colaborador |
 | `supabase/PATCH_CONTEUDOS.sql` | **obrigatório** para comunicados, testemunhos, promoções e formação |
 | `supabase/PATCH_TAXAS_PEDIDOS.sql` | **obrigatório** para a taxa de comissão da empresa, confirmação de entrega e candidaturas a revendedor |
+| `supabase/PATCH_RESERVAS.sql` | **obrigatório** para a carteira de clientes: reservar sem criar conta, e o cliente herdar as compras ao registar-se |
 | `supabase/build-setup.mjs` | regenera o ficheiro único a partir das migrações |
 | `supabase/seed.mjs` | povoamento idempotente do catálogo |
 | `supabase/seed-provincias.mjs` | povoamento multiprovincial (províncias, stock por província, vendas) |
@@ -168,18 +169,29 @@ pendentes, meta do mês e posição na equipa, gráficos de 6 meses, perfil comp
 venda com validação de stock e preço no servidor, clientes associados por
 telefone, chat.
 
-**Carteira do colaborador** (`/vendedor/clientes`) — o colaborador acrescenta um
-cliente à sua carteira de duas maneiras: **abre a conta** (nome, telefone, bairro)
-ou **liga uma conta que já existe**. A conta nova é criada no servidor
-(`POST /api/vendedor/clientes`) com uma palavra-passe provisória `INUKA######`,
-mostrada **uma única vez** para ele a entregar em mão; o vínculo é escrito no
-mesmo pedido, para uma falha de rede não deixar uma conta criada e sem carteira.
-A província é sempre a do colaborador e o papel é sempre `customer` — o cliente
-nunca escolhe onde entra. Cada linha mostra o que o cliente já comprou (total em
-Kz, número de compras, última compra) e tem três contactos directos: chamada,
-WhatsApp e conversa na INUKA. O gestor vê e muda tudo em `/gerente/clientes`:
-mudar de colaborador **desactiva** o vínculo antigo em vez de o apagar, pelo que
-fica registado quem ligou o cliente e quando.
+**Carteira do colaborador** (`/vendedor/clientes`) — o colaborador acrescenta
+alguém à carteira de duas maneiras: **reserva** (nome, telefone, bairro) ou
+**liga uma conta que já existe**. Reservar **não cria conta nenhuma**: grava
+nome e telefone em `reserved_customers`, sem tocar em `auth.users` e sem
+palavra-passe provisória. Quem abre a conta é o próprio cliente, em `/registo`,
+com o número reservado; nesse momento `ligar_reserva_ao_cliente` fecha a reserva,
+cria o vínculo e entrega-lhe as compras que já tenham sido registadas com esse
+telefone — produto, quantidade, preço e o colaborador que vendeu. A província é
+sempre a do colaborador (herdada da reserva) e o papel é sempre `customer`.
+
+A venda a um telefone sem conta também funciona: `register_sale_by_phone` grava a
+venda com `sales.customer_phone` e reserva o cliente automaticamente, em vez de
+recusar a operação. Cada linha da carteira mostra o que o cliente já comprou
+(total em Kz, número de compras, última compra); as reservas aparecem marcadas
+**por activar**, com o valor que está à espera do registo, e só têm chamada e
+WhatsApp — um reservado ainda não tem sessão para receber mensagens. O gestor vê
+e muda tudo em `/gerente/clientes`: mudar de colaborador **desactiva** o vínculo
+antigo em vez de o apagar, pelo que fica registado quem ligou o cliente e quando.
+
+**As minhas compras** (`/cliente/compras`) — o cliente vê tudo o que foi
+registado em seu nome, incluindo o que comprou a um colaborador **antes** de ter
+conta. Lê de `minhas_compras()`, uma função que devolve só o que é do próprio
+(com o nome do colaborador), sem abrir `sales` ou `sale_items` a mais ninguém.
 
 **Taxa de comissão** — há **uma** taxa da empresa (10 % por omissão), mudada pela
 gestão em `/gerente/colaboradores` com um campo e um botão. Quem não tem taxa
@@ -223,8 +235,9 @@ ser carregada pelo próprio ou por um gestor, para colaboradores e para clientes
 (bucket público `avatars`, escrita limitada à pasta de cada um ou a quem gere).
 Criar contas exige a Admin API, por isso passa por
 `/api/gerente/utilizadores` — a chave `service_role` nunca chega ao browser. O
-colaborador abre contas de cliente pelo mesmo motivo, em
-`/api/vendedor/clientes` (ver **Carteira do colaborador**).
+colaborador **já não cria contas de cliente**: reserva o cliente em
+`/api/vendedor/clientes` e é o próprio que abre a conta (ver **Carteira do
+colaborador**).
 
 **Estúdio de design** (`/designer`) — **exclusivo da gestão**: colaboradores e
 clientes não entram, e a base de dados recusa a escrita a quem não é gestor (não
@@ -346,6 +359,7 @@ npm run test:web        # arranca o servidor sozinho se for preciso
 4. `supabase/PATCH_CONTEUDOS.sql` — comunicados, testemunhos, promoções e formação INUKA.
 5. `supabase/PATCH_designer.sql` — volta a colar: acrescenta a guarda que fecha o estúdio a quem não é gestão.
 6. `supabase/PATCH_TAXAS_PEDIDOS.sql` — taxa de comissão da empresa, confirmação de entrega pelo cliente e candidaturas a revendedor.
+7. `supabase/PATCH_RESERVAS.sql` — carteira de clientes sem criar contas: reserva, ligação no registo e compras herdadas.
 
 Todos são idempotentes. Enquanto o segundo não for aplicado, `/referencia` e
 `/gerente/produtos` mostram um aviso explícito ("falta aplicar a migração

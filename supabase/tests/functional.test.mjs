@@ -57,6 +57,7 @@ for (const rel of [
   "migrations/0006_colaboradores.sql",
   "migrations/0007_conteudos.sql",
   "migrations/0008_taxas_pedidos.sql",
+  "migrations/0009_reservas_clientes.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -1749,6 +1750,176 @@ const s17Conv2 = await asUser(C_UIGE, async () =>
   q(`SELECT public.abrir_conversa_equipa() AS id`));
 check("abrir a conversa duas vezes não cria uma segunda",
   s17Conv2[0].id === s17Conv[0].id, `${s17Conv[0].id} / ${s17Conv2[0].id}`);
+
+console.log("\n--- 18. RESERVA DE CLIENTES (SEM CRIAR CONTAS) ---");
+
+// 18.1 reservar não toca em auth.users
+const telReserva = "+244927000001";
+const reserva = (await q(`
+  INSERT INTO public.reserved_customers (seller_id, created_by, full_name, phone, neighborhood, provincia_id)
+  VALUES ('${S_UIGE}', '${S_UIGE}', 'Stelvio Teste', '${telReserva}', 'Kilomosso', '${UIG}')
+  RETURNING id, status`))[0];
+
+check("reserva fica por activar", reserva.status === "reservado", JSON.stringify(reserva));
+
+const semConta = await q(`SELECT count(*)::int n FROM public.profiles WHERE phone = '${telReserva}'`);
+check("reservar NÃO cria conta", semConta[0].n === 0, `${semConta[0].n} perfis`);
+
+// 18.2 venda a um telefone sem conta
+const pRes = (await q(`
+  INSERT INTO public.products (sku, name, official_price, is_active, provincia_id)
+  VALUES ('INK-RES','Óleo de reserva', 5000, true, '${UIG}') RETURNING id`))[0].id;
+await exec(`INSERT INTO public.inventory (product_id, provincia_id, quantity)
+  VALUES ('${pRes}', '${UIG}', 10)`);
+
+const telVenda = "+244927000002";
+const vendaTelefone = await asUser(S_UIGE, async () =>
+  q(`SELECT public.register_sale_by_phone('[{"product_id":"${pRes}","quantity":2}]'::jsonb,
+      '${telVenda}', 'cash', 'paid', 'Venda sem conta', 'venda-tel-001') AS r`));
+const rTelefone = vendaTelefone[0].r;
+
+check("venda registada para telefone sem conta",
+  Number(rTelefone.total) === 10000 && rTelefone.customer_phone === telVenda,
+  JSON.stringify(rTelefone));
+
+const linhaVenda = await q(`
+  SELECT customer_id, customer_phone FROM public.sales WHERE id = '${rTelefone.sale_id}'`);
+check("a venda fica sem dono mas com o telefone",
+  linhaVenda[0].customer_id === null && linhaVenda[0].customer_phone === telVenda,
+  JSON.stringify(linhaVenda[0]));
+
+const reservaAuto = await q(`
+  SELECT seller_id, status FROM public.reserved_customers WHERE phone = '${telVenda}'`);
+check("vender a um desconhecido reserva-o para o colaborador",
+  reservaAuto.length === 1 && reservaAuto[0].seller_id === S_UIGE,
+  JSON.stringify(reservaAuto));
+
+// 18.3 a mesma venda, mas a um número que já tem conta
+const telefoneComConta = (await q(`
+  SELECT phone FROM public.profiles WHERE id = '${C_UIGE}'`))[0].phone;
+const recusaComConta = await asUser(S_UIGE, async () => {
+  try {
+    await q(`SELECT public.register_sale_by_phone(
+      '[{"product_id":"${pRes}","quantity":1}]'::jsonb, '${telefoneComConta}', 'cash', 'paid', NULL, 'venda-tel-002')`);
+    return null;
+  } catch (e) {
+    return e.message;
+  }
+});
+check("telefone com conta é recusado no registo de venda",
+  /já tem conta/i.test(recusaComConta ?? ""), recusaComConta ?? "não deu erro");
+
+// 18.4 uma compra feita antes do registo
+const vendaReserva = (await asUser(S_UIGE, async () =>
+  q(`SELECT public.register_sale_by_phone('[{"product_id":"${pRes}","quantity":1}]'::jsonb,
+      '${telReserva}', 'cash', 'paid', 'Compra antes do registo', 'venda-tel-003') AS r`)))[0].r;
+
+// 18.5 o cliente regista-se com o número reservado
+const novoCliente = (await q(`
+  INSERT INTO auth.users (email, phone, raw_user_meta_data)
+  VALUES ('u244927000001@inuka.ao', '${telReserva}',
+          '{"full_name":"Stelvio Registado","phone":"${telReserva}"}'::jsonb)
+  RETURNING id`))[0].id;
+
+const perfilNovo = await q(`
+  SELECT phone, role FROM public.profiles WHERE id = '${novoCliente}'`);
+check("o registo cria o perfil do próprio",
+  perfilNovo[0]?.phone === telReserva && perfilNovo[0].role === "customer",
+  JSON.stringify(perfilNovo));
+
+const ligacao = (await q(`
+  SELECT public.ligar_reserva_ao_cliente('${novoCliente}') AS r`))[0].r;
+check("a reserva é ligada no registo",
+  ligacao.reservas_ligadas === 1 && ligacao.vendas_atribuidas === 1,
+  JSON.stringify(ligacao));
+
+const carteiraNova = await q(`
+  SELECT seller_id FROM public.seller_customers
+  WHERE customer_id = '${novoCliente}' AND is_active = true`);
+check("o cliente entra na carteira de quem reservou",
+  carteiraNova.length === 1 && carteiraNova[0].seller_id === S_UIGE,
+  JSON.stringify(carteiraNova));
+
+const estadoReserva = await q(`
+  SELECT status, customer_id FROM public.reserved_customers WHERE id = '${reserva.id}'`);
+check("a reserva fica fechada como ligada",
+  estadoReserva[0].status === "ligado" && estadoReserva[0].customer_id === novoCliente,
+  JSON.stringify(estadoReserva[0]));
+
+const vendaHerdada = await q(`
+  SELECT customer_id FROM public.sales WHERE id = '${vendaReserva.sale_id}'`);
+check("a compra feita antes do registo passa a ser do cliente",
+  vendaHerdada[0].customer_id === novoCliente, JSON.stringify(vendaHerdada[0]));
+
+// 18.6 o cliente vê o que comprou, com quem vendeu
+const comprasProprias = (await asUser(novoCliente, async () =>
+  q(`SELECT public.minhas_compras() AS r`)))[0].r;
+const compraHerdada = comprasProprias.find((c) => c.id === vendaReserva.sale_id);
+check("o cliente vê a compra herdada com produto, quantidade e preço",
+  compraHerdada &&
+    compraHerdada.items.length === 1 &&
+    compraHerdada.items[0].quantity === 1 &&
+    Number(compraHerdada.items[0].unit_price) === 5000 &&
+    compraHerdada.seller_name === "Colaborador Uíge",
+  JSON.stringify(compraHerdada?.items));
+
+const comprasAlheias = (await asUser(C_UIGE, async () =>
+  q(`SELECT public.minhas_compras() AS r`)))[0].r;
+check("cada cliente só vê as compras dele",
+  !comprasAlheias.some((c) => c.id === vendaReserva.sale_id),
+  `${comprasAlheias.length} compras`);
+
+// 18.7 correr a ligação outra vez não duplica nada
+const ligacaoRepetida = (await q(`
+  SELECT public.ligar_reserva_ao_cliente('${novoCliente}') AS r`))[0].r;
+const vinculosDepois = await q(`
+  SELECT count(*)::int n FROM public.seller_customers WHERE customer_id = '${novoCliente}'`);
+check("ligar duas vezes não duplica o vínculo",
+  ligacaoRepetida.reservas_ligadas === 0 && vinculosDepois[0].n === 1,
+  JSON.stringify({ r: ligacaoRepetida, vinculos: vinculosDepois[0].n }));
+
+// 18.8 cliente que já pertence a outro colaborador
+const telConflito = "+244927000003";
+const clienteConflito = (await q(`
+  INSERT INTO auth.users (email, phone, raw_user_meta_data)
+  VALUES ('u244927000003@inuka.ao', '${telConflito}',
+          '{"full_name":"Conflito Teste","phone":"${telConflito}"}'::jsonb)
+  RETURNING id`))[0].id;
+await q(`INSERT INTO public.seller_customers (seller_id, customer_id, is_active)
+  VALUES ('${SELLER}', '${clienteConflito}', true)`);
+await q(`INSERT INTO public.reserved_customers (seller_id, full_name, phone)
+  VALUES ('${S_UIGE}', 'Conflito Teste', '${telConflito}')`);
+
+const ligacaoConflito = (await q(`
+  SELECT public.ligar_reserva_ao_cliente('${clienteConflito}') AS r`))[0].r;
+const estadoConflito = await q(`
+  SELECT status FROM public.reserved_customers WHERE phone = '${telConflito}'`);
+check("cliente já noutra carteira fecha a reserva como conflito",
+  ligacaoConflito.reservas_em_conflito === 1 && estadoConflito[0].status === "conflito",
+  JSON.stringify({ r: ligacaoConflito, estado: estadoConflito[0] }));
+
+// 18.9 ninguém liga reservas de outra pessoa
+const tentativaAlheia = await asUser(C_UIGE, async () => {
+  try {
+    await q(`SELECT public.ligar_reserva_ao_cliente('${novoCliente}')`);
+    return null;
+  } catch (e) {
+    return e.message;
+  }
+});
+check("um cliente não liga reservas de outra conta",
+  /Sem permissão/i.test(tentativaAlheia ?? ""), tentativaAlheia ?? "não deu erro");
+
+// 18.10 a reserva é privada de quem a fez
+const reservasDoDono = await asUser(S_UIGE, async () =>
+  q(`SELECT count(*)::int n FROM public.reserved_customers WHERE phone = '${telVenda}'`));
+check("o colaborador vê as suas reservas",
+  reservasDoDono[0].n === 1, `${reservasDoDono[0].n} linhas`);
+
+const reservasDeOutro = await asUser(SELLER, async () =>
+  q(`SELECT count(*)::int n FROM public.reserved_customers WHERE phone = '${telVenda}'`));
+check("outro colaborador não vê a reserva alheia",
+  reservasDeOutro[0].n === 0, `${reservasDeOutro[0].n} linhas`);
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

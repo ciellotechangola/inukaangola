@@ -52,6 +52,8 @@ npm run setup:sql     # concatena migrations/ em SETUP_COMPLETO.sql
 | `PATCH_PROVINCIAS.sql` | **Obrigatório para a gestão multiprovincial.** É a migração 0005 isolada: províncias, colunas `provincia_id`, RLS provincial, stock por província e transferências. Sem ele o site mostra o aviso "falta aplicar a migração provincial". |
 | `PATCH_COLABORADORES.sql` | **Obrigatório** para referências por província, comissões, metas e perfis de colaborador. É a migração 0006 isolada. |
 | `PATCH_CONTEUDOS.sql` | **Obrigatório** para comunicados, testemunhos, promoções e formação INUKA. É a migração 0007 isolada: 10 tabelas, 26 políticas, 11 funções, 6 gatilhos, bucket `content-media` e as 9 categorias de formação. |
+| `PATCH_TAXAS_PEDIDOS.sql` | **Obrigatório** para a taxa de comissão da empresa, confirmação de entrega pelo cliente e candidaturas a revendedor. É a migração 0008 isolada. |
+| `PATCH_RESERVAS.sql` | **Obrigatório** para a carteira de clientes. É a migração 0009 isolada: o colaborador deixa de criar contas e passa a reservar (`reserved_customers`), a venda aceita um telefone sem conta (`sales.customer_phone`), e o registo do próprio cliente liga a reserva e herda as compras (`ligar_reserva_ao_cliente`, `minhas_compras`). |
 
 ### Ordem de aplicação numa base já existente
 
@@ -59,7 +61,9 @@ npm run setup:sql     # concatena migrations/ em SETUP_COMPLETO.sql
 2. `PATCH_PROVINCIAS.sql`
 3. `PATCH_COLABORADORES.sql`
 4. `PATCH_CONTEUDOS.sql`
-5. `PATCH_designer.sql` outra vez — acrescenta o gatilho que fecha a escrita do
+5. `PATCH_TAXAS_PEDIDOS.sql`
+6. `PATCH_RESERVAS.sql`
+7. `PATCH_designer.sql` outra vez — acrescenta o gatilho que fecha a escrita do
    estúdio a quem não é gestão (o resto do ficheiro é idempotente)
 
 A migração provincial **não apaga nada**. Os registos antigos ficam atribuídos à

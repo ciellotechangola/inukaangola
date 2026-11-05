@@ -151,5 +151,26 @@ export async function POST(request: Request) {
     );
   }
 
-  return NextResponse.json({ ok: true, email, phone });
+  // --- Reserva do colaborador ------------------------------------------------
+  // Se alguém já tinha reservado este número na carteira, é aqui que o vínculo
+  // se fecha — e as vendas registadas com o telefone antes do registo passam a
+  // ter dono. Idempotente: sem reserva, não faz nada. Falhar aqui não invalida
+  // o registo (a conta já está criada e o cliente tem de poder entrar); a
+  // gestão consegue ligar a reserva mais tarde pela mesma função.
+  let ligacao: { reservas_ligadas?: number; vendas_atribuidas?: number } | null = null;
+  try {
+    const { data } = await supabaseAdmin.rpc("ligar_reserva_ao_cliente", {
+      p_customer_id: created.user.id,
+    });
+    ligacao = (data ?? null) as typeof ligacao;
+  } catch {
+    ligacao = null;
+  }
+
+  return NextResponse.json({
+    ok: true,
+    email,
+    phone,
+    reserva: ligacao,
+  });
 }

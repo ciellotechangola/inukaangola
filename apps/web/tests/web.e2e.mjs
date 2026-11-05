@@ -1536,7 +1536,16 @@ console.log("\n--- 10B. CARTEIRA DO COLABORADOR ---");
 
 const CARTEIRA_TEL = "+244924200007";
 await apagarConta(CARTEIRA_TEL);
+// Reservas sobrevivem a `apagarConta` (não são contas) e o telefone é único:
+// sem esta limpeza, a segunda execução da suite batia numa reserva antiga.
+await sb(`/rest/v1/reserved_customers?phone=eq.${encodeURIComponent(CARTEIRA_TEL)}`, {
+  method: "DELETE",
+  key: SR,
+  jwt: SR,
+  prefer: "return=minimal",
+});
 
+let idReserva = null;
 let idCarteira = null;
 
 await check("colaborador abre a sua carteira", async () => {
@@ -1544,12 +1553,16 @@ await check("colaborador abre a sua carteira", async () => {
   assert(r.status === 200, `HTTP ${r.status}`);
   const t = texto(r.html);
   assert(t.includes("A minha carteira"), "sem o título da carteira");
-  assert(/Abrir conta de cliente/i.test(t), "sem a opção de abrir conta");
+  assert(/Reservar cliente/i.test(t), "sem a opção de reservar");
   assert(/Já tem conta/i.test(t), "sem a opção de associar conta existente");
-  return "200 com as duas entradas";
+  assert(
+    !/Abrir conta de cliente/i.test(t),
+    "a carteira ainda oferece abrir conta — o colaborador não deve criar contas"
+  );
+  return "200 · reservar + associar";
 });
 
-await check("colaborador acrescenta um cliente novo à carteira", async () => {
+await check("reservar um cliente NÃO cria conta nenhuma", async () => {
   const r = await fetch(`${APP}/api/vendedor/clientes`, {
     method: "POST",
     headers: { "Content-Type": "application/json", cookie: cVendedor },
@@ -1561,20 +1574,74 @@ await check("colaborador acrescenta um cliente novo à carteira", async () => {
   });
   const dados = await r.json().catch(() => ({}));
   assert(r.ok, `HTTP ${r.status} ${dados.error ?? ""}`);
-  assert(dados.id, "sem id na resposta");
-  assert(dados.password, "sem palavra-passe provisória para comunicar ao cliente");
-  assert(dados.existente === false, "devia ser conta nova");
-  idCarteira = dados.id;
+  assert(dados.reservado === true, "devia ficar reservado");
+  assert(dados.existente === false, "não devia existir conta");
+  assert(!dados.password, "a resposta ainda traz uma palavra-passe provisória");
+  assert(dados.id, "sem id da reserva");
+  idReserva = dados.id;
 
-  // A conta tem de servir para entrar: senão é uma linha morta.
-  const s = await login(CARTEIRA_TEL, dados.password);
-  assert(s.access_token, "a conta criada pelo colaborador não entra");
-
-  // O papel é sempre cliente e a província é a do colaborador que a criou.
-  const perfil = await sb(
-    `/rest/v1/profiles?select=role,provincia_id,full_name&id=eq.${idCarteira}`,
+  // A prova que interessa: nada em `auth.users` / `profiles`.
+  const contas = await sb(
+    `/rest/v1/profiles?select=id&phone=eq.${encodeURIComponent(CARTEIRA_TEL)}`,
     { key: SR, jwt: SR }
   );
+  assert(contas.data.length === 0, `foram criadas ${contas.data.length} contas`);
+
+  // E a reserva existe, com o colaborador e a província dele.
+  const reserva = await sb(
+    `/rest/v1/reserved_customers?select=status,seller_id,provincia_id,full_name&id=eq.${idReserva}`,
+    { key: SR, jwt: SR }
+  );
+  assert(reserva.data.length === 1, "reserva não gravada");
+  assert(reserva.data[0].status === "reservado", `estado ${reserva.data[0].status}`);
+  assert(reserva.data[0].seller_id === sVendedor.user.id, "reserva sem colaborador");
+  assert(reserva.data[0].full_name === "Cliente Carteira Web", "sem nome");
+
+  const colab = await sb(
+    `/rest/v1/profiles?select=provincia_id&id=eq.${sVendedor.user.id}`,
+    { key: SR, jwt: SR }
+  );
+  assert(
+    reserva.data[0].provincia_id === colab.data[0].provincia_id,
+    "a reserva não ficou na província do colaborador"
+  );
+
+  return "reserva criada · 0 contas";
+});
+
+await check("a reserva aparece na carteira como por activar", async () => {
+  const r = await pagina("/vendedor/clientes", cVendedor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(t.includes("Cliente Carteira Web"), "reserva ausente da carteira");
+  assert(/por activar/i.test(t), "sem a marca de por activar");
+  assert(/Reservar cliente/i.test(t), "sem a entrada de reserva");
+  return "reserva visível";
+});
+
+await check("cliente não pode reservar ninguém", async () => {
+  const r = await fetch(`${APP}/api/vendedor/clientes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie: cCliente },
+    body: JSON.stringify({ full_name: "Intruso Carteira", phone: "+244924200008" }),
+  });
+  assert(r.status === 403, `HTTP ${r.status}`);
+  return "403";
+});
+
+await check("o cliente regista-se com o número reservado e entra na carteira", async () => {
+  const reg = await registar("Cliente Carteira Web", CARTEIRA_TEL, PWD);
+  assert(reg.status === 200, `registo: ${reg.status} ${JSON.stringify(reg.data)}`);
+
+  const s = await login(CARTEIRA_TEL, PWD);
+  assert(s.access_token, "o cliente não consegue entrar");
+
+  const perfil = await sb(
+    `/rest/v1/profiles?select=id,role,provincia_id&phone=eq.${encodeURIComponent(CARTEIRA_TEL)}`,
+    { key: SR, jwt: SR }
+  );
+  assert(perfil.data.length === 1, `${perfil.data.length} perfis`);
+  idCarteira = perfil.data[0].id;
   assert(perfil.data[0].role === "customer", `papel ${perfil.data[0].role}`);
 
   const vinculo = await sb(
@@ -1584,28 +1651,28 @@ await check("colaborador acrescenta um cliente novo à carteira", async () => {
   assert(vinculo.data.length === 1, `${vinculo.data.length} vínculos`);
   assert(vinculo.data[0].seller_id === sVendedor.user.id, "não ficou na carteira do colaborador");
   assert(vinculo.data[0].is_active === true, "vínculo inactivo");
-  assert(vinculo.data[0].assigned_by === sVendedor.user.id, "sem registo de quem ligou");
 
-  return `${dados.referencia ?? "sem referência"} · ${dados.provincia ?? "província herdada"}`;
-});
+  const reserva = await sb(
+    `/rest/v1/reserved_customers?select=status,customer_id&id=eq.${idReserva}`,
+    { key: SR, jwt: SR }
+  );
+  assert(reserva.data[0].status === "ligado", `reserva ${reserva.data[0].status}`);
+  assert(reserva.data[0].customer_id === idCarteira, "reserva sem cliente");
 
-await check("a província do cliente é a do colaborador", async () => {
+  // A província vem da reserva: quem se registou não escolheu nenhuma.
   const colab = await sb(
     `/rest/v1/profiles?select=provincia_id&id=eq.${sVendedor.user.id}`,
     { key: SR, jwt: SR }
   );
-  const cli = await sb(`/rest/v1/profiles?select=provincia_id&id=eq.${idCarteira}`, {
-    key: SR,
-    jwt: SR,
-  });
   assert(
-    cli.data[0].provincia_id === colab.data[0].provincia_id,
-    `cliente ${cli.data[0].provincia_id} ≠ colaborador ${colab.data[0].provincia_id}`
+    perfil.data[0].provincia_id === colab.data[0].provincia_id,
+    `cliente ${perfil.data[0].provincia_id} ≠ colaborador ${colab.data[0].provincia_id}`
   );
-  return "mesma província";
+
+  return "reserva ligada · vínculo activo";
 });
 
-await check("repetir o mesmo telefone não cria segunda conta", async () => {
+await check("repetir o mesmo telefone reconhece a conta existente", async () => {
   const r = await fetch(`${APP}/api/vendedor/clientes`, {
     method: "POST",
     headers: { "Content-Type": "application/json", cookie: cVendedor },
@@ -1614,6 +1681,7 @@ await check("repetir o mesmo telefone não cria segunda conta", async () => {
   const dados = await r.json().catch(() => ({}));
   assert(r.ok, `HTTP ${r.status} ${dados.error ?? ""}`);
   assert(dados.existente === true, "devia reconhecer a conta existente");
+  assert(dados.reservado === false, "não devia voltar a reservar");
   assert(dados.id === idCarteira, `id diferente: ${dados.id}`);
 
   const contas = await sb(
@@ -1624,22 +1692,13 @@ await check("repetir o mesmo telefone não cria segunda conta", async () => {
   return "1 conta · vínculo reaproveitado";
 });
 
-await check("cliente não pode acrescentar ninguém à carteira", async () => {
-  const r = await fetch(`${APP}/api/vendedor/clientes`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", cookie: cCliente },
-    body: JSON.stringify({ full_name: "Intruso Carteira", phone: "+244924200008" }),
-  });
-  assert(r.status === 403, `HTTP ${r.status}`);
-  return "403";
-});
-
-await check("a carteira mostra o cliente e o que ele já comprou", async () => {
+await check("a carteira mostra o cliente já ligado", async () => {
   const r = await pagina("/vendedor/clientes", cVendedor);
   assert(r.status === 200, `HTTP ${r.status}`);
   const t = texto(r.html);
   assert(t.includes("Cliente Carteira Web"), "cliente ausente da carteira");
   assert(/Ligar|WhatsApp|Conversar na INUKA/i.test(t), "sem acções de contacto");
+  assert(/Conversar na INUKA/i.test(t), "um cliente com conta tem de poder receber mensagens");
   return "cliente com contactos";
 });
 

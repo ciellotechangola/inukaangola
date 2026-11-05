@@ -2,34 +2,35 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
 import { normalizePhone } from "@/lib/utils";
-import { phoneToEmail } from "@/lib/phone-email";
 
 export const dynamic = "force-dynamic";
 
 /**
  * POST /api/vendedor/clientes
  *
- * O colaborador acrescenta um cliente à sua carteira quando a pessoa ainda não
- * tem conta. Faz-se no servidor porque criar um utilizador exige a Admin API
- * (`auth.admin.createUser`, só com `service_role`) — a chave nunca vai para o
- * browser.
+ * Acrescenta alguém à carteira do colaborador. **Não cria contas.**
  *
- * Duas regras que não são negociáveis:
- *  - a província do cliente é a do colaborador que o cria. Um colaborador não
- *    pode semear clientes noutra província (a separação provincial é o que
- *    impede duas delegações de mexerem no mesmo cliente);
- *  - o papel é sempre `customer`. Um colaborador não cria colegas.
+ * A versão anterior chamava `auth.admin.createUser` e devolvia uma palavra-passe
+ * provisória (`INUKA######`) para o colaborador comunicar ao cliente. Isso
+ * punha uma conta na mão de quem nunca a pediu, com uma palavra-passe que
+ * circulava por telefone, e deixava de fora o que interessa: as compras que o
+ * cliente já tinha feito antes de existir conta nenhuma.
  *
- * O vínculo é escrito aqui, e não numa segunda chamada do cliente, para não
- * ficar uma conta criada sem carteira se a rede cair a meio.
+ * Agora há dois casos:
+ *
+ *  - **O telefone já tem conta** → faz-se só o vínculo (`seller_customers`),
+ *    como sempre. É a operação segura: a pessoa já é dona do seu acesso.
+ *  - **O telefone não tem conta** → grava-se uma *reserva* em
+ *    `reserved_customers`: nome, telefone, bairro e província. Nada em
+ *    `auth.users`. Quando a pessoa se registar com esse número,
+ *    `ligar_reserva_ao_cliente` fecha a reserva, cria o vínculo e entrega-lhe
+ *    as vendas que já estejam registadas com o telefone.
+ *
+ * Regras que continuam a valer:
+ *  - a província é a do colaborador (a gestão pode escolher outra) — é o que
+ *    impede duas delegações de mexerem no mesmo cliente;
+ *  - um cliente só pertence a um colaborador; a transferência é da gestão.
  */
-
-/** Palavra-passe provisória legível ao telefone: INUKA + 6 dígitos. */
-function palavraProvisoria(): string {
-  const digitos = Math.floor(100000 + Math.random() * 900000);
-  return `INUKA${digitos}`;
-}
-
 export async function POST(request: Request) {
   const perfil = await getProfile();
   if (!perfil || (perfil.role !== "seller" && perfil.role !== "manager")) {
@@ -46,6 +47,7 @@ export async function POST(request: Request) {
   const full_name = String(corpo.full_name ?? "").trim();
   const rawPhone = String(corpo.phone ?? "").trim();
   const neighborhood = String(corpo.neighborhood ?? "").trim();
+  const notas = String(corpo.notes ?? "").trim();
 
   if (full_name.length < 3) {
     return NextResponse.json(
@@ -77,7 +79,9 @@ export async function POST(request: Request) {
         .maybeSingle()
     : { data: null };
 
-  // --- Telefone já tem conta? Então não se cria outra: faz-se o vínculo. ---
+  const nomeProvincia = (provincia as { nome?: string } | null)?.nome ?? null;
+
+  // ---------------------------------------------------------------- já tem conta
   const { data: existente } = await supabaseAdmin
     .from("profiles")
     .select("id, full_name, role")
@@ -122,86 +126,167 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: erroVinculo.message }, { status: 400 });
     }
 
+    // Consome uma reserva antiga e entrega as compras que estavam à espera
+    // deste número. É idempotente: sem reserva, não faz nada.
+    await supabaseAdmin.rpc("ligar_reserva_ao_cliente", { p_customer_id: alvo.id });
+
     return NextResponse.json({
       ok: true,
       existente: true,
+      reservado: false,
       id: alvo.id,
       nome: alvo.full_name,
       telefone: phone,
     });
   }
 
-  // --- Conta nova ---
-  const password = palavraProvisoria();
+  // ---------------------------------------------------------------- reserva
+  const { data: reservaExistente } = await supabaseAdmin
+    .from("reserved_customers")
+    .select("id, seller_id, status")
+    .eq("phone", phone)
+    .maybeSingle();
 
-  const { data: criado, error: erroConta } = await supabaseAdmin.auth.admin.createUser({
-    email: phoneToEmail(phone),
-    password,
-    email_confirm: true,
-    user_metadata: {
+  if (reservaExistente) {
+    const r = reservaExistente as { id: string; seller_id: string; status: string };
+
+    if (r.seller_id !== perfil.id && r.status === "reservado") {
+      return NextResponse.json(
+        {
+          error:
+            "Este número já está reservado por outro colaborador. Peça a transferência à gestão.",
+        },
+        { status: 409 }
+      );
+    }
+
+    // Mesmo colaborador a corrigir os dados, ou reserva já fechada a ser
+    // reaberta: actualiza-se em vez de duplicar.
+    const { error: erroReserva } = await supabaseAdmin
+      .from("reserved_customers")
+      .update({
+        seller_id: perfil.id,
+        created_by: perfil.id,
+        full_name,
+        neighborhood: neighborhood || null,
+        provincia_id: provinciaId,
+        notes: notas || null,
+        status: "reservado",
+        customer_id: null,
+        linked_at: null,
+      })
+      .eq("id", r.id);
+
+    if (erroReserva) {
+      return NextResponse.json({ error: erroReserva.message }, { status: 400 });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      existente: false,
+      reservado: true,
+      id: r.id,
+      nome: full_name,
+      telefone: phone,
+      provincia: nomeProvincia,
+    });
+  }
+
+  const { data: criada, error: erroReserva } = await supabaseAdmin
+    .from("reserved_customers")
+    .insert({
+      seller_id: perfil.id,
+      created_by: perfil.id,
       full_name,
       phone,
-      neighborhood,
-      ...(provincia?.slug ? { provincia_slug: provincia.slug } : {}),
-    },
-  });
+      neighborhood: neighborhood || null,
+      provincia_id: provinciaId,
+      notes: notas || null,
+      status: "reservado",
+    })
+    .select("id")
+    .single();
 
-  if (erroConta || !criado?.user) {
-    if (/already|exists|registered/i.test(erroConta?.message ?? "")) {
-      return NextResponse.json({ error: "Este telefone já tem conta." }, { status: 409 });
+  if (erroReserva || !criada) {
+    // PGRST205 = tabela inexistente. Acontece numa base que ainda não recebeu
+    // a migração 0009; sem esta tradução o colaborador lia o erro do PostgREST.
+    if (
+      (erroReserva as { code?: string } | null)?.code === "PGRST205" ||
+      /Could not find the table/i.test(erroReserva?.message ?? "")
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "A carteira de reservas ainda não existe na base de dados. Aplique supabase/PATCH_RESERVAS.sql no SQL Editor do Supabase e tente outra vez.",
+        },
+        { status: 503 }
+      );
     }
     return NextResponse.json(
-      { error: "Não foi possível criar a conta. Tente novamente." },
-      { status: 500 }
+      { error: erroReserva?.message ?? "Não foi possível reservar o cliente." },
+      { status: 400 }
     );
   }
-
-  const id = criado.user.id;
-
-  async function desfazer() {
-    await supabaseAdmin.auth.admin.deleteUser(id).catch(() => {});
-  }
-
-  const campos: Record<string, unknown> = {
-    full_name,
-    phone,
-    neighborhood: neighborhood || null,
-    role: "customer",
-  };
-  if (provinciaId) campos.provincia_id = provinciaId;
-
-  const { error: erroPerfil } = await supabaseAdmin.from("profiles").update(campos).eq("id", id);
-  if (erroPerfil) {
-    await desfazer();
-    return NextResponse.json({ error: "Não foi possível guardar o perfil." }, { status: 500 });
-  }
-
-  const { error: erroVinculo } = await supabaseAdmin.from("seller_customers").insert({
-    seller_id: perfil.id,
-    customer_id: id,
-    assigned_by: perfil.id,
-  });
-
-  if (erroVinculo) {
-    // Sem carteira a conta não serve para nada: não deixar lixo.
-    await desfazer();
-    return NextResponse.json({ error: erroVinculo.message }, { status: 400 });
-  }
-
-  const { data: final } = await supabaseAdmin
-    .from("profiles")
-    .select("referencia")
-    .eq("id", id)
-    .maybeSingle();
 
   return NextResponse.json({
     ok: true,
     existente: false,
-    id,
+    reservado: true,
+    id: (criada as { id: string }).id,
     nome: full_name,
     telefone: phone,
-    referencia: (final as { referencia: string | null } | null)?.referencia ?? null,
-    password,
-    provincia: (provincia as { nome?: string } | null)?.nome ?? null,
+    provincia: nomeProvincia,
   });
+}
+
+/**
+ * DELETE /api/vendedor/clientes?id=<reserva>
+ *
+ * Cancela uma reserva por activar. Sem isto, um número mal digitado ficava
+ * preso para sempre: `reserved_customers.phone` é único, e a reserva errada
+ * impedia o dono do número de ser reservado por outro colaborador.
+ *
+ * Só apaga reservas ainda por activar — uma reserva já ligada é um vínculo
+ * real na carteira e retirá-la é transferência, que é da gestão.
+ */
+export async function DELETE(request: Request) {
+  const perfil = await getProfile();
+  if (!perfil || (perfil.role !== "seller" && perfil.role !== "manager")) {
+    return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
+  }
+
+  const id = new URL(request.url).searchParams.get("id")?.trim();
+  if (!id) {
+    return NextResponse.json({ error: "Reserva não indicada." }, { status: 400 });
+  }
+
+  const { data: reserva } = await supabaseAdmin
+    .from("reserved_customers")
+    .select("id, seller_id, status")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (!reserva) {
+    return NextResponse.json({ error: "Reserva não encontrada." }, { status: 404 });
+  }
+
+  const r = reserva as { id: string; seller_id: string; status: string };
+
+  if (perfil.role !== "manager" && r.seller_id !== perfil.id) {
+    return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
+  }
+
+  if (r.status !== "reservado") {
+    return NextResponse.json(
+      { error: "Esta reserva já foi ligada a uma conta. A transferência é feita pela gestão." },
+      { status: 409 }
+    );
+  }
+
+  const { error } = await supabaseAdmin.from("reserved_customers").delete().eq("id", id);
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+
+  return NextResponse.json({ ok: true });
 }
