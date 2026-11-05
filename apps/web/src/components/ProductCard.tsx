@@ -21,9 +21,16 @@ interface Props {
   /** Unidades disponíveis; `null` = desconhecido, `0` = esgotado. */
   disponivel?: number | null;
   prioridade?: boolean;
+  /** O cliente já comprou este produto — mostra a marca de recompra. */
+  jaComprou?: boolean;
 }
 
-export default function ProductCard({ product, disponivel = null, prioridade = false }: Props) {
+export default function ProductCard({
+  product,
+  disponivel = null,
+  prioridade = false,
+  jaComprou = false,
+}: Props) {
   const desconto = percentagemDesconto(product);
   const imagem = product.images?.[0]?.url ?? null;
   const esgotado = disponivel === 0;
@@ -62,6 +69,12 @@ export default function ProductCard({ product, disponivel = null, prioridade = f
             </span>
           )}
         </div>
+
+        {jaComprou && !esgotado && (
+          <span className="absolute right-2 top-2 rounded-full border border-[#C9A962]/40 bg-[#0A0A0A]/85 px-2 py-0.5 text-[10px] font-medium leading-tight text-[#C9A962]">
+            Já comprou
+          </span>
+        )}
 
         {esgotado && (
           <div className="absolute inset-0 flex items-center justify-center bg-[#0A0A0A]/72">

@@ -9,10 +9,10 @@ import { phoneToEmail } from "@/lib/phone-email";
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Depois de entrar, a primeira coisa que carrega é a aba de referência
-  // (província, delegação e código pessoal). Quem tem um destino explícito
-  // (?redirect=...) mantém-no.
-  const redirect = searchParams.get("redirect") || "/referencia";
+  // Quem tem um destino explícito (?redirect=…) mantém-no. Sem destino, o
+  // cliente entra directo no catálogo — é onde vai comprar. A gestão e os
+  // colaboradores continuam a cair no painel que usam todos os dias.
+  const redirect = searchParams.get("redirect");
 
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
@@ -38,7 +38,7 @@ function LoginForm() {
       return;
     }
 
-    const { error: signInError } = await supabase.auth.signInWithPassword({
+    const { data: sessao, error: signInError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
@@ -53,7 +53,21 @@ function LoginForm() {
       return;
     }
 
-    router.push(redirect);
+    // O papel decide o destino. `profiles` é legível pelo próprio depois de
+    // autenticado; se a leitura falhar, o catálogo é o destino seguro (é
+    // público e serve qualquer perfil).
+    let destino = redirect;
+    if (!destino) {
+      const { data: perfil } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", sessao?.user.id ?? "")
+        .maybeSingle();
+      const papel = (perfil as { role?: string } | null)?.role;
+      destino = papel === "manager" ? "/gerente" : papel === "seller" ? "/vendedor" : "/catalogo";
+    }
+
+    router.push(destino);
     router.refresh();
   };
 

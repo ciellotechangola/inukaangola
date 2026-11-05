@@ -2,6 +2,8 @@ import Link from "next/link";
 import { SlidersHorizontal } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
 import ProductCard, { precoEfetivo } from "@/components/ProductCard";
+import ComprarNovamente from "@/components/ComprarNovamente";
+import { produtosComprados } from "@/lib/recompras";
 import type { Category, Product } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -99,6 +101,16 @@ export default async function CatalogPage({
   const { data, error } = await consulta;
   let produtos = ((data ?? []) as ProdutoComEstoque[]).filter(Boolean);
   if (error) produtos = [];
+
+  // ------------------------------------------------- comprar novamente
+  // Cliente com sessão: os últimos produtos que comprou (encomendas do site e
+  // vendas registadas por um colaborador). Servem para a faixa de recompra e
+  // para marcar os cartões na grelha.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const comprados = user ? await produtosComprados(user.id, 6) : [];
+  const idsComprados = new Set(comprados.map((p) => p.id));
 
   produtos = [...produtos].sort((a, b) => {
     if (ordem === "preco-asc") return precoEfetivo(a) - precoEfetivo(b);
@@ -273,6 +285,16 @@ export default async function CatalogPage({
         </div>
       </div>
 
+      <ComprarNovamente
+        produtos={comprados.map((p) => ({
+          id: p.id,
+          name: p.name,
+          price: precoEfetivo(p),
+          image: p.images?.[0]?.url ?? null,
+          disponivel: disponibilidade(p),
+        }))}
+      />
+
       <div className="lg:grid lg:grid-cols-[220px_1fr] lg:gap-8">
         {/* Filtros no telemóvel: <details> nativo, sem JavaScript. */}
         <aside className="mb-6 lg:mb-0">
@@ -311,7 +333,12 @@ export default async function CatalogPage({
           ) : (
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
               {produtos.map((p) => (
-                <ProductCard key={p.id} product={p} disponivel={disponibilidade(p)} />
+                <ProductCard
+                  key={p.id}
+                  product={p}
+                  disponivel={disponibilidade(p)}
+                  jaComprou={idsComprados.has(p.id)}
+                />
               ))}
             </div>
           )}

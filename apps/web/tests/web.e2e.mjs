@@ -3078,6 +3078,69 @@ await check("remover a encomenda de teste", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// «Comprar novamente»: o último produto comprado fica marcado no catálogo.
+// ---------------------------------------------------------------------------
+await check("catálogo mostra «Comprar novamente» a quem já comprou", async () => {
+  const uid = sCliente.user.id;
+  const { data: prods } = await sb(
+    "/rest/v1/products?select=id,name&is_active=eq.true&limit=1",
+    { key: SR, jwt: SR }
+  );
+  assert(prods?.length === 1, "sem produtos activos");
+  const prod = prods[0];
+
+  // Encomenda directa na base: o teste quer o histórico, não o checkout.
+  const { data: ordem } = await sb("/rest/v1/orders?select=id", {
+    method: "POST",
+    key: SR,
+    jwt: SR,
+    prefer: "return=representation",
+    body: {
+      reference: `TST-RECOMPRA-${Date.now()}`,
+      customer_id: uid,
+      status: "pending",
+      total_amount: 1000,
+      delivery_method: "pickup",
+    },
+  });
+  assert(ordem?.[0]?.id, "não criou a encomenda de teste");
+
+  await sb("/rest/v1/order_items", {
+    method: "POST",
+    key: SR,
+    jwt: SR,
+    prefer: "return=minimal",
+    body: {
+      order_id: ordem[0].id,
+      product_id: prod.id,
+      quantity: 1,
+      unit_price: 1000,
+      total_price: 1000,
+    },
+  });
+
+  const r = await pagina("/catalogo", cCliente);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(t.includes("Comprar novamente"), "sem a faixa de recompra");
+  assert(t.includes("Já comprou"), "o produto comprado não está marcado");
+  assert(t.includes(prod.name), "o produto comprado não aparece na faixa");
+
+  // Sem sessão não há histórico para mostrar — a faixa não deve aparecer.
+  const anon = await pagina("/catalogo");
+  assert(!texto(anon.html).includes("Comprar novamente"), "a faixa apareceu a um visitante");
+
+  // Limpeza: as linhas saem por CASCADE.
+  await sb(`/rest/v1/orders?id=eq.${ordem[0].id}`, {
+    method: "DELETE",
+    key: SR,
+    jwt: SR,
+    prefer: "return=minimal",
+  });
+  return "faixa + marca «Já comprou» · invisível sem sessão";
+});
+
+// ---------------------------------------------------------------------------
 // CRUD de produtos: a gestão edita qualquer campo e elimina o que não tem
 // histórico. O que já foi vendido não se apaga — a FK protege a venda.
 // ---------------------------------------------------------------------------

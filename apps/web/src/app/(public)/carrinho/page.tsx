@@ -108,71 +108,115 @@ export default function CartPage() {
   }
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-10">
-      <h1 className="mb-8 text-3xl font-light text-[#F5F5F5]">Carrinho</h1>
+    <main className="mx-auto max-w-5xl px-4 py-8 sm:py-10">
+      <div className="mb-6 flex items-end justify-between gap-3 sm:mb-8">
+        <div>
+          <h1 className="text-2xl font-light text-[#F5F5F5] sm:text-3xl">Carrinho</h1>
+          <p className="mt-1 text-xs text-[#7A7A7A] sm:text-sm">
+            {items.length === 1 ? "1 artigo" : `${items.length} artigos`} ·{" "}
+            {items.reduce((n, i) => n + i.quantity, 0)} unidades
+          </p>
+        </div>
+        <button
+          onClick={() => {
+            if (window.confirm("Esvaziar o carrinho?")) clear();
+          }}
+          className="shrink-0 text-xs text-[#8A8A8A] underline-offset-4 transition hover:text-[#DC2626] hover:underline"
+        >
+          Esvaziar
+        </button>
+      </div>
 
-      <div className="grid gap-8 lg:grid-cols-[1fr_380px]">
+      <div className="grid gap-6 lg:grid-cols-[1fr_380px] lg:gap-8">
         <div className="space-y-3">
           {items.map((item) => (
+            // No telemóvel a linha do desktop (imagem · nome · quantidade ·
+            // total · remover) não cabe em 360 px e empurrava o botão de
+            // remover para fora do ecrã. Passou a duas linhas: em cima a
+            // imagem e o nome, em baixo a quantidade e o total.
             <div
               key={item.product_id}
-              className="flex items-center gap-4 rounded-xl border border-[#262626] bg-[#1A1A1A] p-4"
+              className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-3 sm:p-4"
             >
-              <div className="h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-[#0A0A0A]">
-                {item.image ? (
-                  <ProductImage
-                    src={item.image}
-                    alt={item.name}
-                    width={80}
-                    height={80}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-[#404040]">
-                    INUKA
+              <div className="flex items-start gap-3 sm:gap-4">
+                <Link
+                  href={`/produto/${item.product_id}`}
+                  className="h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-[#0A0A0A] sm:h-24 sm:w-24"
+                >
+                  {item.image ? (
+                    <ProductImage
+                      src={item.image}
+                      alt={item.name}
+                      width={96}
+                      height={96}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-xs text-[#404040]">
+                      INUKA
+                    </div>
+                  )}
+                </Link>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <Link
+                        href={`/produto/${item.product_id}`}
+                        className="line-clamp-2 text-sm font-medium leading-snug text-[#F5F5F5] transition hover:text-[#C9A962] sm:text-base"
+                      >
+                        {item.name}
+                      </Link>
+                      <p className="mt-1 text-sm text-[#C9A962]">{formatCurrency(item.price)}</p>
+                      {item.quantity > 1 && (
+                        <p className="text-[11px] text-[#6F6F6F]">
+                          {item.quantity} × {formatCurrency(item.price)}
+                        </p>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={() => remove(item.product_id)}
+                      className="-mr-1 -mt-1 inline-flex shrink-0 items-center gap-1 rounded-lg p-2 text-[#8A8A8A] transition hover:bg-red-950/40 hover:text-[#DC2626]"
+                      aria-label={`Remover ${item.name} do carrinho`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      <span className="hidden text-xs sm:inline">Remover</span>
+                    </button>
                   </div>
-                )}
+
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <div className="flex items-center rounded-lg border border-[#404040]">
+                      <button
+                        onClick={() => setQuantity(item.product_id, item.quantity - 1)}
+                        className="flex h-9 w-9 items-center justify-center text-[#A3A3A3] transition hover:text-[#C9A962]"
+                        aria-label="Diminuir quantidade"
+                      >
+                        −
+                      </button>
+                      <span className="min-w-8 text-center text-sm text-[#F5F5F5]">
+                        {item.quantity}
+                      </span>
+                      <button
+                        onClick={() => setQuantity(item.product_id, item.quantity + 1)}
+                        className="flex h-9 w-9 items-center justify-center text-[#A3A3A3] transition hover:text-[#C9A962]"
+                        aria-label="Aumentar quantidade"
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    <p className="text-sm font-medium text-[#F5F5F5] sm:text-base">
+                      {formatCurrency(item.price * item.quantity)}
+                    </p>
+                  </div>
+                </div>
               </div>
-
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-medium text-[#F5F5F5]">{item.name}</p>
-                <p className="text-sm text-[#C9A962]">{formatCurrency(item.price)}</p>
-              </div>
-
-              <div className="flex items-center rounded-lg border border-[#404040]">
-                <button
-                  onClick={() => setQuantity(item.product_id, item.quantity - 1)}
-                  className="px-2.5 py-1.5 text-[#A3A3A3] hover:text-[#C9A962]"
-                  aria-label="Diminuir"
-                >
-                  −
-                </button>
-                <span className="min-w-8 text-center text-sm text-[#F5F5F5]">{item.quantity}</span>
-                <button
-                  onClick={() => setQuantity(item.product_id, item.quantity + 1)}
-                  className="px-2.5 py-1.5 text-[#A3A3A3] hover:text-[#C9A962]"
-                  aria-label="Aumentar"
-                >
-                  +
-                </button>
-              </div>
-
-              <p className="w-24 text-right text-sm text-[#F5F5F5]">
-                {formatCurrency(item.price * item.quantity)}
-              </p>
-
-              <button
-                onClick={() => remove(item.product_id)}
-                className="text-[#A3A3A3] transition hover:text-[#DC2626]"
-                aria-label="Remover"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
             </div>
           ))}
         </div>
 
-        <div className="h-fit rounded-xl border border-[#262626] bg-[#1A1A1A] p-6">
+        <div className="h-fit rounded-xl border border-[#262626] bg-[#1A1A1A] p-4 sm:p-6 lg:sticky lg:top-24">
           <h2 className="mb-4 text-lg font-medium text-[#F5F5F5]">Finalizar</h2>
 
           {error && (
