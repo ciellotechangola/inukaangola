@@ -15,6 +15,9 @@ const PUBLIC_ROUTES = [
   // Candidatura a revendedor: quem chega aqui pode nem ter conta — é o
   // formulário que a própria pessoa preenche antes de ser colaborador.
   "/revendedor",
+  // Área de download: quem quer a aplicação ainda não é cliente. Pedir sessão
+  // aqui era o mesmo que fechar a porta a quem chega pela primeira vez.
+  "/download",
 ];
 
 /**
@@ -137,7 +140,12 @@ export const config = {
   // e o ícone no ecrã principal abria sem sessão — apanhando o portão de acesso
   // do alojamento (403). As imagens já estavam excluídas pela extensão; estes
   // ficheiros não têm extensão de imagem, por isso ficam nomeados à mão.
+  //
+  // `apk` entrou pela mesma razão, com uma diferença que importa: um APK não
+  // tem sessão nenhuma para apresentar. O `/downloads/inuka-angola.apk` estava
+  // a responder 307 para /login, e quem clicasse em «Descarregar» recebia a
+  // página de entrada em vez da aplicação.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|manifest.json|manifest.webmanifest|robots.txt|sitemap.xml|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest.json|manifest.webmanifest|robots.txt|sitemap.xml|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2|apk|ipa|zip|pdf)$).*)",
   ],
 };

@@ -136,6 +136,7 @@ export default async function ColaboradorDetalhePage({
           )}
           inicial={{
             full_name: ficha.full_name,
+            phone: ficha.phone,
             bi_number: ficha.bi_number,
             birth_date: ficha.birth_date,
             whatsapp: ficha.whatsapp,

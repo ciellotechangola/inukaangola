@@ -8,6 +8,7 @@ import {
   Pencil,
   Power,
   Target,
+  Trash2,
   UserMinus,
   X,
 } from "lucide-react";
@@ -18,6 +19,8 @@ import type { Provincia } from "@/lib/provincias";
 
 interface Inicial {
   full_name: string;
+  /** Telefone de acesso (é o que identifica a conta no login). */
+  phone: string | null;
   bi_number: string | null;
   birth_date: string | null;
   whatsapp: string | null;
@@ -85,6 +88,7 @@ export default function GestaoColaborador({
   });
 
   const [refEdit, setRefEdit] = useState(referencia ?? "");
+  const [telefone, setTelefone] = useState(inicial.phone ?? "");
 
   function limpar() {
     setErro("");
@@ -120,16 +124,31 @@ export default function GestaoColaborador({
       p_rate: texto === "" ? null : Number(texto.replace(",", ".")) / 100,
     });
 
-    setAGuardar(false);
-    if (error) {
-      setErro(mensagemErro(error));
-      return;
-    }
-    if (erroTaxa) {
-      setErro(mensagemErro(erroTaxa));
+    const falha = error ?? erroTaxa;
+    if (falha) {
+      setAGuardar(false);
+      setErro(mensagemErro(falha));
       return;
     }
 
+    // O telefone é o login: mudá-lo em `profiles` sem mudar o e-mail da conta
+    // deixava a pessoa sem conseguir entrar. A rota trata dos dois lados.
+    const telefoneNovo = telefone.trim();
+    if (telefoneNovo && telefoneNovo !== (inicial.phone ?? "")) {
+      const resposta = await fetch(`/api/gerente/utilizadores/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: telefoneNovo }),
+      });
+      const dados = (await resposta.json().catch(() => ({}))) as { error?: string };
+      if (!resposta.ok) {
+        setAGuardar(false);
+        setErro(dados.error ?? "Ficha guardada, mas o telefone de acesso não foi alterado.");
+        return;
+      }
+    }
+
+    setAGuardar(false);
     setAviso("Ficha atualizada.");
     setPainel("nenhum");
     router.refresh();
@@ -288,6 +307,40 @@ export default function GestaoColaborador({
     router.refresh();
   }
 
+  /**
+   * Elimina a conta por completo.
+   *
+   * A rota recusa quando há histórico (vendas, encomendas, comissões) e
+   * explica porquê — apagar quem vendeu partia a contabilidade. Nesse caso o
+   * caminho é «Desativar acesso», que já está ao lado.
+   */
+  async function eliminarConta() {
+    if (
+      !window.confirm(
+        `Eliminar definitivamente a conta de ${inicial.full_name}? Só é possível se não tiver vendas, encomendas nem comissões.`
+      )
+    ) {
+      return;
+    }
+
+    setAGuardar(true);
+    limpar();
+    try {
+      const resposta = await fetch(`/api/gerente/utilizadores/${id}`, { method: "DELETE" });
+      const dados = (await resposta.json().catch(() => ({}))) as { error?: string };
+      if (!resposta.ok) {
+        setErro(dados.error ?? "Não foi possível eliminar a conta.");
+        return;
+      }
+      router.push("/gerente/colaboradores");
+      router.refresh();
+    } catch {
+      setErro("Não foi possível contactar o servidor.");
+    } finally {
+      setAGuardar(false);
+    }
+  }
+
   return (
     <div className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-6">
       <div className="mb-4">
@@ -359,6 +412,7 @@ export default function GestaoColaborador({
 
           <div className="grid gap-3 sm:grid-cols-2">
             <Campo rotulo="Nome completo" valor={form.full_name} onChange={(v) => setForm({ ...form, full_name: v })} />
+            <Campo rotulo="Telefone de acesso" valor={telefone} onChange={setTelefone} mono />
             <Campo rotulo="Nº do BI" valor={form.bi_number} onChange={(v) => setForm({ ...form, bi_number: v })} mono />
             <Campo rotulo="Data de nascimento" tipo="date" valor={form.birth_date} onChange={(v) => setForm({ ...form, birth_date: v })} />
             <Campo rotulo="Telefone / WhatsApp" valor={form.whatsapp} onChange={(v) => setForm({ ...form, whatsapp: v })} />
@@ -379,6 +433,10 @@ export default function GestaoColaborador({
             Deixe <strong className="text-[#6F6F6F]">vazio</strong> para esta pessoa receber a
             taxa da empresa (definida em Colaboradores). Um valor aqui sobrepõe-se a essa taxa e
             aplica-se às vendas seguintes.
+          </p>
+          <p className="mt-2 text-[11px] leading-relaxed text-[#525252]">
+            O <strong className="text-[#6F6F6F]">telefone de acesso</strong> é o que a pessoa
+            escreve no login. Ao mudá-lo, o acesso antigo deixa de funcionar no mesmo instante.
           </p>
 
           <button
@@ -486,11 +544,22 @@ export default function GestaoColaborador({
                 <UserMinus className="h-3.5 w-3.5" />
                 Tornar cliente
               </button>
+
+              <button
+                type="button"
+                onClick={eliminarConta}
+                disabled={aGuardar}
+                className="inline-flex items-center gap-2 rounded-lg border border-[#4A2020] bg-[#1E0F0F] px-3 py-2 text-xs text-[#F87171] transition hover:border-[#DC2626] hover:bg-[#2A1010] disabled:opacity-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Eliminar conta
+              </button>
             </div>
             <p className="mt-2 text-[11px] text-[#525252]">
               “Tornar cliente” remove o acesso à área de colaborador. As vendas, clientes e
               comissões ficam no histórico — o perfil não é apagado, porque a base de dados não
-              permite apagar quem tem vendas registadas.
+              permite apagar quem tem vendas registadas. “Eliminar conta” só funciona quando não
+              há histórico nenhum; caso contrário, desative o acesso.
             </p>
           </div>
         </div>

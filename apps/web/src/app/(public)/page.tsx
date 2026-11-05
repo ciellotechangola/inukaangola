@@ -1,6 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowRight, BadgeCheck, CreditCard, Headphones, Sparkles, Truck, Users } from "lucide-react";
+import { ArrowRight, BadgeCheck, CreditCard, Download, Headphones, Sparkles, Truck, Users } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
 import { TELEFONES_INUKA, telHref } from "@/lib/contactos";
 import ProductCard from "@/components/ProductCard";
@@ -91,10 +91,11 @@ export default async function HomePage() {
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
-                href="/contactos"
+                href="/download"
                 className="inline-flex items-center gap-2 rounded-lg border border-[#3A3A3A] px-6 py-3 text-sm font-medium text-[#E5E5E5] transition hover:border-[#C9A962] hover:text-[#C9A962]"
               >
-                Falar com um consultor
+                <Download className="h-4 w-4" />
+                Descarregar a app
               </Link>
               <Link
                 href="/revendedor"

@@ -220,8 +220,57 @@ async function apagarConta(phone) {
   // `assigned_by` também referencia auth.users: um cliente ligado por esta
   // conta bloqueia a eliminação com 23503 se não for limpo primeiro.
   await del(`/rest/v1/seller_customers?assigned_by=eq.${id}`);
+  // Reservas por activar (0009): `seller_id`, `created_by` e `customer_id`
+  // apontam todos para auth.users. Sem isto, uma execução interrompida deixava
+  // uma reserva presa e a execução seguinte morria logo no arranque.
+  await del(`/rest/v1/reserved_customers?seller_id=eq.${id}`);
+  await del(`/rest/v1/reserved_customers?created_by=eq.${id}`);
+  await del(`/rest/v1/reserved_customers?customer_id=eq.${id}`);
+  await del(`/rest/v1/sale_commissions?seller_id=eq.${id}`);
+  await del(`/rest/v1/sales_goals?seller_id=eq.${id}`);
   const res = await sb(`/auth/v1/admin/users/${id}`, { method: "DELETE", key: SR, jwt: SR });
-  if (!res.ok) throw new Error(`apagar ${phone}: ${res.status} ${JSON.stringify(res.data)}`);
+  if (res.ok) return;
+
+  // Sobrou alguma referência que a lista acima não cobre. Acontece quando uma
+  // execução é interrompida a meio: fica uma linha (um projecto do estúdio, um
+  // conteúdo) a apontar para a conta e o Supabase recusa apagá-la com um 500
+  // que não diz qual tabela é. Em vez de adivinhar, varre-se o esquema.
+  await varrerReferencias(id);
+  const segunda = await sb(`/auth/v1/admin/users/${id}`, { method: "DELETE", key: SR, jwt: SR });
+  if (!segunda.ok) throw new Error(`apagar ${phone}: ${segunda.status} ${JSON.stringify(segunda.data)}`);
+}
+
+/**
+ * Apaga qualquer linha que aponte para uma conta, percorrendo as tabelas
+ * expostas pelo PostgREST.
+ *
+ * Só corre quando a eliminação normal falha, por isso não pesa no caminho
+ * feliz. `profiles` fica de fora: é a própria conta.
+ */
+let ESQUEMA = null;
+async function varrerReferencias(id) {
+  if (!ESQUEMA) {
+    const spec = await sb("/rest/v1/", { key: SR, jwt: SR });
+    ESQUEMA = Object.entries(spec.data?.definitions ?? {})
+      .filter(([tabela]) => tabela !== "profiles")
+      .map(([tabela, def]) => ({
+        tabela,
+        colunas: Object.keys(def?.properties ?? {}).filter((c) =>
+          /^(id|.*_id|created_by|updated_by|assigned_by|requested_by|paid_by|approved_by)$/.test(c)
+        ),
+      }));
+  }
+
+  for (const { tabela, colunas } of ESQUEMA) {
+    for (const coluna of colunas) {
+      await sb(`/rest/v1/${tabela}?${coluna}=eq.${id}`, {
+        method: "DELETE",
+        key: SR,
+        jwt: SR,
+        prefer: "return=minimal",
+      });
+    }
+  }
 }
 
 console.log("=".repeat(64));
@@ -233,7 +282,7 @@ for (const u of [CLIENTE, VENDEDOR, GESTOR]) await apagarConta(u.phone);
 // ---------------------------------------------------------------------------
 console.log("\n--- 1. ROTAS PÚBLICAS (visitante) ---");
 // ---------------------------------------------------------------------------
-const publicas = ["/", "/catalogo", "/carrinho", "/login", "/registo", "/sobre", "/contactos"];
+const publicas = ["/", "/catalogo", "/carrinho", "/login", "/registo", "/sobre", "/contactos", "/download"];
 for (const rota of publicas) {
   await check(`visitante abre ${rota}`, async () => {
     const r = await pagina(rota);
@@ -241,6 +290,43 @@ for (const rota of publicas) {
     return "200";
   });
 }
+
+await check("a entrada troca o consultor pela área de download", async () => {
+  const r = await pagina("/");
+  const t = texto(r.html);
+  assert(/Descarregar a app/i.test(t), "sem a entrada de download na entrada da loja");
+  assert(!/Falar com um consultor/i.test(t), "o botão antigo continua na entrada");
+  assert(/href="\/download"/.test(r.html), "o botão não aponta para /download");
+  return "download no lugar do consultor";
+});
+
+await check("a área de download serve o APK e o caminho para o iPhone", async () => {
+  const r = await pagina("/download");
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(/Descarregar APK/i.test(t), "sem botão de APK");
+  assert(/Android/i.test(t) && /iPhone/i.test(t), "faltam os dois sistemas");
+  assert(/Adicionar ao ecrã principal/i.test(t), "sem instruções para o iPhone");
+  // O APK publicado pelo próprio site tem de ser servido inteiro e sem sessão.
+  // Um HEAD não serve: o Next não devolve `content-length` nele, e o teste
+  // passaria a medir zero. O 307 para /login (proxy) também já aconteceu aqui.
+  const apk = await fetch(`${APP}/downloads/inuka-angola.apk`);
+  assert(apk.ok, `APK: HTTP ${apk.status}`);
+  const bytes = (await apk.arrayBuffer()).byteLength;
+  assert(bytes > 5_000_000, `APK com ${bytes} bytes`);
+  assert(
+    /android\.package-archive/.test(apk.headers.get("content-type") ?? ""),
+    `content-type ${apk.headers.get("content-type")}`
+  );
+  return `APK ${(bytes / 1048576).toFixed(1)} MB`;
+});
+
+await check("o e-mail oficial é o novo", async () => {
+  const r = await pagina("/contactos");
+  assert(r.html.includes("inukaangolaa@gmail.com"), "e-mail novo ausente dos contactos");
+  assert(!r.html.includes("info@inuka.ao"), "o e-mail antigo continua na página");
+  return "inukaangolaa@gmail.com";
+});
 
 // ---------------------------------------------------------------------------
 console.log("\n--- 1b. APLICAÇÃO NO IPHONE (manifesto, ícones, ecrãs de arranque) ---");
@@ -625,6 +711,138 @@ await check("gestor abre produtos", async () => {
   const r = await pagina("/gerente/produtos", cGestor);
   assert(r.status === 200, `HTTP ${r.status}`);
   return "200";
+});
+
+// ---------------------------------------------------------------------------
+// DEFINIÇÕES — o gestor muda contactos e links da app sem publicar código.
+// ---------------------------------------------------------------------------
+const LINK_DRIVE =
+  "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/view?usp=sharing";
+
+await check("o cliente não entra nas definições", async () => {
+  const r = await pagina("/gerente/definicoes", cCliente);
+  assert(r.status === 307 || r.status === 200, `HTTP ${r.status}`);
+  if (r.status === 200) assert(!texto(r.html).includes("Guardar definições"), "abriu o formulário");
+  return `bloqueado (${r.status})`;
+});
+
+await check("a gestão grava o link da app e o download usa-o em directo", async () => {
+  const valor = {
+    email: "inukaangolaa@gmail.com",
+    telefones: ["+244 999 000 111"],
+    androidUrl: LINK_DRIVE,
+    iosUrl: "https://testflight.apple.com/join/ABCDEFG",
+    versao: "9.9.9",
+    novidades: "Versão de teste",
+  };
+
+  const gravado = await sb("/rest/v1/platform_settings?on_conflict=key", {
+    method: "POST",
+    jwt: sGestor.access_token,
+    prefer: "resolution=merge-duplicates,return=minimal",
+    body: { key: "loja", value: valor },
+  });
+  assert(gravado.ok, `gravar: HTTP ${gravado.status} ${JSON.stringify(gravado.data).slice(0, 160)}`);
+
+  const r = await pagina("/download");
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  // Um link de partilha do Drive tem de sair daqui como descarga directa.
+  assert(
+    r.html.includes("drive.google.com/uc?export=download"),
+    "o link do Drive não foi convertido em descarga directa"
+  );
+  assert(!r.html.includes("drive.google.com/file/d/"), "ficou o link de pré-visualização");
+  assert(t.includes("TestFlight"), "a origem do link do iPhone não aparece");
+  assert(t.includes("9.9.9"), "a versão configurada não aparece");
+  return "Drive → descarga directa · TestFlight";
+});
+
+await check("a página de contactos segue as definições", async () => {
+  const r = await pagina("/contactos");
+  assert(r.html.includes("inukaangolaa@gmail.com"), "e-mail configurado ausente");
+  assert(r.html.includes("999 000 111"), "o telefone configurado não chegou à página");
+  return "e-mail e telefone das definições";
+});
+
+await check("remover as definições devolve os valores de origem", async () => {
+  await sb(`/rest/v1/platform_settings?key=eq.loja`, {
+    method: "DELETE",
+    jwt: sGestor.access_token,
+    prefer: "return=minimal",
+  });
+  const r = await pagina("/download");
+  assert(r.html.includes("/downloads/inuka-angola.apk"), "o APK local não voltou");
+  assert(!r.html.includes("drive.google.com"), "o link de teste ficou gravado");
+  return "APK local outra vez";
+});
+
+// ---------------------------------------------------------------------------
+// CRUD DA GESTÃO SOBRE DADOS DE OPERAÇÃO — reservas por activar.
+// ---------------------------------------------------------------------------
+const RESERVA_TEL = "+244924200031";
+
+await check("a gestão vê e corrige uma reserva por activar", async () => {
+  await sb(`/rest/v1/reserved_customers?phone=eq.${encodeURIComponent(RESERVA_TEL)}`, {
+    method: "DELETE",
+    key: SR,
+    jwt: SR,
+    prefer: "return=minimal",
+  });
+
+  const criada = await fetch(`${APP}/api/vendedor/clientes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie: cGestor },
+    body: JSON.stringify({
+      full_name: "Reserva Gestao",
+      phone: RESERVA_TEL,
+      neighborhood: "Talatona",
+    }),
+  });
+  const dados = await criada.json().catch(() => ({}));
+  assert(criada.ok && dados.reservado === true, `criar: ${criada.status} ${JSON.stringify(dados).slice(0, 160)}`);
+
+  const lista = await pagina("/gerente/clientes", cGestor);
+  assert(lista.status === 200, `HTTP ${lista.status}`);
+  const t = texto(lista.html);
+  assert(t.includes("Reserva Gestao"), "a reserva não aparece na gestão");
+  assert(/por activar/i.test(t), "sem a marca por activar");
+
+  const novo = "+244924200032";
+  const corrigida = await fetch(`${APP}/api/vendedor/clientes`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", cookie: cGestor },
+    body: JSON.stringify({ id: dados.id, full_name: "Reserva Corrigida", phone: novo }),
+  });
+  const r2 = await corrigida.json().catch(() => ({}));
+  assert(corrigida.ok, `corrigir: ${corrigida.status} ${JSON.stringify(r2).slice(0, 160)}`);
+
+  const linha = await sb(
+    `/rest/v1/reserved_customers?select=full_name,phone&id=eq.${dados.id}`,
+    { key: SR, jwt: SR }
+  );
+  assert(linha.data[0].full_name === "Reserva Corrigida", `nome ${linha.data[0].full_name}`);
+  assert(linha.data[0].phone === novo, `telefone ${linha.data[0].phone}`);
+
+  await sb(`/rest/v1/reserved_customers?id=eq.${dados.id}`, {
+    method: "DELETE",
+    key: SR,
+    jwt: SR,
+    prefer: "return=minimal",
+  });
+  return "visível · nome e número corrigidos";
+});
+
+await check("a ficha do colaborador mostra o telefone de acesso", async () => {
+  const r = await pagina(`/gerente/colaboradores/${sVendedor.user.id}`, cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  // O telefone vem do `colaborador_ficha` e é o que o gestor passa a poder
+  // corrigir no painel «Dados» (o campo em si só existe depois de abrir).
+  assert(/\+244\s?924\s?200\s?002/.test(t), "o telefone de acesso não aparece na ficha");
+  assert(/Editar ficha/i.test(t), "sem o painel de dados");
+  assert(/Província e acesso/i.test(t), "sem o painel de acesso");
+  return "telefone visível · painéis de dados e acesso";
 });
 
 await check("gestor abre encomendas", async () => {

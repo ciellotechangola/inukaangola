@@ -240,6 +240,127 @@ export async function POST(request: Request) {
 }
 
 /**
+ * PATCH /api/vendedor/clientes
+ *
+ * Corrige os dados de uma reserva por activar — nome, telefone, bairro.
+ *
+ * Serve os dois lados: o colaborador que escreveu mal o número do cliente e a
+ * gestão, que até aqui não conseguia sequer ver as reservas. Sem isto, um
+ * telefone mal digitado só se resolvia cancelando a reserva e perdendo o
+ * histórico de compras que estivesse à espera daquele número.
+ *
+ * `phone` é único e é a chave de ligação: mudá-lo não arrasta as vendas que já
+ * estejam registadas com o número antigo (essas continuam órfãs até alguém as
+ * tratar) — por isso a resposta avisa quantas ficaram para trás.
+ */
+export async function PATCH(request: Request) {
+  const perfil = await getProfile();
+  if (!perfil || (perfil.role !== "seller" && perfil.role !== "manager")) {
+    return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
+  }
+
+  let corpo: Record<string, unknown>;
+  try {
+    corpo = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Pedido inválido." }, { status: 400 });
+  }
+
+  const id = String(corpo.id ?? "").trim();
+  if (!id) return NextResponse.json({ error: "Reserva não indicada." }, { status: 400 });
+
+  const { data: reserva } = await supabaseAdmin
+    .from("reserved_customers")
+    .select("id, seller_id, status, phone")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (!reserva) return NextResponse.json({ error: "Reserva não encontrada." }, { status: 404 });
+
+  const r = reserva as { id: string; seller_id: string; status: string; phone: string };
+
+  if (perfil.role !== "manager" && r.seller_id !== perfil.id) {
+    return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
+  }
+  if (r.status !== "reservado") {
+    return NextResponse.json(
+      { error: "Esta reserva já foi ligada a uma conta. Altere os dados em Clientes." },
+      { status: 409 }
+    );
+  }
+
+  const atualizacao: Record<string, unknown> = {};
+  let vendasOrfas = 0;
+
+  if (typeof corpo.full_name === "string") {
+    const nome = corpo.full_name.trim();
+    if (nome.length < 3) {
+      return NextResponse.json(
+        { error: "Indique o nome do cliente (mínimo 3 caracteres)." },
+        { status: 400 }
+      );
+    }
+    atualizacao.full_name = nome;
+  }
+
+  if (typeof corpo.neighborhood === "string") {
+    atualizacao.neighborhood = corpo.neighborhood.trim() || null;
+  }
+
+  if (typeof corpo.phone === "string" && corpo.phone.trim()) {
+    const telefone = normalizePhone(corpo.phone.trim());
+    if (!/^\+244\d{9}$/.test(telefone)) {
+      return NextResponse.json(
+        { error: "Telefone inválido. Use o formato +244 9xx xxx xxx." },
+        { status: 400 }
+      );
+    }
+
+    if (telefone !== r.phone) {
+      const [{ data: conta }, { data: outraReserva }] = await Promise.all([
+        supabaseAdmin.from("profiles").select("id").eq("phone", telefone).maybeSingle(),
+        supabaseAdmin.from("reserved_customers").select("id").eq("phone", telefone).maybeSingle(),
+      ]);
+
+      if (conta) {
+        return NextResponse.json(
+          { error: "Este número já tem conta. Use «Já tem conta» para o associar à carteira." },
+          { status: 409 }
+        );
+      }
+      if (outraReserva) {
+        return NextResponse.json(
+          { error: "Este número já está reservado. Cancele a outra reserva primeiro." },
+          { status: 409 }
+        );
+      }
+
+      const { count } = await supabaseAdmin
+        .from("sales")
+        .select("id", { count: "exact", head: true })
+        .is("customer_id", null)
+        .eq("customer_phone", r.phone);
+      vendasOrfas = count ?? 0;
+
+      atualizacao.phone = telefone;
+    }
+  }
+
+  if (Object.keys(atualizacao).length === 0) {
+    return NextResponse.json({ error: "Nada para actualizar." }, { status: 400 });
+  }
+
+  const { error } = await supabaseAdmin
+    .from("reserved_customers")
+    .update(atualizacao)
+    .eq("id", id);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  return NextResponse.json({ ok: true, vendas_orfaas: vendasOrfas });
+}
+
+/**
  * DELETE /api/vendedor/clientes?id=<reserva>
  *
  * Cancela uma reserva por activar. Sem isto, um número mal digitado ficava

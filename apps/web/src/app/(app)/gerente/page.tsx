@@ -121,6 +121,7 @@ export default async function ManagerDashboardPage() {
           <Action href="/gerente/relatorios" title="Relatórios" />
           <Action href="/gerente/conteudos" title="Conteúdos publicados" />
           <Action href="/gerente/formacao" title="Formação INUKA" />
+          <Action href="/gerente/definicoes" title="Definições e aplicações" />
           <Action href="/designer" title="Estúdio de design" />
         </div>
 

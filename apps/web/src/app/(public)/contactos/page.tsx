@@ -1,8 +1,16 @@
 import Link from "next/link";
 import { Mail, MessageCircle, Phone } from "lucide-react";
-import { TELEFONES_INUKA, telHref, whatsappHref } from "@/lib/contactos";
+import { telHref, whatsappHref, mailHref } from "@/lib/contactos";
+import { lerDefinicoes } from "@/lib/definicoes-server";
 
-export default function ContactosPage() {
+export const dynamic = "force-dynamic";
+
+export default async function ContactosPage() {
+  // Os contactos vêm das definições que a gerência edita em
+  // `/gerente/definicoes`; o que está em `lib/contactos.ts` é só a origem.
+  const defs = await lerDefinicoes();
+  const telefones = defs.telefones;
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-14">
       <h1 className="text-3xl font-light tracking-tight text-[#F5F5F5] sm:text-4xl">Contactos</h1>
@@ -14,7 +22,7 @@ export default function ContactosPage() {
         <div className="group rounded-xl border border-[#262626] bg-[#141414] p-6 transition hover:border-[#C9A962]/50">
           <Phone className="h-5 w-5 text-[#C9A962]" />
           <p className="mt-3 text-sm font-medium text-[#E5E5E5]">Apoio ao cliente</p>
-          {TELEFONES_INUKA.map((t) => (
+          {telefones.map((t) => (
             <a
               key={t}
               href={telHref(t)}
@@ -29,7 +37,7 @@ export default function ContactosPage() {
         <div className="group rounded-xl border border-[#262626] bg-[#141414] p-6 transition hover:border-[#C9A962]/50">
           <MessageCircle className="h-5 w-5 text-[#C9A962]" />
           <p className="mt-3 text-sm font-medium text-[#E5E5E5]">WhatsApp</p>
-          {TELEFONES_INUKA.map((t) => (
+          {telefones.map((t) => (
             <a
               key={t}
               href={whatsappHref(t)}
@@ -44,12 +52,12 @@ export default function ContactosPage() {
         </div>
 
         <a
-          href="mailto:info@inuka.ao"
+          href={mailHref(defs.email)}
           className="group rounded-xl border border-[#262626] bg-[#141414] p-6 transition hover:border-[#C9A962]/50"
         >
           <Mail className="h-5 w-5 text-[#C9A962]" />
           <p className="mt-3 text-sm font-medium text-[#E5E5E5]">E-mail</p>
-          <p className="mt-1 text-[#C9A962]">info@inuka.ao</p>
+          <p className="mt-1 break-all text-[#C9A962]">{defs.email}</p>
           <p className="mt-1 text-xs text-[#6F6F6F]">Resposta em até 48 horas</p>
         </a>
 

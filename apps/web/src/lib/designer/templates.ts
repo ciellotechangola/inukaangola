@@ -319,7 +319,7 @@ const flyer = pagina("Flyer", fundo("#0D0D0D"), [
     letterSpacing: 6,
   }),
   t(90, 1010, 700, 60, "+244 900 000 000", { fontSize: 34, fontWeight: 500 }),
-  t(90, 1070, 800, 60, "vendas@inuka.ao", { fontSize: 34, fontWeight: 400, color: CINZA }),
+  t(90, 1070, 800, 60, "inukaangolaa@gmail.com", { fontSize: 34, fontWeight: 400, color: CINZA }),
   forma("rect", 0, 1554, 1240, 200, { fill: "rgba(201,169,98,0.14)" }),
   t(90, 1620, 1060, 60, "ALWAYS WITH YOU", {
     fontSize: 30,

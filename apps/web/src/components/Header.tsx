@@ -61,6 +61,9 @@ export default function Header() {
   // formação) o menu passava a não caber a partir de 768 px.
   const navLinks: { href: string; label: string; desde?: "md" | "lg" }[] = [
     { href: "/catalogo", label: "Catálogo" },
+    // Descarregar fica junto ao catálogo: é a segunda coisa que um visitante
+    // procura depois de ver os produtos — ter a app no telemóvel.
+    { href: "/download", label: "Descarregar", desde: "md" },
     // Pedidos fica logo a seguir ao catálogo: é a página que o cliente e a
     // gestão abrem todos os dias. Cada perfil vê a que lhe compete — o cliente
     // os seus, o gestor os de toda a operação.

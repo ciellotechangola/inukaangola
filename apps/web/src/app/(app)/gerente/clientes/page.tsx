@@ -8,6 +8,7 @@ import TabelaResponsiva from "@/components/TabelaResponsiva";
 import AtribuirColaborador from "./AtribuirColaborador";
 import EditarCliente from "./EditarCliente";
 import NovoCliente from "./NovoCliente";
+import ReservasPorActivar from "./ReservasPorActivar";
 import ProvinciaSelect from "../colaboradores/ProvinciaSelect";
 
 export const dynamic = "force-dynamic";
@@ -38,7 +39,7 @@ export default async function ClientesPage({
   const supabase = await createClientServer();
   const nacional = profile.is_national_admin || profile.provincia_id === null;
 
-  const [clientesRes, vendedoresRes, vinculosRes, provincias] = await Promise.all([
+  const [clientesRes, vendedoresRes, vinculosRes, provincias, reservasRes] = await Promise.all([
     supabase
       .from("profiles")
       .select("id, full_name, phone, neighborhood, is_active, created_at, provincia_id, referencia, avatar_url")
@@ -53,6 +54,14 @@ export default async function ClientesPage({
       .from("seller_customers")
       .select("customer_id, seller_id, is_active, assigned_by, assigned_at"),
     listarProvincias(supabase),
+    // Reservas por activar: até aqui só o colaborador as via. São dados da
+    // operação e a gestão tem de os poder corrigir (um número trocado ao
+    // balcão) sem cancelar a reserva.
+    supabase
+      .from("reserved_customers")
+      .select("id, full_name, phone, neighborhood, provincia_id, created_at, seller_id")
+      .eq("status", "reservado")
+      .order("created_at", { ascending: false }),
   ]);
 
   const clientes = (clientesRes.data ?? []) as Perfil[];
@@ -90,6 +99,25 @@ export default async function ClientesPage({
 
   const semColaborador = clientes.filter((c) => !colaboradorDe.has(c.id)).length;
 
+  const nomeProvincia = new Map(provincias.map((p) => [p.id, p.nome]));
+  const reservas = ((reservasRes.data ?? []) as {
+    id: string;
+    full_name: string | null;
+    phone: string;
+    neighborhood: string | null;
+    provincia_id: string | null;
+    created_at: string;
+    seller_id: string;
+  }[]).map((r) => ({
+    id: r.id,
+    nome: r.full_name?.trim() || "Cliente por activar",
+    telefone: r.phone,
+    bairro: r.neighborhood,
+    provincia: r.provincia_id ? nomeProvincia.get(r.provincia_id) ?? null : null,
+    colaborador: nomeVendedor.get(r.seller_id) ?? null,
+    desde: r.created_at,
+  }));
+
   return (
     <main className="mx-auto max-w-5xl px-4 py-10">
       <Link href="/gerente" className="mb-6 inline-block text-sm text-[#A3A3A3] hover:text-[#C9A962]">
@@ -100,8 +128,10 @@ export default async function ClientesPage({
         <div>
           <h1 className="text-3xl font-light text-[#F5F5F5]">Clientes</h1>
           <p className="mt-1 text-sm text-[#A3A3A3]">
-            {clientes.length} {clientes.length === 1 ? "cliente" : "clientes"} ·{" "}
+            {clientes.length} {clientes.length === 1 ? "conta" : "contas"} aberta
+            {clientes.length === 1 ? "" : "s"} ·{" "}
             {clientes.length - semColaborador} com colaborador · {semColaborador} sem colaborador
+            {reservas.length > 0 && ` · ${reservas.length} por activar`}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -128,6 +158,8 @@ export default async function ClientesPage({
           {clientesRes.error.message}
         </div>
       )}
+
+      <ReservasPorActivar reservas={reservas} />
 
       {visiveis.length === 0 ? (
         <div className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-10 text-center">

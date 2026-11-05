@@ -103,8 +103,12 @@ export async function PATCH(
       });
 
       if (erroAuth) {
+        // O erro do Supabase diz o que se passa («já existe», «limite de
+        // pedidos»); a mensagem genérica deixava o gestor sem saber se tente
+        // outra vez ou mude de número.
+        const detalhe = erroAuth.message || "erro desconhecido";
         return NextResponse.json(
-          { error: "Não foi possível alterar o telefone de acesso." },
+          { error: `Não foi possível alterar o telefone de acesso: ${detalhe}` },
           { status: 500 }
         );
       }
