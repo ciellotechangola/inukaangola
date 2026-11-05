@@ -11,7 +11,13 @@ porque a Admin API exige a `service_role`, que nunca pode estar no binário.
 | Catálogo | grelha de produtos, pesquisa por nome, filtro por categoria, "ver mais" |
 | Carrinho | persistido no telemóvel, `place_order` idempotente por `client_ref` |
 | Mensagens | conversas e chat em tempo real (Realtime do Supabase) |
-| Perfil | fotografia (upload para o bucket `avatars`), encomendas, favoritos, servidor, sair |
+| Perfil | fotografia (upload para o bucket `avatars`), encomendas, **as minhas compras**, favoritos, servidor, sair |
+
+**As minhas compras** (`lib/features/purchases`) lê de `minhas_compras()` e mostra
+o que o cliente comprou a um colaborador: produto, quantidade, preço, total e
+quem vendeu — incluindo as compras registadas **antes** de ele ter conta, que
+`ligar_reserva_ao_cliente` entrega no momento do registo. Requer a migração
+`0009` (`supabase/PATCH_RESERVAS.sql`); sem ela a página explica o que falta.
 
 Quem tem papel `seller` vê ainda **O meu painel** (`colaborador_painel()`):
 vendas do mês, comissões por receber, clientes, posição na equipa e meta.
@@ -23,11 +29,13 @@ site — a app é a loja, não o back office.
 
 ```bash
 # a partir de apps/mobile
-flutter build apk --release \
-  --dart-define=INUKA_API_BASE_URL=http://192.168.8.34:3000
+flutter build apk --release --split-per-abi   # 3 APKs (armeabi-v7a, arm64-v8a, x86_64)
+flutter build apk --release                   # universal
 ```
 
-O APK fica em `build/app/outputs/flutter-apk/app-release.apk`.
+O APK fica em `build/app/outputs/flutter-apk/`. Versão actual: **1.0.2**
+(`versionCode` 3 universal, 1003 / 2003 / 4003 por ABI — o Flutter multiplica o
+build number por 1000 e soma o índice da arquitectura).
 
 O `--dart-define` é apenas o **endereço sugerido**: o valor real pode ser
 mudado na app, em **Perfil → Servidor**, e fica guardado no telemóvel. É o que

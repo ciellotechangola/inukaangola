@@ -286,13 +286,19 @@ acesso à formação.
 
 A app Flutter (`apps/mobile`) é a loja no telemóvel: catálogo com pesquisa e
 filtro por categoria, ficha de produto com favoritos, carrinho persistente,
-mensagens em tempo real e perfil com fotografia. Quem é colaborador vê ainda
-**O meu painel** (vendas, comissões, clientes, meta). A gestão continua no site.
+mensagens em tempo real e perfil com fotografia. Em **Perfil → As minhas
+compras** o cliente vê o que comprou a um colaborador — incluindo o que foi
+registado **antes** de ele ter conta, com produto, quantidade, preço e quem
+vendeu (`minhas_compras()`). Quem é colaborador vê ainda **O meu painel**
+(vendas, comissões, clientes, meta). A gestão continua no site.
+
+Versão actual: **1.0.2** (`versionCode` 3 universal, 1003 / 2003 / 4003 por ABI).
 
 ```bash
 cd apps/mobile
-flutter build apk --release --dart-define=INUKA_API_BASE_URL=http://<IP-DO-PC>:3000
-# → build/app/outputs/flutter-apk/app-release.apk
+flutter build apk --release --split-per-abi   # 3 APKs, um por arquitectura
+flutter build apk --release                   # universal
+# → build/app/outputs/flutter-apk/
 ```
 
 O endereço dado em `--dart-define` é só a sugestão inicial: pode ser mudado no

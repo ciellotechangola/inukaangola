@@ -196,6 +196,21 @@ Consequências, ditas sem rodeios:
   — mas não vale a pena tentar submeter sem antes trazer funcionalidade nativa.
 - **Actualizações são automáticas.** Como carrega o site, um deploy novo chega a
   todos os telefones no instante seguinte. É a grande vantagem desta abordagem.
+  **Não é preciso voltar a gerar o `.ipa` quando muda o site** — as novidades
+  (por exemplo `/cliente/compras`, as reservas da carteira) aparecem sem
+  reinstalar nada.
+
+### Versão do `.ipa`
+
+`node scripts/pos-add.mjs` escreve `CFBundleShortVersionString` a partir do
+`version` em `apps/capacitor/package.json` (actualmente **1.0.2**) e
+`CFBundleVersion` a partir de `INUKA_BUILD` (por omissão `3`). Sem isto, todos
+os envios saíam como `1.0` e o TestFlight recusava dois builds com o mesmo
+número. Para um envio novo sem mudar a versão:
+
+```bash
+INUKA_BUILD=4 node scripts/pos-add.mjs
+```
 
 ### Se um dia for para a App Store
 

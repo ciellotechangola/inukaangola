@@ -9,7 +9,7 @@
 // Usa `plutil`, que vem com o macOS. Não editamos o XML à mão: um plist mal
 // formado impede o Xcode de abrir o projecto.
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -54,6 +54,17 @@ function apagar(chave) {
 // Nome debaixo do ícone. Sem isto aparece "App" ou "INUKA App".
 definir("CFBundleDisplayName", "string", "INUKA");
 definir("CFBundleName", "string", "INUKA");
+
+// Versão do .ipa. Sem isto, todos os envios saíam como 1.0 (o valor que o
+// template do Capacitor traz) e o TestFlight recusava dois builds com o mesmo
+// número. A versão vem do `package.json` para haver uma só fonte; o build
+// number pode ser forçado com `INUKA_BUILD=4 npm run ios:pos`.
+{
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  const build = process.env.INUKA_BUILD ?? "3";
+  definir("CFBundleShortVersionString", "string", pkg.version);
+  definir("CFBundleVersion", "string", build);
+}
 
 // A loja e a área de gestão foram desenhadas na vertical. Rodar para horizontal
 // parte as tabelas e as barras inferiores.

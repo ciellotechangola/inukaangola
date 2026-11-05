@@ -5,6 +5,7 @@ import '../../config/app_config.dart';
 import '../../widgets/foto_perfil.dart';
 import '../favorites/favorites_page.dart';
 import '../orders/orders_page.dart';
+import '../purchases/purchases_page.dart';
 import '../settings/servidor_page.dart';
 import '../vendedor/painel_page.dart';
 
@@ -189,6 +190,14 @@ class _ProfilePageState extends State<ProfilePage> {
               descricao: 'Estado e histórico',
               aoTocar: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const OrdersPage()),
+              ),
+            ),
+            _Item(
+              icone: Icons.receipt_long_outlined,
+              titulo: 'As minhas compras',
+              descricao: 'O que comprou a um colaborador',
+              aoTocar: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const PurchasesPage()),
               ),
             ),
             _Item(
