@@ -3077,6 +3077,152 @@ await check("remover a encomenda de teste", async () => {
   return "encomenda e linhas removidas";
 });
 
+// ---------------------------------------------------------------------------
+// CRUD de produtos: a gestão edita qualquer campo e elimina o que não tem
+// histórico. O que já foi vendido não se apaga — a FK protege a venda.
+// ---------------------------------------------------------------------------
+const PRODUTO_CRUD = "[TESTE] Produto a editar";
+
+async function limparProdutosDeTeste() {
+  const { data } = await sb(
+    `/rest/v1/products?select=id&name=like.*TESTE*`,
+    { key: SR, jwt: SR }
+  );
+  for (const p of data ?? []) {
+    await sb(`/rest/v1/products?id=eq.${p.id}`, {
+      method: "DELETE",
+      key: SR,
+      jwt: SR,
+      prefer: "return=minimal",
+    });
+  }
+}
+await limparProdutosDeTeste();
+
+await check("gestor edita nome, preços e descrição de um produto", async () => {
+  const criado = await sb("/rest/v1/products?select=id", {
+    method: "POST",
+    jwt: sGestor.access_token,
+    prefer: "return=representation",
+    body: { name: PRODUTO_CRUD, official_price: 10000, is_active: true },
+  });
+  assert(criado.status === 201, `criar: ${criado.status} ${JSON.stringify(criado.data).slice(0, 200)}`);
+  const id = criado.data[0].id;
+
+  // É exactamente o que o formulário faz no PATCH: um único update com os
+  // campos todos, incluindo os que a listagem não mostra (descrição).
+  const editado = await sb(
+    `/rest/v1/products?id=eq.${id}&select=name,official_price,promotional_price,description,is_active`,
+    {
+      method: "PATCH",
+      jwt: sGestor.access_token,
+      prefer: "return=representation",
+      body: {
+        name: "[TESTE] Produto editado",
+        official_price: 17500,
+        promotional_price: 15000,
+        description: "Descrição nova",
+      },
+    }
+  );
+  assert(editado.status === 200, `editar: ${editado.status} ${JSON.stringify(editado.data).slice(0, 200)}`);
+  const linha = editado.data[0];
+  assert(linha.name === "[TESTE] Produto editado", `nome: ${linha.name}`);
+  assert(Number(linha.official_price) === 17500, `preço: ${linha.official_price}`);
+  assert(Number(linha.promotional_price) === 15000, `promocional: ${linha.promotional_price}`);
+  assert(linha.description === "Descrição nova", `descrição: ${linha.description}`);
+  // Editar não pode reactivar um produto desactivado às escondidas.
+  assert(linha.is_active === true, "o is_active mudou sozinho");
+
+  // Eliminar sem histórico é permitido.
+  const apagado = await sb(`/rest/v1/products?id=eq.${id}`, {
+    method: "DELETE",
+    jwt: sGestor.access_token,
+    prefer: "return=minimal",
+  });
+  assert(apagado.status === 204 || apagado.status === 200, `eliminar: ${apagado.status}`);
+
+  const { data: sobrou } = await sb(`/rest/v1/products?select=id&id=eq.${id}`, {
+    key: SR,
+    jwt: SR,
+  });
+  assert((sobrou ?? []).length === 0, "o produto ficou na base");
+  return "editado (4 campos) e eliminado";
+});
+
+await check("produto já vendido não se elimina — a FK guarda o histórico", async () => {
+  const criado = await sb("/rest/v1/products?select=id,name", {
+    method: "POST",
+    jwt: sGestor.access_token,
+    prefer: "return=representation",
+    body: { name: "[TESTE] Produto vendido", official_price: 9000, is_active: true },
+  });
+  assert(criado.status === 201, `criar: ${criado.status}`);
+  const id = criado.data[0].id;
+
+  await rpcAdmin("set_product_stock", {
+    p_product_id: id,
+    p_quantity: 5,
+    p_reason: "Stock de teste",
+  });
+
+  const venda = await sb("/rest/v1/rpc/register_sale_by_phone", {
+    method: "POST",
+    jwt: sVendedor.access_token,
+    body: {
+      p_items: [{ product_id: id, quantity: 1 }],
+      p_customer_phone: "+244924200077",
+      p_payment_method: "cash",
+      p_payment_status: "paid",
+    },
+  });
+  assert(venda.status === 200, `vender: ${venda.status} ${JSON.stringify(venda.data).slice(0, 200)}`);
+
+  const tentativa = await sb(`/rest/v1/products?id=eq.${id}`, {
+    method: "DELETE",
+    jwt: sGestor.access_token,
+    prefer: "return=minimal",
+  });
+  // 409 = violação de FK. É este o erro que o ecrã traduz em «use Desativar».
+  assert(tentativa.status === 409, `devia recusar, deu ${tentativa.status}`);
+
+  // Desactivar, sim: é a saída que o ecrã sugere.
+  const desactivado = await sb(`/rest/v1/products?id=eq.${id}`, {
+    method: "PATCH",
+    jwt: sGestor.access_token,
+    prefer: "return=minimal",
+    body: { is_active: false },
+  });
+  assert(desactivado.status === 204 || desactivado.status === 200, `desactivar: ${desactivado.status}`);
+
+  // Limpeza: a venda sai primeiro (com as linhas, por CASCADE), depois o produto.
+  const { data: vendas } = await sb(
+    `/rest/v1/sales?select=id&customer_phone=eq.${encodeURIComponent("+244924200077")}`,
+    { key: SR, jwt: SR }
+  );
+  for (const v of vendas ?? []) {
+    await sb(`/rest/v1/sales?id=eq.${v.id}`, {
+      method: "DELETE",
+      key: SR,
+      jwt: SR,
+      prefer: "return=minimal",
+    });
+  }
+  await sb(`/rest/v1/reserved_customers?phone=eq.${encodeURIComponent("+244924200077")}`, {
+    method: "DELETE",
+    key: SR,
+    jwt: SR,
+    prefer: "return=minimal",
+  });
+  await sb(`/rest/v1/products?id=eq.${id}`, {
+    method: "DELETE",
+    key: SR,
+    jwt: SR,
+    prefer: "return=minimal",
+  });
+  return "409 na eliminação · desactivar passa";
+});
+
 await check("remover contas de teste", async () => {
   for (const u of [CLIENTE, VENDEDOR, GESTOR]) await apagarConta(u.phone);
   // O cliente que o colaborador abriu na carteira.

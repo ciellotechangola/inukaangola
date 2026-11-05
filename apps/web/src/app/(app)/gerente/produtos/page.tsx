@@ -32,6 +32,7 @@ interface ProductRow {
   name: string;
   sku: string | null;
   category_id: string | null;
+  description: string | null;
   official_price: number;
   promotional_price: number | null;
   is_active: boolean;
@@ -171,6 +172,8 @@ export default function ManagerProductsPage() {
   const [notice, setNotice] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Produto a ser editado. `null` = o formulário está a criar um novo.
+  const [editando, setEditando] = useState<ProductRow | null>(null);
 
   // Identidade provincial de quem está a gerir.
   const [minhaProvincia, setMinhaProvincia] = useState<string | null>(null);
@@ -211,7 +214,7 @@ export default function ManagerProductsPage() {
         supabase
           .from("products")
           .select(
-            "id, name, sku, category_id, official_price, promotional_price, is_active, provincia_id, inventory(quantity, provincia_id), images:product_images(id, url, storage_path, is_primary)"
+            "id, name, sku, category_id, description, official_price, promotional_price, is_active, provincia_id, inventory(quantity, provincia_id), images:product_images(id, url, storage_path, is_primary)"
           )
           .order("created_at", { ascending: false }),
         supabase.from("categories").select("id, name").order("name"),
@@ -307,7 +310,48 @@ export default function ManagerProductsPage() {
     }
   }
 
-  async function handleCreate(e: React.FormEvent) {
+  function formVazio() {
+    return {
+      name: "",
+      sku: "",
+      category_id: "",
+      description: "",
+      official_price: "",
+      promotional_price: "",
+      stock: "0",
+      imagemUrl: "",
+      provincia_id: souNacional ? "" : (minhaProvincia ?? ""),
+    };
+  }
+
+  function fecharFormulario() {
+    limparImagem(false);
+    setEditando(null);
+    setShowForm(false);
+    setForm(formVazio());
+  }
+
+  function abrirEdicao(p: ProductRow) {
+    setError("");
+    setNotice("");
+    setEditando(p);
+    setForm({
+      name: p.name,
+      sku: p.sku ?? "",
+      category_id: p.category_id ?? "",
+      description: p.description ?? "",
+      official_price: String(p.official_price ?? ""),
+      promotional_price: p.promotional_price === null ? "" : String(p.promotional_price),
+      stock: "0",
+      imagemUrl: "",
+      provincia_id: p.provincia_id ?? "",
+    });
+    limparImagem(false);
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function handleGuardar(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setNotice("");
@@ -325,19 +369,56 @@ export default function ManagerProductsPage() {
     setSaving(true);
     const supabase = createClientBrowser();
 
+    // Campos comuns à criação e à edição. O stock fica de fora de propósito:
+    // é por província e muda-se no botão «Stock», que deixa rasto em
+    // inventory_movements.
+    const campos = {
+      name: form.name.trim(),
+      sku: form.sku.trim() || null,
+      category_id: form.category_id || null,
+      description: form.description.trim() || null,
+      official_price: price,
+      promotional_price: form.promotional_price ? Number(form.promotional_price) : null,
+      // Produto nacional (NULL) ou de uma província. Um gestor provincial
+      // não pode escolher outra: o servidor corrige-o de qualquer forma.
+      provincia_id: form.provincia_id || null,
+    };
+
+    if (editando) {
+      const { error: upErr } = await supabase
+        .from("products")
+        .update(campos)
+        .eq("id", editando.id);
+
+      if (upErr) {
+        setError(upErr.message);
+        setSaving(false);
+        return;
+      }
+
+      const avisos: string[] = [];
+      if (ficheiro || form.imagemUrl.trim()) {
+        try {
+          await guardarImagem(editando.id, ficheiro, form.imagemUrl);
+        } catch (err) {
+          avisos.push(`a imagem falhou: ${err instanceof Error ? err.message : "erro"}`);
+        }
+      }
+
+      setNotice(
+        avisos.length > 0 ? `Produto actualizado — ${avisos.join(" · ")}.` : "Produto actualizado."
+      );
+      fecharFormulario();
+      setSaving(false);
+      await load();
+      return;
+    }
+
     const { data: created, error: insErr } = await supabase
       .from("products")
       .insert({
-        name: form.name.trim(),
-        sku: form.sku.trim() || null,
-        category_id: form.category_id || null,
-        description: form.description.trim() || null,
-        official_price: price,
-        promotional_price: form.promotional_price ? Number(form.promotional_price) : null,
+        ...campos,
         is_active: true,
-        // Produto nacional (NULL) ou de uma província. Um gestor provincial
-        // não pode escolher outra: o servidor corrige-o de qualquer forma.
-        provincia_id: form.provincia_id || null,
       })
       .select("id")
       .single();
@@ -378,20 +459,65 @@ export default function ManagerProductsPage() {
     setNotice(
       avisos.length > 0 ? `Produto criado — ${avisos.join(" · ")}.` : "Produto criado com sucesso."
     );
-    limparImagem(false);
-    setForm({
-      name: "",
-      sku: "",
-      category_id: "",
-      description: "",
-      official_price: "",
-      promotional_price: "",
-      stock: "0",
-      imagemUrl: "",
-      provincia_id: souNacional ? "" : (minhaProvincia ?? ""),
-    });
-    setShowForm(false);
+    fecharFormulario();
     setSaving(false);
+    await load();
+  }
+
+  // Tabelas que apontam para o produto sem ON DELETE CASCADE: se houver
+  // história, o DELETE rebenta na FK. Nesse caso o correcto é desactivar.
+  async function eliminar(p: ProductRow) {
+    setError("");
+    setNotice("");
+
+    const supabase = createClientBrowser();
+    const contar = (tabela: string) =>
+      supabase
+        .from(tabela)
+        .select("id", { count: "exact", head: true })
+        .eq("product_id", p.id)
+        .then(({ count }) => count ?? 0);
+
+    const [vendas, encomendas, reservas, descontos] = await Promise.all([
+      contar("sale_items"),
+      contar("order_items"),
+      contar("reservation_items"),
+      contar("discount_requests"),
+    ]);
+    const usos = vendas + encomendas + reservas + descontos;
+
+    if (usos > 0) {
+      setError(
+        `«${p.name}» já aparece em ${usos} registo(s) de vendas, encomendas, reservas ou descontos. ` +
+          "Eliminar apagaria esse histórico — use «Desativar» para o tirar da loja sem perder nada."
+      );
+      return;
+    }
+
+    const resposta = window.confirm(
+      `Eliminar «${p.name}» definitivamente?\n\nSão apagados também o stock, as imagens e o histórico de movimentos deste produto. Esta acção não se desfaz.`
+    );
+    if (!resposta) return;
+
+    // Primeiro os ficheiros do Storage: se o DELETE do produto passar e a
+    // remoção do ficheiro falhar, ficam órfãos sem forma de os encontrar.
+    const caminhos = (p.images ?? []).map((i) => i.storage_path).filter(Boolean);
+    if (caminhos.length > 0) {
+      await supabase.storage.from(BUCKET).remove(caminhos);
+    }
+
+    const { error: delErr } = await supabase.from("products").delete().eq("id", p.id);
+    if (delErr) {
+      setError(
+        delErr.code === "23503"
+          ? `«${p.name}» ainda está referenciado noutro sítio. Desactive-o em vez de eliminar.`
+          : delErr.message
+      );
+      return;
+    }
+
+    if (editando?.id === p.id) fecharFormulario();
+    setNotice(`«${p.name}» eliminado.`);
     await load();
   }
 
@@ -493,7 +619,16 @@ export default function ManagerProductsPage() {
             ))}
           </select>
           <button
-            onClick={() => setShowForm((v) => !v)}
+            onClick={() => {
+              if (showForm && !editando) {
+                fecharFormulario();
+                return;
+              }
+              setEditando(null);
+              limparImagem(false);
+              setForm(formVazio());
+              setShowForm(true);
+            }}
             className="inline-flex items-center gap-2 rounded-lg bg-[#C9A962] px-4 py-2 text-sm font-medium text-[#0A0A0A] transition hover:bg-[#E3D5A7]"
           >
             <Plus className="h-4 w-4" />
@@ -511,8 +646,29 @@ export default function ManagerProductsPage() {
       {notice && <div className="mb-4 rounded-lg bg-green-950/50 p-3 text-sm text-green-200">{notice}</div>}
 
       {showForm && (
-        <form onSubmit={handleCreate} className="mb-8 rounded-xl border border-[#262626] bg-[#1A1A1A] p-6">
-          <h2 className="mb-4 text-lg font-medium text-[#F5F5F5]">Novo produto</h2>
+        <form onSubmit={handleGuardar} className="mb-8 rounded-xl border border-[#262626] bg-[#1A1A1A] p-6">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h2 className="text-lg font-medium text-[#F5F5F5]">
+                {editando ? `Editar «${editando.name}»` : "Novo produto"}
+              </h2>
+              {editando && (
+                <p className="mt-1 text-xs text-[#6F6F6F]">
+                  O stock não se muda aqui — use o botão «Stock», que fica registado no histórico.
+                </p>
+              )}
+            </div>
+            {editando && (
+              <button
+                type="button"
+                onClick={fecharFormulario}
+                className="inline-flex items-center gap-1 text-xs text-[#A3A3A3] hover:text-[#F5F5F5]"
+              >
+                <X className="h-3.5 w-3.5" />
+                Cancelar edição
+              </button>
+            )}
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <input
               value={form.name}
@@ -538,14 +694,16 @@ export default function ManagerProductsPage() {
                 </option>
               ))}
             </select>
-            <input
-              value={form.stock}
-              onChange={(e) => setForm({ ...form, stock: e.target.value })}
-              type="number"
-              min={0}
-              placeholder="Stock inicial"
-              className={campo}
-            />
+            {!editando && (
+              <input
+                value={form.stock}
+                onChange={(e) => setForm({ ...form, stock: e.target.value })}
+                type="number"
+                min={0}
+                placeholder="Stock inicial"
+                className={campo}
+              />
+            )}
             <select
               value={form.provincia_id}
               onChange={(e) => setForm({ ...form, provincia_id: e.target.value })}
@@ -651,13 +809,24 @@ export default function ManagerProductsPage() {
             </p>
           </div>
 
-          <button
-            type="submit"
-            disabled={saving}
-            className="mt-4 rounded-lg bg-[#C9A962] px-6 py-2.5 text-sm font-medium text-[#0A0A0A] transition hover:bg-[#E3D5A7] disabled:opacity-60"
-          >
-            {saving ? "A guardar..." : "Guardar produto"}
-          </button>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="submit"
+              disabled={saving}
+              className="rounded-lg bg-[#C9A962] px-6 py-2.5 text-sm font-medium text-[#0A0A0A] transition hover:bg-[#E3D5A7] disabled:opacity-60"
+            >
+              {saving ? "A guardar..." : editando ? "Guardar alterações" : "Guardar produto"}
+            </button>
+            {editando && (
+              <button
+                type="button"
+                onClick={fecharFormulario}
+                className="rounded-lg border border-[#404040] px-5 py-2.5 text-sm text-[#E5E5E5] transition hover:border-[#C9A962] hover:text-[#C9A962]"
+              >
+                Cancelar
+              </button>
+            )}
+          </div>
         </form>
       )}
 
@@ -712,6 +881,12 @@ export default function ManagerProductsPage() {
                         ficavam três botões esmagados em 60 px. */}
                     <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-[#232323] pt-2 md:hidden">
                       <button
+                        onClick={() => abrirEdicao(p)}
+                        className="text-xs text-[#C9A962] hover:underline"
+                      >
+                        Editar
+                      </button>
+                      <button
                         onClick={() => abrirModal(p)}
                         className="text-xs text-[#C9A962] hover:underline"
                       >
@@ -728,6 +903,12 @@ export default function ManagerProductsPage() {
                         className="text-xs text-[#A3A3A3] hover:text-[#F5F5F5]"
                       >
                         {p.is_active ? "Desativar" : "Ativar"}
+                      </button>
+                      <button
+                        onClick={() => eliminar(p)}
+                        className="text-xs text-red-300 hover:text-red-200"
+                      >
+                        Eliminar
                       </button>
                     </div>
                   </div>
@@ -775,6 +956,12 @@ export default function ManagerProductsPage() {
                 return (
                   <>
                     <button
+                      onClick={() => abrirEdicao(p)}
+                      className="mr-3 text-xs text-[#C9A962] hover:underline"
+                    >
+                      Editar
+                    </button>
+                    <button
                       onClick={() => abrirModal(p)}
                       className="mr-3 text-xs text-[#C9A962] hover:underline"
                     >
@@ -788,9 +975,15 @@ export default function ManagerProductsPage() {
                     </button>
                     <button
                       onClick={() => toggleActive(p)}
-                      className="text-xs text-[#A3A3A3] hover:text-[#F5F5F5]"
+                      className="mr-3 text-xs text-[#A3A3A3] hover:text-[#F5F5F5]"
                     >
                       {p.is_active ? "Desativar" : "Ativar"}
+                    </button>
+                    <button
+                      onClick={() => eliminar(p)}
+                      className="text-xs text-red-300 hover:text-red-200"
+                    >
+                      Eliminar
                     </button>
                   </>
                 );
