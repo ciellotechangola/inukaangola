@@ -161,11 +161,16 @@ export async function registerSale(
  * registo. Esta variante grava o telefone na própria venda e reserva o cliente
  * para este colaborador — quando a pessoa se registar, a compra passa a ser
  * dela (ver `ligar_reserva_ao_cliente`).
+ *
+ * O nome é anotado numa segunda chamada, e falha em silêncio: a reserva já foi
+ * criada pela venda, por isso um nome que não se grave deixa a carteira como
+ * estava (linha «por activar», sem nome) em vez de perder a venda.
  */
 export async function registerSaleByPhone(
   items: CartLine[],
   phone: string,
   options: {
+    customerName?: string;
     paymentMethod?: string;
     paymentStatus?: PaymentStatus;
     notes?: string;
@@ -182,6 +187,19 @@ export async function registerSaleByPhone(
     p_client_ref: options.clientRef ?? crypto.randomUUID(),
   });
   rpcError(error);
+
+  const nome = options.customerName?.trim();
+  if (nome && nome.length >= 3) {
+    // Best-effort: a venda e a reserva já estão gravadas. Se isto falhar, a
+    // linha fica sem nome — nunca se perde a venda. Ver
+    // `POST /api/vendedor/clientes/nome`.
+    await fetch("/api/vendedor/clientes/nome", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone, full_name: nome }),
+    }).catch(() => undefined);
+  }
+
   return data as SaleResult & { customer_phone: string; reservado: boolean };
 }
 

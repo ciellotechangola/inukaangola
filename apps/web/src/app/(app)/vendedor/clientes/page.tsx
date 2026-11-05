@@ -126,24 +126,61 @@ export default async function SellerCustomersPage() {
   // Compras registadas com estes telefones e ainda sem dono. É o que o cliente
   // vai herdar no registo — o colaborador tem de o ver antes, para saber que
   // vale a pena ir atrás da pessoa.
-  const pendentesPorTelefone = new Map<string, { compras: number; total: number }>();
+  const pendentesPorTelefone = new Map<
+    string,
+    { compras: number; total: number; produtos: { nome: string; quantidade: number }[] }
+  >();
   const telefones = reservasLidas.map((r) => r.phone);
   if (telefones.length) {
     const { data: pendentes } = await supabase
       .from("sales")
-      .select("customer_phone, total_amount")
+      .select("id, customer_phone, total_amount")
       .is("customer_id", null)
       .in("customer_phone", telefones);
 
-    for (const v of (pendentes ?? []) as {
+    const vendasPendentes = (pendentes ?? []) as {
+      id: string;
       customer_phone: string | null;
       total_amount: number | string;
-    }[]) {
+    }[];
+
+    const telefoneDaVenda = new Map<string, string>();
+    for (const v of vendasPendentes) {
       if (!v.customer_phone) continue;
-      const atual = pendentesPorTelefone.get(v.customer_phone) ?? { compras: 0, total: 0 };
+      telefoneDaVenda.set(v.id, v.customer_phone);
+      const atual = pendentesPorTelefone.get(v.customer_phone) ?? {
+        compras: 0,
+        total: 0,
+        produtos: [],
+      };
       atual.compras += 1;
       atual.total += Number(v.total_amount) || 0;
       pendentesPorTelefone.set(v.customer_phone, atual);
+    }
+
+    // O que foi comprado, produto a produto. Sem isto a linha da carteira só
+    // sabia dizer «2 compras» — e o colaborador tinha de abrir a venda para
+    // saber o quê.
+    if (telefoneDaVenda.size) {
+      const { data: itens } = await supabase
+        .from("sale_items")
+        .select("sale_id, quantity, product_snapshot")
+        .in("sale_id", [...telefoneDaVenda.keys()]);
+
+      for (const it of (itens ?? []) as {
+        sale_id: string;
+        quantity: number;
+        product_snapshot: { name?: string } | null;
+      }[]) {
+        const telefone = telefoneDaVenda.get(it.sale_id);
+        if (!telefone) continue;
+        const registo = pendentesPorTelefone.get(telefone);
+        if (!registo) continue;
+        registo.produtos.push({
+          nome: it.product_snapshot?.name?.trim() || "Produto",
+          quantidade: it.quantity,
+        });
+      }
     }
   }
 
@@ -162,6 +199,7 @@ export default async function SellerCustomersPage() {
         notas: r.notes,
         comprasPendentes: pendente?.compras ?? 0,
         valorPendente: pendente?.total ?? 0,
+        produtos: pendente?.produtos ?? [],
       };
     }),
     ...ligacoes
@@ -179,6 +217,7 @@ export default async function SellerCustomersPage() {
           notas: null,
           comprasPendentes: 0,
           valorPendente: 0,
+          produtos: [],
         };
       })
       // Um perfil apagado deixa o vínculo órfão: não se mostra uma linha vazia.
@@ -189,10 +228,25 @@ export default async function SellerCustomersPage() {
     ? "A lista de clientes por activar ainda não existe na base de dados. Aplique supabase/PATCH_RESERVAS.sql no SQL Editor do Supabase."
     : error?.message ?? null;
 
+  // Total vendido por este colaborador. Conta **todas** as vendas dele, com
+  // conta associada ou não: somar só os clientes já vinculados deixava de fora
+  // as vendas a telefones por activar, e o colaborador via um número abaixo
+  // do que realmente vendeu.
+  const { data: minhasVendas } = await supabase
+    .from("sales")
+    .select("total_amount")
+    .eq("seller_id", perfil.id);
+
+  const totalVendido = ((minhasVendas ?? []) as { total_amount: number | string }[]).reduce(
+    (n, v) => n + (Number(v.total_amount) || 0),
+    0
+  );
+
   return (
     <CarteiraClientes
       iniciais={linhas}
       totaisIniciais={totais}
+      totalVendido={totalVendido}
       erroInicial={erroInicial}
     />
   );

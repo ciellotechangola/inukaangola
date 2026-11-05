@@ -40,6 +40,8 @@ export interface LinhaCarteira {
   notas: string | null;
   comprasPendentes: number;
   valorPendente: number;
+  /** O que já comprou, produto a produto (vendas à espera do registo). */
+  produtos: { nome: string; quantidade: number }[];
 }
 
 export interface TotaisCliente {
@@ -74,10 +76,12 @@ function dataCurta(iso: string): string {
 export function CarteiraClientes({
   iniciais,
   totaisIniciais,
+  totalVendido,
   erroInicial,
 }: {
   iniciais: LinhaCarteira[];
   totaisIniciais: Record<string, TotaisCliente>;
+  totalVendido: number;
   erroInicial: string | null;
 }) {
   const router = useRouter();
@@ -102,12 +106,12 @@ export function CarteiraClientes({
     );
   }, [iniciais, procura]);
 
-  const clientes = iniciais.filter((l) => l.tipo === "cliente");
   const reservados = iniciais.filter((l) => l.tipo === "reservado");
-  const totalCarteira = clientes.reduce(
-    (n, l) => n + (l.customerId ? totaisIniciais[l.customerId]?.total ?? 0 : 0),
-    0
-  );
+  // Reservar é cadastrar. Quem está por activar já é cliente do colaborador —
+  // conta no total, e a parte «por activar» diz quantos desses ainda não têm
+  // acesso. Antes somavam-se só as contas abertas, e um colaborador com um
+  // cliente reservado lia «0 clientes».
+  const totalClientes = iniciais.length;
   const totalPendente = reservados.reduce((n, l) => n + l.valorPendente, 0);
 
   async function reservar(e: React.FormEvent) {
@@ -211,7 +215,7 @@ export function CarteiraClientes({
         <div>
           <h1 className="text-3xl font-light text-[#F5F5F5]">A minha carteira</h1>
           <p className="mt-1 text-sm text-[#A3A3A3]">
-            {clientes.length} {clientes.length === 1 ? "cliente" : "clientes"}
+            {totalClientes} {totalClientes === 1 ? "cliente" : "clientes"}
             {reservados.length > 0 && (
               <>
                 {" · "}
@@ -221,7 +225,7 @@ export function CarteiraClientes({
               </>
             )}
             {" · "}
-            {formatCurrency(totalCarteira)} vendidos por si
+            {formatCurrency(totalVendido)} vendidos por si
           </p>
           {totalPendente > 0 && (
             <p className="mt-1 text-[11px] text-[#6F6F6F]">
@@ -326,13 +330,17 @@ export function CarteiraClientes({
           <input
             value={notas}
             onChange={(e) => setNotas(e.target.value)}
-            placeholder="Nota para si (opcional) — ex.: comprou óleo em Outubro"
+            placeholder="Nota para si (opcional) — ex.: prefere ser contactado à tarde"
             className={`${ENTRADA} mt-3`}
           />
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <p className="max-w-md text-[11px] text-[#6F6F6F]">
-              Não cria conta nenhuma. Fica registado com a província da sua delegação; o
-              acesso é aberto pelo próprio cliente, com este número.
+              Não cria conta nenhuma. Fica registado com a província da sua delegação; o acesso é
+              aberto pelo próprio cliente, com este número. Para registar uma compra, use{" "}
+              <Link href="/vendedor/vendas/registar" className="text-[#C9A962] hover:underline">
+                Registar venda
+              </Link>{" "}
+              — os produtos e o valor aparecem aqui sozinhos.
             </p>
             <button
               type="submit"
@@ -447,6 +455,16 @@ export function CarteiraClientes({
                     {reservado && linha.notas && (
                       <p className="mt-1 text-[11px] italic text-[#6F6F6F]">“{linha.notas}”</p>
                     )}
+                    {reservado && linha.produtos.length > 0 && (
+                      <ul className="mt-2 space-y-0.5 border-l border-[#3A3324] pl-2">
+                        {linha.produtos.map((produto, i) => (
+                          <li key={`${produto.nome}-${i}`} className="text-[11px] text-[#8A8A8A]">
+                            <span className="text-[#C9A962]">{produto.quantidade}×</span>{" "}
+                            {produto.nome}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
 
                   <div className="text-right">
@@ -520,10 +538,12 @@ export function CarteiraClientes({
       )}
 
       <p className="mt-6 text-xs leading-relaxed text-[#525252]">
-        Tudo o que faz aqui é visível para a gestão: quem reservou ou abriu a conta, quando, e a
-        quem está associada. Um cliente por activar ainda não tem acesso à INUKA — o acesso é
-        criado por ele, com o número reservado. A gestão pode mudar o colaborador de um cliente a
-        qualquer momento em Clientes.
+        Reservar já é cadastrar: a pessoa conta na sua carteira desde o primeiro dia, mesmo antes
+        de ter acesso. Tudo o que faz aqui é visível para a gestão — quem reservou ou abriu a
+        conta, quando, e a quem está associada. Um cliente por activar ainda não entra na INUKA: a
+        conta é criada por ele, com o número reservado, e nesse momento recebe as compras que já
+        tenham sido registadas. A gestão pode mudar o colaborador de um cliente a qualquer momento
+        em Clientes.
       </p>
     </main>
   );

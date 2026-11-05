@@ -43,6 +43,17 @@ export default async function SellerDashboardPage() {
   const { identidade, cartoes, series, historico, alertas } = painel;
   const vendasValor = numero(cartoes.vendas_valor);
 
+  // Reservar é cadastrar: quem está por activar já é cliente do colaborador.
+  // O `colaborador_painel` conta só vínculos reais (`seller_customers`), por
+  // isso a reserva soma-se aqui — sem mexer na função, que a gestão também usa.
+  const { count: porActivar } = await supabase
+    .from("reserved_customers")
+    .select("id", { count: "exact", head: true })
+    .eq("seller_id", profile.id)
+    .eq("status", "reservado");
+
+  const totalClientes = numero(cartoes.clientes_total) + (porActivar ?? 0);
+
   return (
     <main className="mx-auto max-w-6xl px-4 py-10">
       <p className="mb-3 text-[10px] uppercase tracking-[0.18em] text-[#6F6F6F]">
@@ -109,13 +120,17 @@ export default async function SellerDashboardPage() {
       )}
 
       <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Cartao rotulo="Clientes conquistados" valor={String(cartoes.clientes_total)} />
+        <Cartao
+          rotulo="Clientes conquistados"
+          valor={String(totalClientes)}
+          detalhe={porActivar ? `${porActivar} por activar` : undefined}
+        />
         <Cartao rotulo="Vendas realizadas" valor={String(cartoes.vendas_count)} />
         <Cartao rotulo="Volume vendido" valor={formatCurrency(vendasValor)} />
         <Cartao
           rotulo="Clientes ativos"
           valor={String(cartoes.clientes_ativos)}
-          detalhe={`${cartoes.clientes_total} no total`}
+          detalhe={`${totalClientes} no total`}
         />
         <Cartao rotulo="Comissão acumulada" valor={formatCurrency(numero(cartoes.comissao_total))} />
         <Cartao

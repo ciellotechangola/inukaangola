@@ -1637,7 +1637,117 @@ await check("a reserva aparece na carteira como por activar", async () => {
   assert(t.includes("Cliente Carteira Web"), "reserva ausente da carteira");
   assert(/por activar/i.test(t), "sem a marca de por activar");
   assert(/Reservar cliente/i.test(t), "sem a entrada de reserva");
-  return "reserva visível";
+  // Reservar é cadastrar: a reserva conta como cliente, mesmo sem conta aberta.
+  // Antes somavam-se só os vínculos reais e o colaborador lia «0 clientes».
+  assert(!/\b0 clientes\b/.test(t), "conta 0 clientes com uma reserva na carteira");
+  assert(/\b1 cliente\b/.test(t), "a reserva não está a contar como cliente");
+  return "reserva visível · conta como 1 cliente";
+});
+
+// ---------------------------------------------------------------------------
+// Venda a um número sem conta: a reserva nasce sozinha, com nome e produtos.
+// ---------------------------------------------------------------------------
+const VENDA_TEL = "+244924200009";
+await sb(`/rest/v1/sales?customer_phone=eq.${encodeURIComponent(VENDA_TEL)}`, {
+  method: "DELETE",
+  key: SR,
+  jwt: SR,
+  prefer: "return=minimal",
+});
+await sb(`/rest/v1/reserved_customers?phone=eq.${encodeURIComponent(VENDA_TEL)}`, {
+  method: "DELETE",
+  key: SR,
+  jwt: SR,
+  prefer: "return=minimal",
+});
+
+let PRODUTO_VENDA = null;
+
+await check("venda a um telefone sem conta reserva o cliente sozinha", async () => {
+  const { data: stock } = await sb(
+    "/rest/v1/inventory?select=product_id&quantity=gt.5&limit=25",
+    { key: SR, jwt: SR }
+  );
+  const ids = [...new Set((stock ?? []).map((l) => l.product_id))];
+  assert(ids.length > 0, "sem stock para vender");
+
+  const { data: prods } = await sb(
+    `/rest/v1/products?select=id,name&is_active=eq.true&id=in.(${ids.join(",")})&limit=1`,
+    { key: SR, jwt: SR }
+  );
+  assert(prods?.length === 1, "sem produto activo com stock");
+  PRODUTO_VENDA = prods[0];
+
+  const { status, data } = await sb("/rest/v1/rpc/register_sale_by_phone", {
+    method: "POST",
+    jwt: sVendedor.access_token,
+    body: {
+      p_items: [{ product_id: PRODUTO_VENDA.id, quantity: 2 }],
+      p_customer_phone: VENDA_TEL,
+      p_payment_method: "cash",
+      p_payment_status: "paid",
+    },
+  });
+  assert(status === 200, `status ${status}: ${JSON.stringify(data).slice(0, 200)}`);
+  assert(data?.reservado === true, "a venda não reservou o cliente");
+
+  const { data: reserva } = await sb(
+    `/rest/v1/reserved_customers?select=id,status,full_name,seller_id&phone=eq.${encodeURIComponent(VENDA_TEL)}`,
+    { key: SR, jwt: SR }
+  );
+  assert(reserva?.length === 1, "reserva não criada pela venda");
+  assert(reserva[0].status === "reservado", `estado ${reserva[0].status}`);
+  assert(reserva[0].seller_id === sVendedor.user.id, "reserva sem colaborador");
+  assert(reserva[0].full_name === null, "a reserva devia nascer sem nome");
+  return `${PRODUTO_VENDA.name} · reserva automática`;
+});
+
+await check("o nome do comprador fica na reserva", async () => {
+  const r = await fetch(`${APP}/api/vendedor/clientes/nome`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie: cVendedor },
+    body: JSON.stringify({ phone: VENDA_TEL, full_name: "Comprador Venda Web" }),
+  });
+  const dados = await r.json().catch(() => ({}));
+  assert(r.ok, `HTTP ${r.status} ${dados.error ?? ""}`);
+  assert(dados.anotado === true, `não anotou: ${JSON.stringify(dados)}`);
+
+  const { data: reserva } = await sb(
+    `/rest/v1/reserved_customers?select=full_name&phone=eq.${encodeURIComponent(VENDA_TEL)}`,
+    { key: SR, jwt: SR }
+  );
+  assert(reserva[0].full_name === "Comprador Venda Web", `nome ${reserva[0].full_name}`);
+
+  // Um nome já posto não é substituído por outro qualquer.
+  const outra = await fetch(`${APP}/api/vendedor/clientes/nome`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", cookie: cVendedor },
+    body: JSON.stringify({ phone: VENDA_TEL, full_name: "Nome Trocado" }),
+  });
+  const res2 = await outra.json().catch(() => ({}));
+  assert(res2.anotado === false, "substituiu um nome já confirmado");
+
+  const { data: depois } = await sb(
+    `/rest/v1/reserved_customers?select=full_name&phone=eq.${encodeURIComponent(VENDA_TEL)}`,
+    { key: SR, jwt: SR }
+  );
+  assert(depois[0].full_name === "Comprador Venda Web", "o nome mudou");
+  return "nome anotado · imutável depois";
+});
+
+await check("a carteira mostra o nome, os produtos e o valor da venda", async () => {
+  const r = await pagina("/vendedor/clientes", cVendedor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(t.includes("Comprador Venda Web"), "sem o nome do comprador");
+  assert(t.includes(PRODUTO_VENDA.name), "sem os produtos comprados");
+  assert(/2\s*×/.test(t), "sem a quantidade comprada");
+  // Só a outra reserva (a que não tem venda) é que pode dizer que não tem
+  // compras. Se esta também disser, a venda não chegou à linha do cliente.
+  const semCompras = (t.match(/sem compras registadas/gi) || []).length;
+  assert(semCompras === 1, `${semCompras} linhas sem compras — esperava 1 (só a reserva sem venda)`);
+  assert(/\b2 por activar\b/.test(t), "a segunda reserva não entrou na carteira");
+  return "nome + produtos + valor";
 });
 
 await check("cliente não pode reservar ninguém", async () => {

@@ -23,6 +23,7 @@ interface Line {
 export default function RegisterSalePage() {
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [lines, setLines] = useState<Line[]>([]);
+  const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("paid");
@@ -101,18 +102,19 @@ export default function RegisterSalePage() {
       const detalhes = { paymentMethod, paymentStatus, notes: notes || undefined };
 
       const sale = semConta
-        ? await registerSaleByPhone(lines, telefone, detalhes)
+        ? await registerSaleByPhone(lines, telefone, { ...detalhes, customerName })
         : await registerSale(lines, { ...detalhes, customerId });
 
       setResult({ reference: sale.reference, total: Number(sale.total) });
       setLines([]);
       setNotes("");
+      setCustomerName("");
       setCustomerPhone("");
       setInfo(
         sale.duplicated
           ? "Operação já registada anteriormente."
           : semConta
-            ? "Venda registada. O cliente ficou reservado na sua carteira e recebe esta compra quando abrir conta com este número."
+            ? `Venda registada. ${customerName.trim() || "O cliente"} ficou na sua carteira, por activar — recebe esta compra quando abrir conta com o número ${telefone}.`
             : "Venda registada com sucesso."
       );
     } catch (e) {
@@ -193,13 +195,41 @@ export default function RegisterSalePage() {
           Adicionar produto
         </button>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <input
-            value={customerPhone}
-            onChange={(e) => setCustomerPhone(e.target.value)}
-            placeholder="Telefone do cliente (opcional)"
-            className="rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none"
-          />
+        <div className="mb-5 rounded-xl border border-[#2A2A2A] bg-[#141414] p-4">
+          <p className="mb-3 text-[10px] uppercase tracking-wider text-[#8A8A8A]">
+            Quem comprou
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <input
+              value={customerName}
+              onChange={(e) => setCustomerName(e.target.value)}
+              placeholder="Nome do cliente"
+              className="rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none"
+            />
+            <input
+              value={customerPhone}
+              onChange={(e) => setCustomerPhone(e.target.value)}
+              placeholder="Telefone (+244 9xx xxx xxx)"
+              className="rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none"
+            />
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-[#6F6F6F]">
+            {customerPhone.trim() ? (
+              <>
+                Com o telefone, o cliente entra automaticamente na sua carteira como{" "}
+                <span className="text-[#C9A962]">por activar</span> — com o nome, a compra e o
+                valor. A conta abre-a ele, quando quiser.
+              </>
+            ) : (
+              <>
+                O telefone é o que liga a compra a uma pessoa. Sem ele a venda fica registada à
+                mesma, mas ninguém fica na sua carteira.
+              </>
+            )}
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
           <select
             value={paymentMethod}
             onChange={(e) => setPaymentMethod(e.target.value)}
@@ -242,9 +272,10 @@ export default function RegisterSalePage() {
         </button>
 
         <p className="mt-3 text-xs text-[#525252]">
-          O stock e os preços são validados no servidor. Vendas repetidas com a mesma referência não são
-          duplicadas. Se o cliente ainda não tiver conta, a venda fica registada com o telefone e ele
-          passa a estar reservado na sua carteira — recebe-a no dia em que se registar.
+          O stock e os preços são validados no servidor. Vendas repetidas com a mesma referência
+          não são duplicadas. Se o cliente ainda não tiver conta, a venda fica registada com o
+          telefone, o nome e os produtos, e ele passa a estar na sua carteira por activar —
+          recebe tudo no dia em que se registar.
         </p>
       </div>
     </main>
