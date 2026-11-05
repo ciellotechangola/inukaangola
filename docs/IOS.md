@@ -47,13 +47,17 @@ arranque preto com a marca (não o flash branco) e entra directamente.
 - `viewportFit: "cover"` + `env(safe-area-inset-*)` — o conteúdo não fica debaixo
   do entalhe nem da barra de gestos.
 - `public/ios/*.png` — ícones e ecrãs de arranque, gerados por
-  `apps/web/scripts/gerar-icones-ios.mjs`.
+  `apps/web/scripts/gerar-icones.mjs` (o mesmo script que produz os ícones do
+  site e do Android).
 
 Regenerar os ícones (depois de mudar o logótipo):
 
 ```bash
-cd apps/web && node scripts/gerar-icones-ios.mjs
+cd apps/web && node scripts/gerar-icones.mjs
 ```
+
+O script **recorta primeiro as margens pretas** do logótipo e só depois escala.
+Sem isso a assinatura ficava a ~40% do ícone e lia-se mal no ecrã principal.
 
 ---
 

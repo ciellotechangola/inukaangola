@@ -289,6 +289,27 @@ await check("ícones têm os tamanhos que o iOS exige", async () => {
   return `${alvos.length} ícones`;
 });
 
+await check("o ícone maskable é próprio e cabe no círculo do Android", async () => {
+  const r = await fetch(`${APP}/manifest.json`);
+  const m = await r.json();
+  const maskable = (m.icons ?? []).find((i) => (i.purpose ?? "").includes("maskable"));
+  assert(maskable, "o manifest não declara nenhum ícone maskable");
+
+  const res = await fetch(`${APP}${maskable.src}`);
+  assert(res.status === 200, `${maskable.src}: HTTP ${res.status}`);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  const d = dimensoesPng(bytes);
+  assert(d && d.largura === d.altura, `${maskable.src} não é quadrado`);
+
+  // Reutilizar o ícone normal aqui cortava as pontas do "INUKA": o Android
+  // recorta a um círculo e só garante os 80% centrais.
+  assert(
+    maskable.src !== "/ios/icon-512.png",
+    "o maskable aponta para o ícone normal — vai ser cortado"
+  );
+  return `${maskable.src} · ${d.largura}px`;
+});
+
 await check("cabeçalho declara a app iOS e os ecrãs de arranque existem", async () => {
   const r = await pagina("/");
   const meta = (nome) => r.html.match(new RegExp(`<meta[^>]*name="${nome}"[^>]*>`))?.[0] ?? "";

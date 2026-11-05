@@ -292,7 +292,7 @@ registado **antes** de ele ter conta, com produto, quantidade, preço e quem
 vendeu (`minhas_compras()`). Quem é colaborador vê ainda **O meu painel**
 (vendas, comissões, clientes, meta). A gestão continua no site.
 
-Versão actual: **1.0.2** (`versionCode` 3 universal, 1003 / 2003 / 4003 por ABI).
+Versão actual: **1.0.3** (`versionCode` 4 universal, 1004 / 2004 / 4004 por ABI).
 
 ```bash
 cd apps/mobile
@@ -334,8 +334,10 @@ npx cap sync ios && npx cap open ios
 Receita completa — assinatura, UDIDs, Ad Hoc, instalação nos telefones e o que
 muda se um dia for para a App Store — em [`docs/IOS.md`](docs/IOS.md).
 
-Os ícones e ecrãs de arranque do site (`public/ios/`, `apple-touch-icon.png`)
-geram-se com `cd apps/web && node scripts/gerar-icones-ios.mjs`.
+Os ícones do site (`public/ios/`, `apple-touch-icon.png`, `favicon.ico`), do
+Android (`mipmap-*` + ícone adaptativo) e do shell iOS geram-se todos com
+`cd apps/web && node scripts/gerar-icones.mjs`, a partir de
+`assets/logo-inuka.png`.
 
 ## Autenticação
 

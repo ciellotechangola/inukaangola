@@ -6,13 +6,19 @@
   "start_url": "/?sharecode=J27FVBMTIH",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["standalone", "minimal-ui"],
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
   "background_color": "#0A0A0A",
   "theme_color": "#C9A962",
   "orientation": "portrait-primary",
   "lang": "pt-AO",
   "dir": "ltr",
-  "categories": ["shopping", "lifestyle"],
+  "categories": [
+    "shopping",
+    "lifestyle"
+  ],
   "prefer_related_applications": false,
   "icons": [
     {
@@ -28,7 +34,7 @@
       "purpose": "any"
     },
     {
-      "src": "/ios/icon-512.png",
+      "src": "/ios/icon-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

@@ -33,8 +33,8 @@ flutter build apk --release --split-per-abi   # 3 APKs (armeabi-v7a, arm64-v8a, 
 flutter build apk --release                   # universal
 ```
 
-O APK fica em `build/app/outputs/flutter-apk/`. Versão actual: **1.0.2**
-(`versionCode` 3 universal, 1003 / 2003 / 4003 por ABI — o Flutter multiplica o
+O APK fica em `build/app/outputs/flutter-apk/`. Versão actual: **1.0.3**
+(`versionCode` 4 universal, 1004 / 2004 / 4004 por ABI — o Flutter multiplica o
 build number por 1000 e soma o índice da arquitectura).
 
 O `--dart-define` é apenas o **endereço sugerido**: o valor real pode ser
