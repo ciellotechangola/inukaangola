@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../config/app_config.dart';
+import '../../core/sessao.dart';
 
 /// Feed de notícias do cliente.
 ///
@@ -56,6 +57,14 @@ class _FeedPageState extends State<FeedPage> {
   }
 
   Future<void> _alternarGosto(Map<String, dynamic> item) async {
+    // Reagir exige conta; o feed em si é público. Pedir a entrada aqui — e só
+    // aqui — mantém a leitura aberta a quem só quer ver as novidades.
+    if (!await Sessao.exigirSessao(context,
+        motivo: 'Entre para reagir às publicações da INUKA.')) {
+      return;
+    }
+    if (!mounted) return;
+
     final cliente = Supabase.instance.client;
     final uid = cliente.auth.currentUser?.id;
     if (uid == null) return;
@@ -109,6 +118,22 @@ class _FeedPageState extends State<FeedPage> {
 
   @override
   Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Notícias'),
+        actions: [
+          IconButton(
+            tooltip: 'Actualizar',
+            onPressed: _carregar,
+            icon: const Icon(Icons.refresh, size: 20),
+          ),
+        ],
+      ),
+      body: _corpo(),
+    );
+  }
+
+  Widget _corpo() {
     if (_aCarregar) {
       return const Center(child: CircularProgressIndicator(color: AppConfig.gold));
     }

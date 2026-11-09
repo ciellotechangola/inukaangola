@@ -42,8 +42,9 @@ export const DEFINICOES_PADRAO: DefinicoesLoja = {
   telefones: [...TELEFONES_INUKA],
   androidUrl: null,
   iosUrl: null,
-  versao: "1.0.3",
-  novidades: null,
+  versao: "1.1.0",
+  novidades:
+    "Catálogo completo com filtros, reservas, feed de notícias e áreas de trabalho por perfil.",
   actualizadoEm: null,
 };
 

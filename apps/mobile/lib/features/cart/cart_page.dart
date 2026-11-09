@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../config/app_config.dart';
 import '../../core/formato.dart';
+import '../../core/sessao.dart';
 import 'cart_store.dart';
 
 class CartPage extends StatefulWidget {
@@ -66,6 +67,15 @@ class _CartPageState extends State<CartPage> {
   Future<void> _finalizar() async {
     final carrinho = CartStore.instance;
     if (carrinho.vazio) return;
+
+    // O visitante pode montar o carrinho à vontade; a conta só é pedida aqui,
+    // no momento em que a encomenda passa a existir para o servidor.
+    if (!await Sessao.exigirSessao(context,
+        motivo: 'Entre para finalizar a encomenda e acompanhá-la.')) {
+      return;
+    }
+    if (!mounted) return;
+    await _carregarTaxa();
 
     if (_metodo == 'delivery' && _enderecoCtrl.text.trim().isEmpty) {
       setState(() => _erro = 'Indique o endereço de entrega.');
@@ -200,6 +210,30 @@ class _CartPageState extends State<CartPage> {
                     ),
                   ),
                 const SizedBox(height: 8),
+                if (!Sessao.instance.autenticado)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppConfig.gold.withValues(alpha: 0.07),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppConfig.gold.withValues(alpha: 0.3)),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.info_outline, size: 16, color: AppConfig.gold),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Pode montar o carrinho sem conta. Pedimos a entrada '
+                            'só ao finalizar — e o carrinho fica guardado.',
+                            style: TextStyle(
+                                color: AppConfig.muted, fontSize: 11, height: 1.45),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 const Text('Como quer receber?',
                     style: TextStyle(color: AppConfig.muted, fontSize: 12)),
                 const SizedBox(height: 8),

@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../config/app_config.dart';
 import '../../core/formato.dart';
+import 'registar_venda_page.dart';
 
 /// Painel do colaborador dentro da app.
 ///
@@ -182,6 +183,22 @@ class _PainelColaboradorPageState extends State<PainelColaboradorPage> {
                   ),
                 ),
             ],
+            const SizedBox(height: 14),
+            // A venda é a razão pela qual o colaborador abre a app na rua:
+            // fica à cabeça, não escondida num menu.
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const RegistarVendaPage()),
+                  );
+                  if (mounted) _carregar();
+                },
+                icon: const Icon(Icons.add_shopping_cart, size: 18),
+                label: const Text('Registar venda'),
+              ),
+            ),
             const SizedBox(height: 14),
             Row(
               children: [

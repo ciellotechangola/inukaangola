@@ -94,7 +94,9 @@ class _RegisterPageState extends State<RegisterPage> {
         password: _passCtrl.text,
       );
 
-      if (mounted) Navigator.of(context).pop();
+      // `true` diz ao ecrã de entrada que já há sessão — ele fecha-se e a
+      // acção que estava pendente (comprar, favoritar) continua.
+      if (mounted) Navigator.of(context).pop(true);
     } on AuthException catch (e) {
       setState(() => _error = 'Conta criada, mas o login falhou: ${e.message}');
     } catch (_) {

@@ -3,13 +3,20 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../config/app_config.dart';
 import '../../core/formato.dart';
+import '../../core/sessao.dart';
+import '../../widgets/estado.dart';
+import '../../widgets/produto_cartao.dart';
 import '../cart/cart_store.dart';
 import '../chat/chat_page.dart';
 
+/// Página de produto — a mesma informação que o site mostra.
+///
+/// Recebe o registo do catálogo (para abrir sem espera) e volta a pedi-lo ao
+/// servidor: preço, stock e fotografias podem ter mudado desde que a grelha
+/// foi carregada, e é o servidor que manda.
 class ProductPage extends StatefulWidget {
   const ProductPage({super.key, required this.produto});
 
-  /// Registo vindo do PostgREST (`products` + `category` + `images`).
   final Map<String, dynamic> produto;
 
   @override
@@ -17,74 +24,96 @@ class ProductPage extends StatefulWidget {
 }
 
 class _ProductPageState extends State<ProductPage> {
+  late Map<String, dynamic> _produto = widget.produto;
+
   int _quantidade = 1;
   bool _adicionado = false;
   bool _favorito = false;
   bool _aGuardarFavorito = false;
+  bool _aReservar = false;
+  bool _aAbrirChat = false;
 
-  String get _id => widget.produto['id'] as String;
+  int? _disponivel;
+  bool _aCarregarStock = true;
 
-  double get _preco {
-    final promo = widget.produto['promotional_price'];
-    final oficial = widget.produto['official_price'];
-    return ((promo ?? oficial) as num).toDouble();
-  }
+  List<Map<String, dynamic>> _relacionados = [];
+
+  String get _id => _produto['id'] as String;
+
+  num get _preco => precoEfetivo(_produto);
 
   num? get _precoOficial {
-    if (widget.produto['promotional_price'] == null) return null;
-    return widget.produto['official_price'] as num?;
+    if (_produto['promotional_price'] == null) return null;
+    return _produto['official_price'] as num?;
   }
 
-  /// Todas as fotografias, capa primeiro.
-  ///
-  /// Um produto pode ter várias: a marcada `is_primary` é a capa; as restantes
-  /// seguem por `sort_order`. A galeria desliza entre elas.
-  List<String> get _imagens {
-    final imagens = widget.produto['images'] as List?;
-    if (imagens == null || imagens.isEmpty) return const [];
+  int get _desconto => percentagemDesconto(_produto);
 
-    final lista = imagens.map((e) => Map<String, dynamic>.from(e as Map)).toList()
-      ..sort((a, b) {
-        final capaA = a['is_primary'] == true ? 0 : 1;
-        final capaB = b['is_primary'] == true ? 0 : 1;
-        if (capaA != capaB) return capaA - capaB;
-        return ((a['sort_order'] as num?) ?? 0)
-            .compareTo((b['sort_order'] as num?) ?? 0);
-      });
+  List<String> get _imagens => imagensDoProduto(_produto);
 
-    return lista
-        .map((e) => e['url'] as String?)
-        .whereType<String>()
-        .toList(growable: false);
-  }
-
-  String? get _imagem => _imagens.isEmpty ? null : _imagens.first;
+  bool get _esgotado => _disponivel == 0;
 
   @override
   void initState() {
     super.initState();
-    _verificarFavorito();
+    _carregarDetalhe();
     _carregarStock();
+    _verificarFavorito();
   }
 
-  /// Unidades disponíveis; `null` = não há inventário registado (≠ esgotado).
-  ///
-  /// Lê-se pela função pública `stock_produtos` e não pela tabela `inventory`
-  /// porque o produto tanto pode chegar do catálogo como dos favoritos — e a
-  /// lista de favoritos não traz o inventário. Assim há um só caminho.
-  int? _disponivel;
-  bool _aCarregarStock = true;
-  bool _aAbrirChat = false;
+  /// Versão fresca do produto, com categoria e fotografias.
+  Future<void> _carregarDetalhe() async {
+    try {
+      final resposta = await Supabase.instance.client
+          .from('products')
+          .select('id, name, description, sku, official_price, promotional_price, '
+              'is_featured, is_bestseller, is_new, created_at, category_id, '
+              'category:categories(id, name, slug), '
+              'images:product_images(url, is_primary, sort_order)')
+          .eq('id', _id)
+          .single();
+      if (!mounted) return;
+      setState(() => _produto = Map<String, dynamic>.from(resposta));
 
-  bool get _esgotado => _disponivel == 0;
+      final categoriaId = _produto['category_id'] as String?;
+      if (categoriaId != null) _carregarRelacionados(categoriaId);
+    } catch (_) {
+      // Fica o registo que veio do catálogo — já tem nome, preço e fotos.
+      final categoriaId = _produto['category_id'] as String?;
+      if (categoriaId != null) _carregarRelacionados(categoriaId);
+    }
+  }
 
+  Future<void> _carregarRelacionados(String categoriaId) async {
+    try {
+      final resposta = await Supabase.instance.client
+          .from('products')
+          .select('id, name, official_price, promotional_price, is_new, '
+              'category:categories(id, name), '
+              'images:product_images(url, is_primary, sort_order)')
+          .eq('is_active', true)
+          .eq('category_id', categoriaId)
+          .neq('id', _id)
+          .limit(4);
+      final lista = (resposta as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      if (!mounted) return;
+      setState(() => _relacionados = lista);
+    } catch (_) {
+      // Sem relacionados a página continua completa.
+    }
+  }
+
+  /// Disponibilidade pela função pública `stock_produtos`: `null` = sem
+  /// inventário registado (não é o mesmo que esgotado).
   Future<void> _carregarStock() async {
     try {
       final resposta = await Supabase.instance.client
           .rpc('stock_produtos', params: {'p_ids': [_id]});
-      if (!mounted) return;
       final linhas = (resposta as List?) ?? const [];
       final valor = linhas.isEmpty ? null : (linhas.first as Map)['disponivel'];
+      if (!mounted) return;
       setState(() => _disponivel = (valor as num?)?.toInt());
     } catch (_) {
       // Sem stock conhecido deixa-se seguir; o servidor recusa na encomenda.
@@ -93,33 +122,8 @@ class _ProductPageState extends State<ProductPage> {
     }
   }
 
-  /// Abre a conversa privada com a gestão — a mesma porta do site.
-  Future<void> _falarComEquipa() async {
-    if (_aAbrirChat) return;
-    setState(() => _aAbrirChat = true);
-    try {
-      final id = await Supabase.instance.client.rpc('abrir_conversa_equipa') as String;
-      if (!mounted) return;
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ChatPage(conversationId: id, titulo: 'Equipa INUKA'),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Não foi possível abrir a conversa: $e'),
-          backgroundColor: AppConfig.charcoal,
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _aAbrirChat = false);
-    }
-  }
-
   Future<void> _verificarFavorito() async {
-    final eu = Supabase.instance.client.auth.currentUser?.id;
+    final eu = Sessao.instance.uid;
     if (eu == null) return;
     try {
       final resposta = await Supabase.instance.client
@@ -131,12 +135,16 @@ class _ProductPageState extends State<ProductPage> {
       if (!mounted) return;
       setState(() => _favorito = (resposta as List).isNotEmpty);
     } catch (_) {
-      // Sem rede: o botão fica como "não favorito" e resolve-se ao tocar.
+      // Sem rede o botão fica como «não favorito» e resolve-se ao tocar.
     }
   }
 
   Future<void> _alternarFavorito() async {
-    final eu = Supabase.instance.client.auth.currentUser?.id;
+    if (!await Sessao.exigirSessao(context,
+        motivo: 'Entre para guardar este produto nos favoritos.')) {
+      return;
+    }
+    final eu = Sessao.instance.uid;
     if (eu == null || _aGuardarFavorito) return;
 
     setState(() => _aGuardarFavorito = true);
@@ -159,12 +167,7 @@ class _ProductPageState extends State<ProductPage> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _favorito = antes);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Não foi possível guardar o favorito.'),
-          backgroundColor: AppConfig.charcoal,
-        ),
-      );
+      avisar(context, 'Não foi possível guardar o favorito.', erro: true);
     } finally {
       if (mounted) setState(() => _aGuardarFavorito = false);
     }
@@ -173,34 +176,89 @@ class _ProductPageState extends State<ProductPage> {
   Future<void> _adicionar() async {
     await CartStore.instance.adicionar(
       productId: _id,
-      name: widget.produto['name'] as String,
-      price: _preco,
-      image: _imagem,
+      name: _produto['name'] as String,
+      price: _preco.toDouble(),
+      image: _imagens.isEmpty ? null : _imagens.first,
       quantidade: _quantidade,
     );
     if (!mounted) return;
     setState(() => _adicionado = true);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$_quantidade× ${widget.produto['name']} no carrinho'),
-        backgroundColor: AppConfig.charcoal,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    avisar(context, '$_quantidade× ${_produto['name']} no carrinho');
+  }
+
+  /// Reserva de produto esgotado: o mesmo caminho do site (`create_reservation`).
+  Future<void> _reservar() async {
+    if (!await Sessao.exigirSessao(context,
+        motivo: 'Entre para deixar a sua reserva e ser avisado.')) {
+      return;
+    }
+    setState(() => _aReservar = true);
+    try {
+      final resposta = await Supabase.instance.client.rpc('create_reservation', params: {
+        'p_items': [
+          {'product_id': _id, 'quantity': _quantidade}
+        ],
+        'p_expires_at': null,
+        'p_notes': 'Reserva de produto esgotado — avisar quando houver stock.',
+      });
+      final mapa = Map<String, dynamic>.from(resposta as Map);
+      if (!mounted) return;
+      avisar(
+        context,
+        'Reserva registada. Avisamos quando houver stock '
+        '(${dataCurta(mapa['expires_at'])}).',
+      );
+    } on PostgrestException catch (e) {
+      if (!mounted) return;
+      avisar(context, e.message, erro: true);
+    } catch (_) {
+      if (!mounted) return;
+      avisar(context, 'Sem ligação. A reserva não foi enviada.', erro: true);
+    } finally {
+      if (mounted) setState(() => _aReservar = false);
+    }
+  }
+
+  Future<void> _falarComEquipa() async {
+    if (!await Sessao.exigirSessao(context,
+        motivo: 'Entre para falar com a equipa INUKA.')) {
+      return;
+    }
+    if (_aAbrirChat) return;
+    setState(() => _aAbrirChat = true);
+    try {
+      final id = await Supabase.instance.client.rpc('abrir_conversa_equipa') as String;
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ChatPage(conversationId: id, titulo: 'Equipa INUKA'),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      avisar(context, 'Não foi possível abrir a conversa.', erro: true);
+    } finally {
+      if (mounted) setState(() => _aAbrirChat = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final p = widget.produto;
+    final p = _produto;
     final categoria = (p['category'] as Map?)?['name'] as String?;
-    final desconto = (_precoOficial != null && _precoOficial! > 0)
-        ? ((1 - _preco / _precoOficial!) * 100).round()
+    final sku = p['sku'] as String?;
+    final poupa = (_precoOficial != null && _precoOficial! > _preco)
+        ? _precoOficial! - _preco
         : 0;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(p['name'] as String? ?? 'Produto',
-            maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(
+          p['name'] as String? ?? 'Produto',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 16),
+        ),
         actions: [
           IconButton(
             tooltip: _favorito ? 'Remover dos favoritos' : 'Guardar nos favoritos',
@@ -213,71 +271,76 @@ class _ProductPageState extends State<ProductPage> {
         ],
       ),
       body: ListView(
+        padding: const EdgeInsets.only(bottom: 28),
         children: [
-          _Galeria(imagens: _imagens, nome: p['name'] as String? ?? 'Produto'),
+          _Galeria(imagens: _imagens, nome: p['name'] as String? ?? 'Produto', desconto: _desconto),
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (categoria != null)
-                  Text(categoria.toUpperCase(),
-                      style: const TextStyle(
-                        color: AppConfig.muted,
-                        fontSize: 10,
-                        letterSpacing: 1.4,
-                      )),
+                  Text(
+                    categoria.toUpperCase(),
+                    style: const TextStyle(
+                      color: AppConfig.gold,
+                      fontSize: 10,
+                      letterSpacing: 1.6,
+                    ),
+                  ),
                 const SizedBox(height: 6),
-                Text(p['name'] as String? ?? '',
-                    style: const TextStyle(fontSize: 20, color: AppConfig.text)),
-                const SizedBox(height: 12),
-                Row(
+                Text(
+                  p['name'] as String? ?? '',
+                  style: const TextStyle(
+                    fontSize: 23,
+                    color: AppConfig.text,
+                    fontWeight: FontWeight.w300,
+                    height: 1.2,
+                  ),
+                ),
+                if (sku != null && sku.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Referência: $sku',
+                    style: const TextStyle(color: Color(0xFF525252), fontSize: 11),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 10,
+                  runSpacing: 6,
                   children: [
                     Text(
                       kz(_preco),
                       style: const TextStyle(
                         color: AppConfig.gold,
-                        fontSize: 22,
+                        fontSize: 25,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    if (_precoOficial != null) ...[
-                      const SizedBox(width: 10),
+                    if (_precoOficial != null)
                       Text(
                         kz(_precoOficial),
                         style: const TextStyle(
-                          color: AppConfig.muted,
+                          color: Color(0xFF6F6F6F),
                           fontSize: 14,
                           decoration: TextDecoration.lineThrough,
                         ),
                       ),
-                    ],
-                    if (desconto > 0) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding:
-                            const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: AppConfig.gold,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          '-$desconto%',
-                          style: const TextStyle(
-                            color: AppConfig.dark,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
+                    if (poupa > 0)
+                      Etiqueta(
+                        texto: 'Poupa ${kz(poupa)}',
+                        cor: AppConfig.gold,
                       ),
-                    ],
                   ],
                 ),
-                const SizedBox(height: 16),
-                if ((p['description'] as String?)?.isNotEmpty == true)
-                  Text(p['description'] as String,
-                      style: const TextStyle(color: AppConfig.muted, height: 1.5)),
-                const SizedBox(height: 24),
+                const SizedBox(height: 12),
+                _LinhaStock(
+                  aCarregar: _aCarregarStock,
+                  disponivel: _disponivel,
+                ),
+                const SizedBox(height: 22),
                 if (_esgotado) ...[
                   // Sem stock não se vende: mostra-se a verdade e o caminho
                   // alternativo (reservar / falar com a equipa), em vez de
@@ -287,7 +350,7 @@ class _ProductPageState extends State<ProductPage> {
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: AppConfig.charcoal,
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: AppConfig.gold.withValues(alpha: 0.35)),
                     ),
                     child: const Column(
@@ -298,13 +361,14 @@ class _ProductPageState extends State<ProductPage> {
                           style: TextStyle(
                             color: AppConfig.text,
                             fontWeight: FontWeight.w600,
+                            fontSize: 13.5,
                           ),
                         ),
                         SizedBox(height: 6),
                         Text(
-                          'Deixe a sua reserva com a equipa: avisamos assim que '
-                          'o produto voltar ao stock.',
-                          style: TextStyle(color: AppConfig.muted, fontSize: 12, height: 1.4),
+                          'Deixe a sua reserva: guardamos o pedido e avisamos assim '
+                          'que o produto voltar ao stock.',
+                          style: TextStyle(color: AppConfig.muted, fontSize: 12, height: 1.45),
                         ),
                       ],
                     ),
@@ -312,60 +376,267 @@ class _ProductPageState extends State<ProductPage> {
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _aReservar ? null : _reservar,
+                      icon: _aReservar
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.bookmark_add_outlined),
+                      label: Text(_aReservar ? 'A reservar…' : 'Reservar este produto'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
                     child: OutlinedButton.icon(
                       onPressed: _aAbrirChat ? null : _falarComEquipa,
-                      icon: const Icon(Icons.chat_bubble_outline),
-                      label: Text(_aAbrirChat ? 'A abrir…' : 'Reservar — falar com a equipa'),
+                      icon: const Icon(Icons.chat_bubble_outline, size: 18),
+                      label: const Text('Falar com a equipa'),
                     ),
                   ),
                 ] else ...[
                   Row(
                     children: [
-                      const Text('Quantidade', style: TextStyle(color: AppConfig.muted)),
+                      const Text('Quantidade', style: TextStyle(color: AppConfig.muted, fontSize: 13)),
                       const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.remove_circle_outline),
-                        onPressed: _quantidade > 1
-                            ? () => setState(() => _quantidade--)
-                            : null,
+                      _Passo(
+                        icone: Icons.remove,
+                        activo: _quantidade > 1,
+                        aoTocar: () => setState(() => _quantidade--),
                       ),
                       SizedBox(
-                        width: 32,
+                        width: 38,
                         child: Text(
                           '$_quantidade',
                           textAlign: TextAlign.center,
-                          style: const TextStyle(fontSize: 16),
+                          style: const TextStyle(fontSize: 16, color: AppConfig.text),
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.add_circle_outline),
-                        // Não se passa do que existe, quando se sabe quanto é.
-                        onPressed: _disponivel != null && _quantidade >= _disponivel!
-                            ? null
-                            : () => setState(() => _quantidade++),
+                      _Passo(
+                        icone: Icons.add,
+                        activo: _disponivel == null || _quantidade < _disponivel!,
+                        aoTocar: () => setState(() => _quantidade++),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       onPressed: _adicionar,
                       icon: Icon(_adicionado ? Icons.check : Icons.shopping_bag_outlined),
-                      label: Text(_adicionado ? 'Adicionado' : 'Adicionar ao carrinho'),
+                      label: Text(_adicionado ? 'Adicionado ao carrinho' : 'Adicionar ao carrinho'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _aAbrirChat ? null : _falarComEquipa,
+                      icon: const Icon(Icons.chat_bubble_outline, size: 18),
+                      label: const Text('Falar com a equipa'),
                     ),
                   ),
                 ],
-                const SizedBox(height: 8),
+                const SizedBox(height: 24),
+                // Garantias: as mesmas quatro do site.
+                GridView.count(
+                  crossAxisCount: 2,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  mainAxisSpacing: 8,
+                  crossAxisSpacing: 8,
+                  childAspectRatio: 2.35,
+                  children: const [
+                    _Garantia(icone: Icons.verified_outlined, titulo: 'Produto original',
+                        detalhe: 'Distribuição oficial'),
+                    _Garantia(icone: Icons.local_shipping_outlined, titulo: 'Entrega ao domicílio',
+                        detalhe: 'Grátis no Uíge'),
+                    _Garantia(icone: Icons.payments_outlined, titulo: 'Pagamento na entrega',
+                        detalhe: 'Dinheiro ou transferência'),
+                    _Garantia(icone: Icons.shield_outlined, titulo: 'Reserva garantida',
+                        detalhe: 'Stock guardado'),
+                  ],
+                ),
+                if ((p['description'] as String?)?.isNotEmpty == true) ...[
+                  const SizedBox(height: 24),
+                  const Text(
+                    'DESCRIÇÃO',
+                    style: TextStyle(
+                      color: AppConfig.muted,
+                      fontSize: 10,
+                      letterSpacing: 1.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    p['description'] as String,
+                    style: const TextStyle(
+                      color: Color(0xFFA3A3A3),
+                      fontSize: 13,
+                      height: 1.55,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 18),
+                const Text(
+                  'O preço final e a disponibilidade são confirmados pelo servidor '
+                  'ao finalizar a encomenda.',
+                  style: TextStyle(color: Color(0xFF525252), fontSize: 11, height: 1.5),
+                ),
+              ],
+            ),
+          ),
+          if (_relacionados.isNotEmpty) ...[
+            const SizedBox(height: 26),
+            const Divider(height: 1, color: Color(0xFF1F1F1F)),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 22, 18, 12),
+              child: Text(
+                'Também em ${categoria ?? 'catálogo'}',
+                style: const TextStyle(fontSize: 16, color: AppConfig.text),
+              ),
+            ),
+            SizedBox(
+              height: 210,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                itemCount: _relacionados.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                itemBuilder: (_, i) => SizedBox(
+                  width: 140,
+                  child: ProdutoCartao(produto: _relacionados[i]),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _LinhaStock extends StatelessWidget {
+  const _LinhaStock({required this.aCarregar, required this.disponivel});
+
+  final bool aCarregar;
+  final int? disponivel;
+
+  @override
+  Widget build(BuildContext context) {
+    if (aCarregar) {
+      return const Text(
+        'A confirmar disponibilidade…',
+        style: TextStyle(color: AppConfig.muted, fontSize: 12),
+      );
+    }
+    if (disponivel == null) {
+      // Sem linha de inventário não há stock a anunciar — é diferente de zero.
+      return const Text(
+        'Disponibilidade confirmada ao finalizar a encomenda',
+        style: TextStyle(color: AppConfig.muted, fontSize: 12),
+      );
+    }
+    if (disponivel! > 0) {
+      return Row(
+        children: [
+          const Icon(Icons.check_circle, size: 13, color: AppConfig.success),
+          const SizedBox(width: 5),
+          Text(
+            'Em stock · $disponivel ${disponivel == 1 ? "unidade" : "unidades"}',
+            style: const TextStyle(color: AppConfig.success, fontSize: 12),
+          ),
+        ],
+      );
+    }
+    return Row(
+      children: [
+        const Icon(Icons.cancel_outlined, size: 13, color: AppConfig.danger),
+        const SizedBox(width: 5),
+        const Text(
+          'Esgotado — pode deixar reserva abaixo',
+          style: TextStyle(color: AppConfig.danger, fontSize: 12),
+        ),
+      ],
+    );
+  }
+}
+
+class _Passo extends StatelessWidget {
+  const _Passo({required this.icone, required this.activo, required this.aoTocar});
+
+  final IconData icone;
+  final bool activo;
+  final VoidCallback aoTocar;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppConfig.charcoal,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: activo ? aoTocar : null,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppConfig.surface),
+          ),
+          child: Icon(
+            icone,
+            size: 17,
+            color: activo ? AppConfig.text : const Color(0xFF4A4A4A),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Garantia extends StatelessWidget {
+  const _Garantia({required this.icone, required this.titulo, required this.detalhe});
+
+  final IconData icone;
+  final String titulo;
+  final String detalhe;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(9),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111111),
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: const Color(0xFF1F1F1F)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icone, size: 15, color: AppConfig.gold),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
                 Text(
-                  _aCarregarStock
-                      ? 'A confirmar disponibilidade…'
-                      : _disponivel == null
-                          ? 'Preço e disponibilidade confirmados pelo servidor ao finalizar.'
-                          : _esgotado
-                              ? 'Preço confirmado pelo servidor. Reserva sujeita a reposição.'
-                              : 'Em stock · $_disponivel ${_disponivel == 1 ? "unidade" : "unidades"}',
-                  style: const TextStyle(color: AppConfig.muted, fontSize: 11),
+                  titulo,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Color(0xFFE5E5E5), fontSize: 10.5),
+                ),
+                Text(
+                  detalhe,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Color(0xFF6F6F6F), fontSize: 9),
                 ),
               ],
             ),
@@ -382,10 +653,11 @@ class _ProductPageState extends State<ProductPage> {
 /// contador «2/4» diz onde se está. Com uma só fotografia não aparece nada
 /// disto — fica apenas a imagem.
 class _Galeria extends StatefulWidget {
-  const _Galeria({required this.imagens, required this.nome});
+  const _Galeria({required this.imagens, required this.nome, required this.desconto});
 
   final List<String> imagens;
   final String nome;
+  final int desconto;
 
   @override
   State<_Galeria> createState() => _GaleriaState();
@@ -433,20 +705,38 @@ class _GaleriaState extends State<_Galeria> {
                     itemBuilder: (_, i) => Image.network(
                       widget.imagens[i],
                       fit: BoxFit.contain,
-                      semanticLabel:
-                          '${widget.nome} — fotografia ${i + 1} de $total',
+                      semanticLabel: '${widget.nome} — fotografia ${i + 1} de $total',
                       errorBuilder: (_, __, ___) => const _SemImagem(),
                     ),
                   ),
                 ),
               ),
+              if (widget.desconto > 0)
+                Positioned(
+                  left: 14,
+                  top: 14,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppConfig.gold,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '-${widget.desconto}%',
+                      style: const TextStyle(
+                        color: AppConfig.dark,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
               if (total > 1)
                 Positioned(
-                  right: 12,
-                  top: 12,
+                  right: 14,
+                  top: 14,
                   child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.65),
                       borderRadius: BorderRadius.circular(20),
@@ -493,10 +783,10 @@ class _GaleriaState extends State<_Galeria> {
         ),
         if (total > 1)
           SizedBox(
-            height: 76,
+            height: 78,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
               itemCount: total,
               separatorBuilder: (_, __) => const SizedBox(width: 8),
               itemBuilder: (_, i) => GestureDetector(
