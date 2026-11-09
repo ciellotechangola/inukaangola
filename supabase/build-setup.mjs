@@ -24,6 +24,11 @@ const PARTES = [
   { ficheiro: "migrations/0007_conteudos.sql", titulo: "CONTEÚDOS PUBLICADOS E FORMAÇÃO" },
   { ficheiro: "migrations/0008_taxas_pedidos.sql", titulo: "TAXA DE COMISSÃO, PEDIDOS E REVENDEDORES" },
   { ficheiro: "migrations/0009_reservas_clientes.sql", titulo: "RESERVA DE CLIENTES E COMPRAS DO CLIENTE" },
+  { ficheiro: "migrations/0010_taxa_entrega.sql", titulo: "TAXA DE ENTREGA" },
+  { ficheiro: "migrations/0011_chat_equipa.sql", titulo: "CHAT: CLIENTE FALA COM A GESTÃO, GRUPOS SÓ DA EQUIPA" },
+  { ficheiro: "migrations/0012_stock_publico.sql", titulo: "DISPONIBILIDADE VISÍVEL A QUEM NÃO TEM CONTA" },
+  { ficheiro: "migrations/0013_perfis_loja.sql", titulo: "PERFIS: VENDEDOR DE LOJA, ELIMINAÇÃO DE PRODUTOS E FEED" },
+  { ficheiro: "migrations/0014_eliminar_forcado.sql", titulo: "ELIMINAR PRODUTO COM O HISTÓRICO (MODO FORÇADO)" },
 ];
 
 const cabecalho = `-- =============================================================================

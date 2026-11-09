@@ -110,6 +110,8 @@ export default async function ManagerDashboardPage() {
 
         <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Action href="/gerente/produtos" title="Produtos e stock" />
+          <Action href="/loja" title="Loja (stock e balcão)" />
+          <Action href="/gerente/perfis" title="Perfis e permissões" />
           <Action href="/gerente/provincias" title="Províncias e delegações" />
           <Action href="/gerente/categorias" title="Categorias" />
           <Action href="/gerente/encomendas" title="Encomendas" />

@@ -15,12 +15,15 @@ import {
   Send,
   Square,
   Trash2,
+  UserMinus,
+  UserPlus,
   Users,
   X,
 } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
 import {
   abrirConversaDirecta,
+  adicionarMembroGrupo,
   carregarAnexosDe,
   carregarContactos,
   carregarInbox,
@@ -38,6 +41,7 @@ import {
   nomeConversa,
   previa,
   quandoCurto,
+  removerMembroGrupo,
   rotuloDia,
   type Anexo,
   type Contacto,
@@ -127,12 +131,13 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
   const [erro, setErro] = useState("");
   const [aCarregar, setACarregar] = useState(true);
   const [aEnviar, setAEnviar] = useState(false);
-  const [modal, setModal] = useState<null | "direct" | "group">(null);
+  const [modal, setModal] = useState<null | "direct" | "group" | "members">(null);
   const [contactos, setContactos] = useState<Contacto[]>([]);
   const [pesquisa, setPesquisa] = useState("");
   const [grupoNome, setGrupoNome] = useState("");
   const [grupoMembros, setGrupoMembros] = useState<string[]>([]);
   const [ocupado, setOcupado] = useState(false);
+  const [aMexerMembros, setAMexerMembros] = useState<string | null>(null);
 
   // Anexos
   const [anexo, setAnexo] = useState<{ ficheiro: File; url: string } | null>(null);
@@ -588,7 +593,7 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
     }
   }
 
-  async function abrirModal(modo: "direct" | "group") {
+  async function abrirModal(modo: "direct" | "group" | "members") {
     setModal(modo);
     setErro("");
     setPesquisa("");
@@ -628,15 +633,10 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
       setErro("Dê um nome ao grupo.");
       return;
     }
-    if (grupoMembros.length === 0) {
-      setErro("Escolha pelo menos um participante.");
-      return;
-    }
     setOcupado(true);
     setErro("");
     try {
-      const supabase = createClientBrowser();
-      const id = await criarGrupo(supabase, eu.id, grupoNome.trim(), grupoMembros);
+      const id = await criarGrupo(grupoNome.trim(), grupoMembros);
       await recarregarInbox(eu.id, eu.papel);
       setModal(null);
       setGrupoNome("");
@@ -646,6 +646,26 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
       setErro(e instanceof Error ? e.message : "Não foi possível criar o grupo.");
     } finally {
       setOcupado(false);
+    }
+  }
+
+  /** Acrescenta ou tira alguém do grupo aberto (só gestão). */
+  async function alternarMembroDoGrupo(userId: string, dentro: boolean) {
+    if (!activa || !eu) return;
+    setAMexerMembros(userId);
+    setErro("");
+    try {
+      if (dentro) await removerMembroGrupo(activa.id, userId);
+      else await adicionarMembroGrupo(activa.id, userId);
+
+      // Recarregar a caixa de entrada actualiza `activa.membros` — é dela que
+      // sai a lista de participantes e o nome do grupo.
+      const lista = await recarregarInbox(eu.id, eu.papel);
+      if (!lista.some((c) => c.id === activa.id)) setActiveId(null);
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "Não foi possível alterar os membros.");
+    } finally {
+      setAMexerMembros(null);
     }
   }
 
@@ -799,20 +819,32 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
                   <p className="truncate text-sm font-medium text-[#F5F5F5]">{titulo}</p>
                   <p className="truncate text-[11px] text-[#6F6F6F]">
                     {activa.type === "group"
-                      ? `grupo · ${activa.membros.length} participantes`
+                      ? `grupo da equipa · ${activa.membros.length} ${activa.membros.length === 1 ? "membro" : "membros"}`
                       : (ETIQUETA_PAPEL[activa.membros.find((m) => m.id !== eu?.id)?.role ?? ""] ??
                         "conversa directa")}
                   </p>
                 </div>
                 {eu?.papel === "manager" && (
-                  <button
-                    onClick={apagarConversa}
-                    title={activa.type === "group" ? "Apagar grupo" : "Apagar conversa"}
-                    aria-label={activa.type === "group" ? "Apagar grupo" : "Apagar conversa"}
-                    className="ml-auto shrink-0 rounded-lg p-2 text-[#8A8A8A] transition hover:bg-[#262626] hover:text-red-400"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  <>
+                    {activa.type === "group" && (
+                      <button
+                        onClick={() => abrirModal("members")}
+                        title="Membros do grupo"
+                        aria-label="Membros do grupo"
+                        className="ml-auto shrink-0 rounded-lg p-2 text-[#8A8A8A] transition hover:bg-[#262626] hover:text-[#C9A962]"
+                      >
+                        <UserPlus className="h-4 w-4" />
+                      </button>
+                    )}
+                    <button
+                      onClick={apagarConversa}
+                      title={activa.type === "group" ? "Apagar grupo" : "Apagar conversa"}
+                      aria-label={activa.type === "group" ? "Apagar grupo" : "Apagar conversa"}
+                      className={`${activa.type === "group" ? "" : "ml-auto"} shrink-0 rounded-lg p-2 text-[#8A8A8A] transition hover:bg-[#262626] hover:text-red-400`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </>
                 )}
               </header>
 
@@ -1042,7 +1074,11 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
           >
             <header className="flex items-center justify-between border-b border-[#262626] px-4 py-3">
               <h2 className="text-sm font-medium text-[#F5F5F5]">
-                {modal === "direct" ? "Nova conversa" : "Novo grupo"}
+                {modal === "direct"
+                  ? "Nova conversa"
+                  : modal === "group"
+                    ? "Novo grupo da equipa"
+                    : "Membros do grupo"}
               </h2>
               <button onClick={() => setModal(null)} aria-label="Fechar" className="text-[#8A8A8A] hover:text-[#E5E5E5]">
                 <X className="h-4 w-4" />
@@ -1091,7 +1127,7 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
                   )}
                 </div>
               </div>
-            ) : (
+            ) : modal === "group" ? (
               <div className="flex max-h-[70dvh] flex-col">
                 <div className="border-b border-[#262626] p-3">
                   <input
@@ -1100,31 +1136,43 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
                     placeholder="Nome do grupo (ex.: Equipa comercial)"
                     className="w-full rounded-lg border border-[#333] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none"
                   />
+                  <p className="mt-2 text-[11px] leading-snug text-[#6F6F6F]">
+                    Grupos são só para membros da empresa. Os clientes falam em privado com a
+                    gestão — não entram aqui.
+                  </p>
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto">
-                  {contactos.map((c) => (
-                    <label
-                      key={c.id}
-                      className="flex cursor-pointer items-center gap-3 border-b border-[#1F1F1F] px-4 py-3 hover:bg-[#1A1A1A]"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={grupoMembros.includes(c.id)}
-                        onChange={(e) =>
-                          setGrupoMembros((prev) =>
-                            e.target.checked ? [...prev, c.id] : prev.filter((m) => m !== c.id)
-                          )
-                        }
-                        className="accent-[#C9A962]"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm text-[#F5F5F5]">{c.full_name}</span>
-                        <span className="block text-[11px] text-[#6F6F6F]">
-                          {ETIQUETA_PAPEL[c.role] ?? c.role}
-                        </span>
-                      </span>
-                    </label>
-                  ))}
+                  {contactos.filter((c) => c.role !== "customer").length === 0 ? (
+                    <p className="p-6 text-center text-sm text-[#8A8A8A]">
+                      Ainda não há colaboradores activos para juntar.
+                    </p>
+                  ) : (
+                    contactos
+                      .filter((c) => c.role !== "customer")
+                      .map((c) => (
+                        <label
+                          key={c.id}
+                          className="flex cursor-pointer items-center gap-3 border-b border-[#1F1F1F] px-4 py-3 hover:bg-[#1A1A1A]"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={grupoMembros.includes(c.id)}
+                            onChange={(e) =>
+                              setGrupoMembros((prev) =>
+                                e.target.checked ? [...prev, c.id] : prev.filter((m) => m !== c.id)
+                              )
+                            }
+                            className="accent-[#C9A962]"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm text-[#F5F5F5]">{c.full_name}</span>
+                            <span className="block text-[11px] text-[#6F6F6F]">
+                              {ETIQUETA_PAPEL[c.role] ?? c.role}
+                            </span>
+                          </span>
+                        </label>
+                      ))
+                  )}
                 </div>
                 <div className="border-t border-[#262626] p-3">
                   <button
@@ -1132,9 +1180,102 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
                     disabled={ocupado}
                     className="w-full rounded-lg bg-[#C9A962] px-4 py-2.5 text-sm font-semibold text-[#0A0A0A] transition hover:bg-[#D8BC7A] disabled:opacity-50"
                   >
-                    {ocupado ? "A criar…" : `Criar grupo${grupoMembros.length ? ` (${grupoMembros.length})` : ""}`}
+                    {ocupado
+                      ? "A criar…"
+                      : `Criar grupo${grupoMembros.length ? ` (${grupoMembros.length + 1})` : ""}`}
                   </button>
                 </div>
+              </div>
+            ) : (
+              <div className="flex max-h-[70dvh] flex-col">
+                {!activa ? (
+                  <p className="p-6 text-center text-sm text-[#8A8A8A]">Escolha um grupo primeiro.</p>
+                ) : (
+                  <>
+                    <div className="min-h-0 flex-1 overflow-y-auto">
+                      <p className="px-4 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-[#5A5A5A]">
+                        No grupo ({activa.membros.length})
+                      </p>
+                      {activa.membros.map((m) => (
+                        <div
+                          key={m.id}
+                          className="flex items-center gap-3 border-b border-[#1F1F1F] px-4 py-3"
+                        >
+                          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#C9A962]/15 text-[11px] font-semibold text-[#C9A962]">
+                            {iniciais(m.full_name)}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm text-[#F5F5F5]">
+                              {m.full_name}
+                              {m.id === eu?.id && <span className="text-[#6F6F6F]"> · eu</span>}
+                            </span>
+                            <span className="block text-[11px] text-[#6F6F6F]">
+                              {ETIQUETA_PAPEL[m.role] ?? m.role}
+                            </span>
+                          </span>
+                          {m.id !== eu?.id && (
+                            <button
+                              onClick={() => alternarMembroDoGrupo(m.id, true)}
+                              disabled={aMexerMembros === m.id}
+                              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[#3A3A3A] px-2.5 py-1.5 text-[11px] text-[#C9C9C9] transition hover:border-red-500/60 hover:text-red-300 disabled:opacity-50"
+                            >
+                              <UserMinus className="h-3.5 w-3.5" />
+                              Remover
+                            </button>
+                          )}
+                        </div>
+                      ))}
+
+                      {contactos.filter(
+                        (c) => c.role !== "customer" && !activa.membros.some((m) => m.id === c.id)
+                      ).length > 0 && (
+                        <>
+                          <p className="px-4 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-[#5A5A5A]">
+                            Acrescentar
+                          </p>
+                          {contactos
+                            .filter(
+                              (c) => c.role !== "customer" && !activa.membros.some((m) => m.id === c.id)
+                            )
+                            .map((c) => (
+                              <div
+                                key={c.id}
+                                className="flex items-center gap-3 border-b border-[#1F1F1F] px-4 py-3"
+                              >
+                                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#262626] text-[11px] font-semibold text-[#8A8A8A]">
+                                  {iniciais(c.full_name)}
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-sm text-[#F5F5F5]">
+                                    {c.full_name}
+                                  </span>
+                                  <span className="block text-[11px] text-[#6F6F6F]">
+                                    {ETIQUETA_PAPEL[c.role] ?? c.role}
+                                  </span>
+                                </span>
+                                <button
+                                  onClick={() => alternarMembroDoGrupo(c.id, false)}
+                                  disabled={aMexerMembros === c.id}
+                                  className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#C9A962]/15 px-2.5 py-1.5 text-[11px] font-medium text-[#C9A962] transition hover:bg-[#C9A962]/25 disabled:opacity-50"
+                                >
+                                  <UserPlus className="h-3.5 w-3.5" />
+                                  Juntar
+                                </button>
+                              </div>
+                            ))}
+                        </>
+                      )}
+                    </div>
+                    <div className="border-t border-[#262626] p-3">
+                      <button
+                        onClick={() => setModal(null)}
+                        className="w-full rounded-lg border border-[#404040] px-4 py-2.5 text-sm text-[#E5E5E5] transition hover:border-[#C9A962] hover:text-[#C9A962]"
+                      >
+                        Fechar
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>

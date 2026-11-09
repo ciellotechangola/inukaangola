@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import Link from "next/link";
-import { ImagePlus, Package, Plus, Upload, X } from "lucide-react";
+import { AlertTriangle, ImagePlus, Package, Plus, Trash2, Upload, X } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
 import { setProductStock } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
+import { mensagemDeErro } from "@/lib/erros";
 import { listarProvincias, faltaPatchProvincial, AVISO_PATCH_PROVINCIAL, type Provincia } from "@/lib/provincias";
 import ProductImage from "@/components/ProductImage";
 import TabelaResponsiva from "@/components/TabelaResponsiva";
@@ -20,11 +21,28 @@ interface ImagemProduto {
   url: string | null;
   storage_path: string;
   is_primary: boolean;
+  sort_order?: number;
 }
 
 interface LinhaStock {
   quantity: number;
   provincia_id: string | null;
+}
+
+/** O que a eliminação vai arrastar. Vem de `impacto_eliminar_produto`. */
+interface ImpactoEliminar {
+  product_id: string;
+  name: string;
+  order_items: number;
+  sale_items: number;
+  reservation_items: number;
+  discount_requests: number;
+  images: number;
+  favorites: number;
+  /** Registos que só têm este produto — desaparecem por inteiro no modo forçado. */
+  orders_emptied?: number;
+  sales_emptied?: number;
+  reservations_emptied?: number;
 }
 
 interface ProductRow {
@@ -98,69 +116,156 @@ function extensao(nome: string, tipo: string): string {
 }
 
 /**
- * Guarda a imagem de um produto.
+ * Fotografias do produto — várias, não uma.
  *
  * Duas proveniências, uma só coluna lida pelo site (`product_images.url`):
  *  - ficheiro → Storage `product-images/<produtoId>/<uuid>.<ext>`; o bucket é
- *    público, por isso o URL público serve directamente e não precisa de
- *    assinatura.
- *  - URL colado pela gerência → fica tal e qual. `storage_path` é NOT NULL, por
- *    isso guarda o próprio URL; nada no site o usa para renderizar.
+ *    público, por isso o URL público serve directamente.
+ *  - URL colado pela gerência → fica tal e qual (`storage_path` guarda o
+ *    próprio URL; nada no site o usa para renderizar).
  *
- * A imagem anterior é substituída (o catálogo mostra uma por produto).
+ * A **capa** é a linha com `is_primary`. O catálogo e a página do produto
+ * procuram-na primeiro; as restantes aparecem na galeria, pela ordem de
+ * `sort_order`.
  */
-async function guardarImagem(
+function validarFoto(f: File) {
+  if (!f.type.startsWith("image/")) throw new Error(`«${f.name}» não é uma imagem.`);
+  if (f.size > MAX_BYTES) throw new Error(`«${f.name}» passa dos 5 MB.`);
+}
+
+async function enviarFicheiro(
+  supabase: ReturnType<typeof createClientBrowser>,
   productId: string,
-  ficheiro: File | null,
-  urlExterna: string
-): Promise<string> {
+  ficheiro: File
+): Promise<{ url: string; caminho: string }> {
+  validarFoto(ficheiro);
+
+  const ext = extensao(ficheiro.name, ficheiro.type);
+  const caminho = `${productId}/${crypto.randomUUID()}.${ext}`;
+
+  const up = await supabase.storage.from(BUCKET).upload(caminho, ficheiro, {
+    contentType: ficheiro.type,
+    upsert: false,
+  });
+  if (up.error) throw new Error(up.error.message);
+
+  return { url: supabase.storage.from(BUCKET).getPublicUrl(caminho).data.publicUrl, caminho };
+}
+
+/**
+ * Acrescenta fotografias a um produto já criado.
+ *
+ * Devolve quantas entraram. Se a base recusar o INSERT, os ficheiros que já
+ * subiram são apagados — um ficheiro órfão no Storage não se encontra depois.
+ */
+async function adicionarFotos(
+  productId: string,
+  ficheiros: File[],
+  urls: string[] = []
+): Promise<number> {
   const supabase = createClientBrowser();
 
-  let url = urlExterna.trim();
-  let caminho = url;
-
-  if (ficheiro) {
-    if (!ficheiro.type.startsWith("image/")) throw new Error("O ficheiro não é uma imagem.");
-    if (ficheiro.size > MAX_BYTES) throw new Error("A imagem passa dos 5 MB.");
-
-    const ext = extensao(ficheiro.name, ficheiro.type);
-    caminho = `${productId}/${crypto.randomUUID()}.${ext}`;
-
-    const up = await supabase.storage.from(BUCKET).upload(caminho, ficheiro, {
-      contentType: ficheiro.type,
-      upsert: false,
-    });
-    if (up.error) throw new Error(up.error.message);
-
-    url = supabase.storage.from(BUCKET).getPublicUrl(caminho).data.publicUrl;
-  }
-
-  if (!url) throw new Error("Escolha um ficheiro ou cole um URL.");
-
-  // Substituir: apagar as linhas antigas e os ficheiros que vivem no bucket.
-  const { data: antigas } = await supabase
+  const { count } = await supabase
     .from("product_images")
-    .select("id, storage_path")
+    .select("id", { count: "exact", head: true })
     .eq("product_id", productId);
 
-  if (antigas && antigas.length > 0) {
-    const noBucket = antigas
-      .map((a) => (a as { storage_path: string }).storage_path)
-      .filter((p) => p && !/^https?:\/\//i.test(p));
-    if (noBucket.length > 0) await supabase.storage.from(BUCKET).remove(noBucket);
-    await supabase.from("product_images").delete().eq("product_id", productId);
+  let ordem = count ?? 0;
+  const novas: {
+    product_id: string;
+    storage_path: string;
+    url: string;
+    is_primary: boolean;
+    sort_order: number;
+  }[] = [];
+  const subidos: string[] = [];
+
+  try {
+    for (const ficheiro of ficheiros) {
+      const { url, caminho } = await enviarFicheiro(supabase, productId, ficheiro);
+      subidos.push(caminho);
+      novas.push({
+        product_id: productId,
+        storage_path: caminho,
+        url,
+        is_primary: false,
+        sort_order: ordem++,
+      });
+    }
+
+    for (const bruto of urls) {
+      const url = bruto.trim();
+      if (!url) continue;
+      novas.push({
+        product_id: productId,
+        storage_path: url,
+        url,
+        is_primary: false,
+        sort_order: ordem++,
+      });
+    }
+
+    if (novas.length === 0) return 0;
+
+    // Primeira fotografia do produto é a capa.
+    if ((count ?? 0) === 0) novas[0].is_primary = true;
+
+    const { error } = await supabase.from("product_images").insert(novas);
+    if (error) throw new Error(error.message);
+
+    return novas.length;
+  } catch (e) {
+    if (subidos.length > 0) await supabase.storage.from(BUCKET).remove(subidos);
+    throw e;
+  }
+}
+
+/**
+ * Apaga uma fotografia (linha e ficheiro).
+ */
+async function apagarFoto(img: ImagemProduto, productId: string) {
+  const supabase = createClientBrowser();
+
+  if (img.storage_path && !/^https?:\/\//i.test(img.storage_path)) {
+    await supabase.storage.from(BUCKET).remove([img.storage_path]);
   }
 
-  const { error } = await supabase.from("product_images").insert({
-    product_id: productId,
-    storage_path: caminho,
-    url,
-    is_primary: true,
-    sort_order: 0,
-  });
+  const { error } = await supabase.from("product_images").delete().eq("id", img.id);
   if (error) throw new Error(error.message);
 
-  return url;
+  // Se era a capa, a primeira que sobrar passa a ser.
+  if (img.is_primary) {
+    const { data: restantes } = await supabase
+      .from("product_images")
+      .select("id")
+      .eq("product_id", productId)
+      .order("sort_order")
+      .limit(1);
+    const proxima = (restantes ?? [])[0] as { id: string } | undefined;
+    if (proxima) {
+      await supabase.from("product_images").update({ is_primary: true }).eq("id", proxima.id);
+    }
+  }
+}
+
+/** Escolhe a capa (a que aparece no catálogo). */
+async function definirCapa(productId: string, imagemId: string) {
+  const supabase = createClientBrowser();
+
+  // Marca primeiro a nova capa e só depois limpa as outras: se a segunda
+  // chamada falhar, o produto fica com duas capas (inofensivo — o catálogo
+  // escolhe a primeira) em vez de ficar sem nenhuma.
+  const { error } = await supabase
+    .from("product_images")
+    .update({ is_primary: true })
+    .eq("id", imagemId);
+  if (error) throw new Error(error.message);
+
+  await supabase
+    .from("product_images")
+    .update({ is_primary: false })
+    .eq("product_id", productId)
+    .neq("id", imagemId);
 }
 
 export default function ManagerProductsPage() {
@@ -196,16 +301,25 @@ export default function ManagerProductsPage() {
     provincia_id: "",
   });
 
-  const [ficheiro, setFicheiro] = useState<File | null>(null);
-  const [preview, setPreview] = useState("");
+  const [ficheiros, setFicheiros] = useState<File[]>([]);
+  const [previews, setPreviews] = useState<string[]>([]);
   const inputFicheiro = useRef<HTMLInputElement>(null);
 
-  // Modal de imagem de um produto já existente
+  // Modal de fotografias de um produto já existente
   const [alvo, setAlvo] = useState<ProductRow | null>(null);
-  const [alvoFicheiro, setAlvoFicheiro] = useState<File | null>(null);
+  const [alvoFicheiros, setAlvoFicheiros] = useState<File[]>([]);
+  const [alvoPreviews, setAlvoPreviews] = useState<string[]>([]);
   const [alvoUrl, setAlvoUrl] = useState("");
-  const [alvoPreview, setAlvoPreview] = useState("");
   const [aGuardarImagem, setAGuardarImagem] = useState(false);
+
+  // Confirmação de eliminação: primeiro o impacto, depois a decisão.
+  const [aEliminar, setAEliminar] = useState<{
+    produto: ProductRow;
+    impacto: ImpactoEliminar;
+  } | null>(null);
+  const [aApagar, setAApagar] = useState(false);
+  /** No aviso de eliminação: apagar também o histórico deste produto. */
+  const [forcarHistorico, setForcarHistorico] = useState(false);
 
   const load = useCallback(async () => {
     const supabase = createClientBrowser();
@@ -272,40 +386,40 @@ export default function ManagerProductsPage() {
     };
   }, [provinciaStock]);
 
-  function escolherFicheiro(e: ChangeEvent<HTMLInputElement>, paraModal: boolean) {
-    const f = e.target.files?.[0];
+  function escolherFicheiros(e: ChangeEvent<HTMLInputElement>, paraModal: boolean) {
+    const lista = Array.from(e.target.files ?? []);
     e.target.value = "";
-    if (!f) return;
+    if (lista.length === 0) return;
 
-    if (!f.type.startsWith("image/")) {
-      setError("Escolha um ficheiro de imagem.");
-      return;
-    }
-    if (f.size > MAX_BYTES) {
-      setError("A imagem passa dos 5 MB.");
+    try {
+      for (const f of lista) validarFoto(f);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ficheiro inválido.");
       return;
     }
 
     setError("");
+    const novas = lista.map((f) => URL.createObjectURL(f));
+
     if (paraModal) {
-      setAlvoFicheiro(f);
-      setAlvoPreview(URL.createObjectURL(f));
+      setAlvoFicheiros((prev) => [...prev, ...lista]);
+      setAlvoPreviews((prev) => [...prev, ...novas]);
     } else {
-      setFicheiro(f);
-      setPreview(URL.createObjectURL(f));
+      setFicheiros((prev) => [...prev, ...lista]);
+      setPreviews((prev) => [...prev, ...novas]);
     }
   }
 
   function limparImagem(paraModal: boolean) {
     if (paraModal) {
-      if (alvoPreview) URL.revokeObjectURL(alvoPreview);
-      setAlvoFicheiro(null);
-      setAlvoPreview("");
+      alvoPreviews.forEach((p) => URL.revokeObjectURL(p));
+      setAlvoFicheiros([]);
+      setAlvoPreviews([]);
       setAlvoUrl("");
     } else {
-      if (preview) URL.revokeObjectURL(preview);
-      setFicheiro(null);
-      setPreview("");
+      previews.forEach((p) => URL.revokeObjectURL(p));
+      setFicheiros([]);
+      setPreviews([]);
       setForm((f) => ({ ...f, imagemUrl: "" }));
     }
   }
@@ -397,11 +511,13 @@ export default function ManagerProductsPage() {
       }
 
       const avisos: string[] = [];
-      if (ficheiro || form.imagemUrl.trim()) {
+      if (ficheiros.length > 0 || form.imagemUrl.trim()) {
         try {
-          await guardarImagem(editando.id, ficheiro, form.imagemUrl);
+          await adicionarFotos(editando.id, ficheiros, [form.imagemUrl]);
         } catch (err) {
-          avisos.push(`a imagem falhou: ${err instanceof Error ? err.message : "erro"}`);
+          avisos.push(
+            `as fotografias falharam: ${err instanceof Error ? err.message : "erro"}`
+          );
         }
       }
 
@@ -432,13 +548,13 @@ export default function ManagerProductsPage() {
     const productId = (created as { id: string }).id;
     const avisos: string[] = [];
 
-    // Imagem primeiro: é o que o utilizador pediu para ficar guardado.
-    if (ficheiro || form.imagemUrl.trim()) {
+    // Fotografias primeiro: é o que o utilizador pediu para ficar guardado.
+    if (ficheiros.length > 0 || form.imagemUrl.trim()) {
       try {
-        await guardarImagem(productId, ficheiro, form.imagemUrl);
+        await adicionarFotos(productId, ficheiros, [form.imagemUrl]);
       } catch (err) {
         avisos.push(
-          `produto criado, mas a imagem falhou: ${err instanceof Error ? err.message : "erro"}`
+          `produto criado, mas as fotografias falharam: ${err instanceof Error ? err.message : "erro"}`
         );
       }
     }
@@ -464,77 +580,153 @@ export default function ManagerProductsPage() {
     await load();
   }
 
-  // Tabelas que apontam para o produto sem ON DELETE CASCADE: se houver
-  // história, o DELETE rebenta na FK. Nesse caso o correcto é desactivar.
-  async function eliminar(p: ProductRow) {
+  /**
+   * Eliminar um produto — mesmo que já esteja em encomendas ou vendas.
+   *
+   * A base de dados guarda o nome e o preço nos registos históricos e deixa
+   * `product_id` a NULL (migração 0013). Antes de apagar mostramos o impacto:
+   * o gestor vê o que vai acontecer e confirma. Não há bloqueio.
+   */
+  async function pedirEliminar(p: ProductRow) {
     setError("");
     setNotice("");
 
     const supabase = createClientBrowser();
-    const contar = (tabela: string) =>
-      supabase
-        .from(tabela)
-        .select("id", { count: "exact", head: true })
-        .eq("product_id", p.id)
-        .then(({ count }) => count ?? 0);
+    const { data, error } = await supabase.rpc("impacto_eliminar_produto", {
+      p_product_id: p.id,
+    });
 
-    const [vendas, encomendas, reservas, descontos] = await Promise.all([
-      contar("sale_items"),
-      contar("order_items"),
-      contar("reservation_items"),
-      contar("discount_requests"),
-    ]);
-    const usos = vendas + encomendas + reservas + descontos;
-
-    if (usos > 0) {
-      setError(
-        `«${p.name}» já aparece em ${usos} registo(s) de vendas, encomendas, reservas ou descontos. ` +
-          "Eliminar apagaria esse histórico — use «Desativar» para o tirar da loja sem perder nada."
-      );
+    if (error) {
+      setError(mensagemDeErro(error));
       return;
     }
 
-    const resposta = window.confirm(
-      `Eliminar «${p.name}» definitivamente?\n\nSão apagados também o stock, as imagens e o histórico de movimentos deste produto. Esta acção não se desfaz.`
+    setForcarHistorico(false);
+    setAEliminar({ produto: p, impacto: data as ImpactoEliminar });
+  }
+
+  /**
+   * `forcar` apaga também o histórico deste produto (linhas de encomenda,
+   * venda, reserva e pedidos de desconto) e os registos que ficaram vazios.
+   * É para produtos fictícios, de demonstração ou de teste — não para um
+   * artigo real que sai de linha.
+   */
+  async function confirmarEliminar(forcar = false) {
+    if (!aEliminar) return;
+
+    const { produto } = aEliminar;
+    setAApagar(true);
+    setError("");
+    setNotice("");
+
+    const supabase = createClientBrowser();
+    // Os ficheiros do Storage primeiro: se o produto sair e a remoção falhar,
+    // ficam órfãos sem forma de os encontrar.
+    const caminhos = (produto.images ?? []).map((i) => i.storage_path).filter(Boolean);
+
+    try {
+      const { data, error } = await supabase.rpc("eliminar_produto", {
+        p_product_id: produto.id,
+        p_forcar: forcar,
+      });
+      if (error) throw new Error(error.message);
+
+      if (caminhos.length > 0) await supabase.storage.from(BUCKET).remove(caminhos);
+
+      if (editando?.id === produto.id) fecharFormulario();
+      if (alvo?.id === produto.id) fecharModal();
+
+      setAEliminar(null);
+
+      const apagados = (data as { apagados?: Record<string, number> } | null)?.apagados;
+      const partes = forcar
+        ? [
+            apagados?.linhas_encomenda ? `${apagados.linhas_encomenda} linha(s) de encomenda` : "",
+            apagados?.linhas_venda ? `${apagados.linhas_venda} linha(s) de venda` : "",
+            apagados?.encomendas ? `${apagados.encomendas} encomenda(s)` : "",
+            apagados?.vendas ? `${apagados.vendas} venda(s)` : "",
+            apagados?.reservas ? `${apagados.reservas} reserva(s)` : "",
+          ].filter(Boolean)
+        : [];
+
+      setNotice(
+        forcar
+          ? `«${produto.name}» eliminado do catálogo${partes.length ? ` e do histórico (${partes.join(" · ")})` : " e do histórico"}.`
+          : `«${produto.name}» eliminado do catálogo. O histórico das vendas ficou guardado.`
+      );
+      await load();
+    } catch (e) {
+      setError(
+        mensagemDeErro(
+          e,
+          forcar ? "supabase/PATCH_ELIMINAR_FORCADO.sql" : "supabase/PATCH_PERFIS_LOJA.sql"
+        )
+      );
+    } finally {
+      setAApagar(false);
+    }
+  }
+
+  /** Relê as fotografias do produto aberto no modal (sem fechar o modal). */
+  async function recarregarAlvo(productId: string) {
+    const supabase = createClientBrowser();
+    const { data } = await supabase
+      .from("product_images")
+      .select("id, url, storage_path, is_primary, sort_order")
+      .eq("product_id", productId)
+      .order("sort_order");
+    setAlvo((atual) =>
+      atual && atual.id === productId ? { ...atual, images: (data ?? []) as ImagemProduto[] } : atual
     );
-    if (!resposta) return;
-
-    // Primeiro os ficheiros do Storage: se o DELETE do produto passar e a
-    // remoção do ficheiro falhar, ficam órfãos sem forma de os encontrar.
-    const caminhos = (p.images ?? []).map((i) => i.storage_path).filter(Boolean);
-    if (caminhos.length > 0) {
-      await supabase.storage.from(BUCKET).remove(caminhos);
-    }
-
-    const { error: delErr } = await supabase.from("products").delete().eq("id", p.id);
-    if (delErr) {
-      setError(
-        delErr.code === "23503"
-          ? `«${p.name}» ainda está referenciado noutro sítio. Desactive-o em vez de eliminar.`
-          : delErr.message
-      );
-      return;
-    }
-
-    if (editando?.id === p.id) fecharFormulario();
-    setNotice(`«${p.name}» eliminado.`);
-    await load();
   }
 
   async function guardarImagemDoAlvo() {
     if (!alvo) return;
+    if (alvoFicheiros.length === 0 && !alvoUrl.trim()) {
+      setError("Escolha um ficheiro ou cole um URL.");
+      return;
+    }
     setAGuardarImagem(true);
     setError("");
     try {
-      await guardarImagem(alvo.id, alvoFicheiro, alvoUrl);
-      setNotice("Imagem guardada.");
-      setAlvo(null);
+      const entraram = await adicionarFotos(alvo.id, alvoFicheiros, [alvoUrl]);
+      setNotice(
+        entraram === 1 ? "Fotografia acrescentada." : `${entraram} fotografias acrescentadas.`
+      );
       limparImagem(true);
+      await recarregarAlvo(alvo.id);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Não foi possível guardar a imagem.");
+      setError(err instanceof Error ? err.message : "Não foi possível guardar a fotografia.");
     } finally {
       setAGuardarImagem(false);
+    }
+  }
+
+  async function removerFotoDoAlvo(img: ImagemProduto) {
+    if (!alvo) return;
+    if (!window.confirm("Apagar esta fotografia do produto?")) return;
+    setError("");
+    try {
+      await apagarFoto(img, alvo.id);
+      setNotice("Fotografia apagada.");
+      await recarregarAlvo(alvo.id);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível apagar a fotografia.");
+    }
+  }
+
+  async function capaDoAlvo(img: ImagemProduto) {
+    if (!alvo) return;
+    setError("");
+    try {
+      await definirCapa(alvo.id, img.id);
+      setNotice("Capa actualizada.");
+      await recarregarAlvo(alvo.id);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível definir a capa.");
     }
   }
 
@@ -573,22 +765,31 @@ export default function ManagerProductsPage() {
 
   function abrirModal(p: ProductRow) {
     setAlvo(p);
-    setAlvoFicheiro(null);
+    setAlvoFicheiros([]);
+    setAlvoPreviews([]);
     setAlvoUrl("");
-    setAlvoPreview(imagemPrincipal(p) ?? "");
     setError("");
   }
 
   function fecharModal() {
     setAlvo(null);
-    if (alvoFicheiro) URL.revokeObjectURL(alvoPreview);
-    setAlvoFicheiro(null);
+    alvoPreviews.forEach((p) => URL.revokeObjectURL(p));
+    setAlvoFicheiros([]);
+    setAlvoPreviews([]);
     setAlvoUrl("");
-    setAlvoPreview("");
   }
 
   const campo =
     "rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none";
+
+  // Só se oferece «apagar do histórico» quando há histórico para apagar.
+  const temHistorico =
+    !!aEliminar &&
+    aEliminar.impacto.order_items +
+      aEliminar.impacto.sale_items +
+      aEliminar.impacto.reservation_items +
+      aEliminar.impacto.discount_requests >
+      0;
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-10">
@@ -744,68 +945,88 @@ export default function ManagerProductsPage() {
             className={`mt-3 w-full ${campo}`}
           />
 
-          {/* ---------------- Imagem do produto ---------------- */}
+          {/* ---------------- Fotografias do produto ---------------- */}
           <div className="mt-4 rounded-lg border border-[#2A2A2A] bg-[#141414] p-4">
-            <p className="mb-3 text-sm font-medium text-[#E5E5E5]">Imagem do produto</p>
-            <div className="flex flex-wrap items-start gap-4">
-              <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[#333] bg-[#0A0A0A]">
-                {preview || form.imagemUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={preview || form.imagemUrl}
-                    alt="Pré-visualização"
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <ImagePlus className="h-7 w-7 text-[#3A3A3A]" />
-                )}
-              </div>
+            <p className="text-sm font-medium text-[#E5E5E5]">Fotografias do produto</p>
+            <p className="mb-3 mt-1 text-[11px] text-[#6F6F6F]">
+              Pode escolher várias de uma vez. A primeira é a capa (a que aparece no catálogo);
+              na galeria do produto deslizam todas.
+            </p>
 
-              <div className="min-w-[220px] flex-1 space-y-2">
-                <input
-                  ref={inputFicheiro}
-                  type="file"
-                  accept="image/*"
-                  hidden
-                  onChange={(e) => escolherFicheiro(e, false)}
-                />
-                <button
-                  type="button"
-                  onClick={() => inputFicheiro.current?.click()}
-                  className="inline-flex items-center gap-2 rounded-lg border border-[#404040] px-3 py-2 text-sm text-[#E5E5E5] transition hover:border-[#C9A962] hover:text-[#C9A962]"
+            {editando && (editando.images ?? []).length > 0 && (
+              <p className="mb-3 rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] px-3 py-2 text-[11px] text-[#8A8A8A]">
+                Este produto já tem {(editando.images ?? []).length}{" "}
+                {(editando.images ?? []).length === 1 ? "fotografia" : "fotografias"}. As que
+                acrescentar aqui juntam-se a essas — para apagar ou escolher a capa, use o botão
+                «Fotos» na lista.
+              </p>
+            )}
+
+            <div className="flex flex-wrap items-start gap-2">
+              {previews.map((src, i) => (
+                <div
+                  key={src}
+                  className="relative h-24 w-24 shrink-0 overflow-hidden rounded-lg border border-[#333] bg-[#0A0A0A]"
                 >
-                  <Upload className="h-4 w-4" />
-                  {ficheiro ? "Trocar ficheiro" : "Carregar do computador"}
-                </button>
-                {ficheiro && (
-                  <p className="text-[11px] text-[#8A8A8A]">
-                    {ficheiro.name} · {(ficheiro.size / 1024).toFixed(0)} KB
-                  </p>
-                )}
-
-                <input
-                  value={form.imagemUrl}
-                  onChange={(e) => {
-                    setForm({ ...form, imagemUrl: e.target.value });
-                    if (ficheiro) limparImagem(false);
-                  }}
-                  placeholder="…ou cole um URL (https://…)"
-                  className={`w-full ${campo}`}
-                />
-                {(ficheiro || form.imagemUrl) && (
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={src} alt={`Pré-visualização ${i + 1}`} className="h-full w-full object-contain p-1" />
+                  <span className="absolute bottom-0 left-0 right-0 bg-[#0A0A0A]/80 text-center text-[9px] uppercase tracking-wider text-[#C9A962]">
+                    {i === 0 ? "capa" : `foto ${i + 1}`}
+                  </span>
                   <button
                     type="button"
-                    onClick={() => limparImagem(false)}
-                    className="text-[11px] text-[#8A8A8A] underline hover:text-[#E5E5E5]"
+                    onClick={() => {
+                      URL.revokeObjectURL(src);
+                      setPreviews((prev) => prev.filter((p) => p !== src));
+                      setFicheiros((prev) => prev.filter((_, k) => k !== i));
+                    }}
+                    aria-label="Tirar esta fotografia"
+                    className="absolute right-1 top-1 rounded-full bg-[#0A0A0A]/85 p-0.5 text-[#C9C9C9] hover:text-red-300"
                   >
-                    remover imagem
+                    <X className="h-3.5 w-3.5" />
                   </button>
-                )}
-              </div>
+                </div>
+              ))}
+
+              <input
+                ref={inputFicheiro}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={(e) => escolherFicheiros(e, false)}
+              />
+              <button
+                type="button"
+                onClick={() => inputFicheiro.current?.click()}
+                className="flex h-24 w-24 shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-[#404040] text-[#8A8A8A] transition hover:border-[#C9A962] hover:text-[#C9A962]"
+              >
+                <ImagePlus className="h-5 w-5" />
+                <span className="text-[10px]">Juntar fotos</span>
+              </button>
             </div>
+
+            <div className="mt-3 space-y-2">
+              <input
+                value={form.imagemUrl}
+                onChange={(e) => setForm({ ...form, imagemUrl: e.target.value })}
+                placeholder="…ou cole um URL de uma imagem (https://…)"
+                className={`w-full ${campo}`}
+              />
+              {(previews.length > 0 || form.imagemUrl) && (
+                <button
+                  type="button"
+                  onClick={() => limparImagem(false)}
+                  className="text-[11px] text-[#8A8A8A] underline hover:text-[#E5E5E5]"
+                >
+                  limpar tudo
+                </button>
+              )}
+            </div>
+
             <p className="mt-3 text-[11px] text-[#525252]">
-              Ficheiro até 5 MB (JPG, PNG, WebP). O ficheiro fica no Storage; o URL serve para
-              usar uma imagem que já esteja alojada.
+              Ficheiros até 5 MB cada (JPG, PNG, WebP). Ficam no Storage; o URL serve para usar
+              uma imagem que já esteja alojada.
             </p>
           </div>
 
@@ -890,7 +1111,7 @@ export default function ManagerProductsPage() {
                         onClick={() => abrirModal(p)}
                         className="text-xs text-[#C9A962] hover:underline"
                       >
-                        Imagem
+                        Fotos
                       </button>
                       <button
                         onClick={() => handleStock(p.id, qty)}
@@ -905,7 +1126,7 @@ export default function ManagerProductsPage() {
                         {p.is_active ? "Desativar" : "Ativar"}
                       </button>
                       <button
-                        onClick={() => eliminar(p)}
+                        onClick={() => pedirEliminar(p)}
                         className="text-xs text-red-300 hover:text-red-200"
                       >
                         Eliminar
@@ -965,7 +1186,7 @@ export default function ManagerProductsPage() {
                       onClick={() => abrirModal(p)}
                       className="mr-3 text-xs text-[#C9A962] hover:underline"
                     >
-                      Imagem
+                      Fotos
                     </button>
                     <button
                       onClick={() => handleStock(p.id, qty)}
@@ -980,7 +1201,7 @@ export default function ManagerProductsPage() {
                       {p.is_active ? "Desativar" : "Ativar"}
                     </button>
                     <button
-                      onClick={() => eliminar(p)}
+                      onClick={() => pedirEliminar(p)}
                       className="text-xs text-red-300 hover:text-red-200"
                     >
                       Eliminar
@@ -1049,6 +1270,124 @@ export default function ManagerProductsPage() {
           </div>
         )}
       </section>
+      {/* ------------------------------------------------ eliminar produto */}
+      {aEliminar && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-xl border border-[#4A2020] bg-[#141414]">
+            <header className="flex items-center justify-between border-b border-[#262626] px-4 py-3">
+              <h2 className="flex items-center gap-2 text-sm font-medium text-[#F5F5F5]">
+                <AlertTriangle className="h-4 w-4 text-[#F87171]" />
+                Eliminar produto
+              </h2>
+              <button
+                onClick={() => setAEliminar(null)}
+                aria-label="Fechar"
+                className="text-[#8A8A8A] hover:text-[#F5F5F5]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </header>
+
+            <div className="p-4">
+              <p className="mb-3 text-sm text-[#EDEDED]">
+                «{aEliminar.produto.name}» vai sair do catálogo definitivamente.
+              </p>
+
+              <div className="mb-3 rounded-lg border border-[#262626] bg-[#0A0A0A] p-3 text-sm">
+                <p className="mb-2 text-[11px] uppercase tracking-wide text-[#525252]">
+                  Vai afectar
+                </p>
+                <ul className="space-y-1 text-[#C9C9C9]">
+                  <LinhaImpacto n={aEliminar.impacto.order_items} singular="encomenda" plural="encomendas" />
+                  <LinhaImpacto n={aEliminar.impacto.sale_items} singular="venda registada" plural="vendas registadas" />
+                  <LinhaImpacto n={aEliminar.impacto.reservation_items} singular="reserva" plural="reservas" />
+                  <LinhaImpacto n={aEliminar.impacto.discount_requests} singular="pedido de desconto" plural="pedidos de desconto" />
+                  <LinhaImpacto n={aEliminar.impacto.favorites} singular="favorito" plural="favoritos" />
+                  <LinhaImpacto n={aEliminar.impacto.images} singular="fotografia" plural="fotografias" />
+                </ul>
+              </div>
+
+              {temHistorico ? (
+                <>
+                  <label className="mb-3 flex cursor-pointer items-start gap-2.5 rounded-lg border border-[#3A2020] bg-[#1A0F0F] p-3">
+                    <input
+                      type="checkbox"
+                      checked={forcarHistorico}
+                      onChange={(e) => setForcarHistorico(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-[#DC2626]"
+                    />
+                    <span className="text-xs leading-relaxed text-[#C9C9C9]">
+                      <strong className="block text-[#F5F5F5]">
+                        Apagar também do histórico
+                      </strong>
+                      Para produtos fictícios, de demonstração ou de teste. Remove as linhas
+                      deste produto nas encomendas, vendas e reservas
+                      {(aEliminar.impacto.orders_emptied ??
+                        0) + (aEliminar.impacto.sales_emptied ?? 0) + (aEliminar.impacto.reservations_emptied ?? 0) >
+                      0 && (
+                        <>
+                          {" "}
+                          e os registos que só têm este produto (
+                          <strong className="text-[#F87171]">
+                            {aEliminar.impacto.orders_emptied ?? 0} encomenda(s) ·{" "}
+                            {aEliminar.impacto.sales_emptied ?? 0} venda(s) ·{" "}
+                            {aEliminar.impacto.reservations_emptied ?? 0} reserva(s)
+                          </strong>
+                          )
+                        </>
+                      )}
+                      . Os totais que sobrarem são recalculados.
+                    </span>
+                  </label>
+
+                  <p className="mb-3 text-[11px] text-[#8A8A8A]">
+                    Sem esta opção, as encomendas e vendas{" "}
+                    <strong className="text-[#C9C9C9]">não são apagadas</strong>: ficam com o
+                    nome e o preço deste produto, sem ligação ao catálogo.
+                  </p>
+                </>
+              ) : (
+                <p className="mb-3 text-[11px] text-[#8A8A8A]">
+                  Este produto ainda não está em nenhuma encomenda ou venda. O stock e as
+                  fotografias são removidos. Esta acção não se desfaz.
+                </p>
+              )}
+
+              {forcarHistorico && (
+                <p className="mb-3 rounded-lg border border-[#4A2020] bg-[#1A0F0F] px-3 py-2 text-[11px] font-medium text-[#F87171]">
+                  O histórico deste produto desaparece por completo e não pode ser recuperado.
+                </p>
+              )}
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => confirmarEliminar(forcarHistorico)}
+                  disabled={aApagar}
+                  className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition disabled:opacity-50 ${
+                    forcarHistorico
+                      ? "bg-[#991B1B] hover:bg-[#DC2626]"
+                      : "bg-[#DC2626] hover:bg-[#EF4444]"
+                  }`}
+                >
+                  {aApagar
+                    ? "A eliminar…"
+                    : forcarHistorico
+                      ? "Eliminar produto e histórico"
+                      : "Sim, eliminar"}
+                </button>
+                <button
+                  onClick={() => setAEliminar(null)}
+                  disabled={aApagar}
+                  className="rounded-lg border border-[#404040] px-4 py-2.5 text-sm text-[#A3A3A3] hover:text-[#F5F5F5]"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {alvo && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 sm:items-center sm:p-4"
@@ -1059,72 +1398,169 @@ export default function ManagerProductsPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <header className="flex items-center justify-between border-b border-[#262626] px-4 py-3">
-              <h2 className="text-sm font-medium text-[#F5F5F5]">Imagem · {alvo.name}</h2>
+              <h2 className="truncate text-sm font-medium text-[#F5F5F5]">
+                Fotos · {alvo.name}
+              </h2>
               <button onClick={fecharModal} aria-label="Fechar" className="text-[#8A8A8A] hover:text-[#E5E5E5]">
                 <X className="h-4 w-4" />
               </button>
             </header>
 
-            <div className="p-4">
-              <div className="mb-3 flex h-40 items-center justify-center overflow-hidden rounded-lg border border-[#333] bg-[#0A0A0A]">
-                {alvoPreview ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={alvoPreview} alt="" className="h-full w-full object-contain" />
-                ) : (
-                  <ImagePlus className="h-8 w-8 text-[#3A3A3A]" />
+            <div className="max-h-[70dvh] overflow-y-auto p-4">
+              {/* ---- Fotografias que o produto já tem ---- */}
+              {(alvo.images ?? []).length === 0 ? (
+                <p className="mb-4 rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] px-3 py-6 text-center text-xs text-[#8A8A8A]">
+                  Ainda sem fotografias. Junte a primeira abaixo.
+                </p>
+              ) : (
+                <div className="mb-4 grid grid-cols-3 gap-2">
+                  {(alvo.images ?? []).map((img) => (
+                    <div
+                      key={img.id}
+                      className={`relative overflow-hidden rounded-lg border bg-[#0A0A0A] ${
+                        img.is_primary ? "border-[#C9A962]" : "border-[#333]"
+                      }`}
+                    >
+                      <div className="aspect-square">
+                        {img.url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={img.url} alt="" className="h-full w-full object-contain p-1" />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            <ImagePlus className="h-5 w-5 text-[#3A3A3A]" />
+                          </div>
+                        )}
+                      </div>
+                      {img.is_primary && (
+                        <span className="absolute left-1 top-1 rounded bg-[#C9A962] px-1.5 py-0.5 text-[9px] font-bold uppercase text-[#0A0A0A]">
+                          capa
+                        </span>
+                      )}
+                      <div className="flex items-center justify-between border-t border-[#262626] px-1 py-1">
+                        {img.is_primary ? (
+                          <span className="text-[10px] text-[#525252]">no catálogo</span>
+                        ) : (
+                          <button
+                            onClick={() => capaDoAlvo(img)}
+                            className="text-[10px] text-[#C9A962] hover:underline"
+                          >
+                            capa
+                          </button>
+                        )}
+                        <button
+                          onClick={() => removerFotoDoAlvo(img)}
+                          aria-label="Apagar fotografia"
+                          className="text-[#8A8A8A] hover:text-red-300"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* ---- Acrescentar ---- */}
+              <div className="rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] p-3">
+                <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-[#6F6F6F]">
+                  Acrescentar
+                </p>
+
+                {alvoPreviews.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    {alvoPreviews.map((src, i) => (
+                      <div
+                        key={src}
+                        className="relative h-16 w-16 overflow-hidden rounded border border-[#333] bg-[#0A0A0A]"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={src} alt="" className="h-full w-full object-contain p-1" />
+                        <button
+                          onClick={() => {
+                            URL.revokeObjectURL(src);
+                            setAlvoPreviews((prev) => prev.filter((p) => p !== src));
+                            setAlvoFicheiros((prev) => prev.filter((_, k) => k !== i));
+                          }}
+                          aria-label="Tirar"
+                          className="absolute right-0.5 top-0.5 rounded-full bg-[#0A0A0A]/85 p-0.5 text-[#C9C9C9] hover:text-red-300"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
+
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  id="fotos-produto"
+                  hidden
+                  onChange={(e) => escolherFicheiros(e, true)}
+                />
+                <button
+                  type="button"
+                  onClick={() => document.getElementById("fotos-produto")?.click()}
+                  className="mb-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-[#404040] px-3 py-2 text-sm text-[#E5E5E5] transition hover:border-[#C9A962] hover:text-[#C9A962]"
+                >
+                  <Upload className="h-4 w-4" />
+                  {alvoFicheiros.length > 0 ? "Escolher mais" : "Carregar do computador"}
+                </button>
+
+                <input
+                  value={alvoUrl}
+                  onChange={(e) => setAlvoUrl(e.target.value)}
+                  placeholder="…ou cole um URL (https://…)"
+                  className={`w-full ${campo}`}
+                />
               </div>
-
-              <input
-                type="file"
-                accept="image/*"
-                id="imagem-produto"
-                hidden
-                onChange={(e) => escolherFicheiro(e, true)}
-              />
-              <button
-                type="button"
-                onClick={() => document.getElementById("imagem-produto")?.click()}
-                className="mb-2 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-[#404040] px-3 py-2 text-sm text-[#E5E5E5] transition hover:border-[#C9A962] hover:text-[#C9A962]"
-              >
-                <Upload className="h-4 w-4" />
-                {alvoFicheiro ? "Trocar ficheiro" : "Carregar do computador"}
-              </button>
-
-              <input
-                value={alvoUrl}
-                onChange={(e) => {
-                  setAlvoUrl(e.target.value);
-                  setAlvoFicheiro(null);
-                  setAlvoPreview(e.target.value);
-                }}
-                placeholder="…ou cole um URL (https://…)"
-                className={`w-full ${campo}`}
-              />
 
               <div className="mt-4 flex gap-2">
                 <button
                   onClick={guardarImagemDoAlvo}
-                  disabled={aGuardarImagem || (!alvoFicheiro && !alvoUrl.trim())}
+                  disabled={
+                    aGuardarImagem || (alvoFicheiros.length === 0 && !alvoUrl.trim())
+                  }
                   className="flex-1 rounded-lg bg-[#C9A962] px-4 py-2.5 text-sm font-semibold text-[#0A0A0A] transition hover:bg-[#E3D5A7] disabled:opacity-50"
                 >
-                  {aGuardarImagem ? "A guardar…" : "Guardar imagem"}
+                  {aGuardarImagem ? "A guardar…" : "Acrescentar fotografias"}
                 </button>
                 <button
                   onClick={fecharModal}
                   className="rounded-lg border border-[#404040] px-4 py-2.5 text-sm text-[#A3A3A3] hover:text-[#F5F5F5]"
                 >
-                  Cancelar
+                  Fechar
                 </button>
               </div>
 
               <p className="mt-3 text-[11px] text-[#525252]">
-                Guardar substitui a imagem actual do produto.
+                A capa é a fotografia que aparece no catálogo. Na página do produto deslizam-se
+                todas as que existirem.
               </p>
             </div>
           </div>
         </div>
       )}
     </main>
+  );
+}
+
+/** Uma linha do impacto: só aparece quando há registos. */
+function LinhaImpacto({
+  n,
+  singular,
+  plural,
+}: {
+  n: number;
+  singular: string;
+  plural: string;
+}) {
+  if (!n) return null;
+  return (
+    <li className="flex justify-between gap-3">
+      <span>{n === 1 ? singular : plural}</span>
+      <span className="font-mono text-[#E3D5A7]">{n}</span>
+    </li>
   );
 }

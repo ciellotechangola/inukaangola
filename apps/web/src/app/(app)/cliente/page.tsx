@@ -14,6 +14,11 @@ export default async function CustomerDashboardPage() {
       <p className="mb-8 text-[#A3A3A3]">Bem-vindo à sua área de cliente INUKA.</p>
 
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <DashboardCard
+          href="/cliente/conteudo"
+          title="Notícias"
+          description="Comunicados, novidades e promoções. Reaja e comente."
+        />
         <DashboardCard href="/cliente/encomendas" title="As minhas encomendas" description="Consulte e acompanhe os seus pedidos." />
         <DashboardCard href="/cliente/reservas" title="Reservas" description="Veja as reservas ativas e histórico." />
         <DashboardCard href="/cliente/favoritos" title="Favoritos" description="Os seus produtos preferidos." />

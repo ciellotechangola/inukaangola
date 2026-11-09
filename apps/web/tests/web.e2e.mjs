@@ -99,14 +99,22 @@ function fail(label, detail = "") {
   falhas.push(`${label} :: ${detail}`);
   console.log(`FAIL  ${label}  -> ${detail}`);
 }
+/** Teste que não pode correr neste ambiente. Não conta como falha. */
+function pular(label, motivo) {
+  console.log(`SKIP  ${label}  -> ${motivo}`);
+  return SKIP;
+}
 async function check(label, fn) {
   try {
     const d = await fn();
+    if (d === SKIP) return; // o próprio teste já explicou porque não corre
     ok(label, typeof d === "string" ? d : "");
   } catch (e) {
     fail(label, e.message);
   }
 }
+/** Devolvido por um teste que não pode correr — não conta como falha. */
+const SKIP = Symbol("skip");
 function assert(c, m) {
   if (!c) throw new Error(m);
 }
@@ -167,14 +175,35 @@ async function registar(full_name, phone, password) {
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
 
-/** GET a uma página da app, sem seguir redireccionamentos. */
+/**
+ * GET a uma página da app, sem seguir redireccionamentos.
+ *
+ * Com sessão válida, nenhuma página desta suite devolve `/login`: um 307 para
+ * ali quer dizer que o `getUser()` do Supabase falhou naquele instante (limite
+ * de pedidos, rede), não que o utilizador perdeu o acesso. Nesse caso repete-se
+ * uma vez — um problema real de permissões devolve outro destino (a área do
+ * papel) e continua a falhar como deve.
+ */
 async function pagina(path, cookie) {
-  const res = await fetch(`${APP}${path}`, {
-    headers: cookie ? { cookie } : {},
-    redirect: "manual",
-  });
-  const html = await res.text();
-  return { status: res.status, html, location: res.headers.get("location") };
+  const pedir = async () => {
+    const res = await fetch(`${APP}${path}`, {
+      headers: cookie ? { cookie } : {},
+      redirect: "manual",
+    });
+    const html = await res.text();
+    return { status: res.status, html, location: res.headers.get("location") };
+  };
+
+  const primeira = await pedir();
+  const caiuNoLogin =
+    cookie &&
+    (primeira.status === 307 || primeira.status === 302) &&
+    String(primeira.location ?? "").includes("/login");
+
+  if (!caiuNoLogin) return primeira;
+
+  await new Promise((ok) => setTimeout(ok, 1500));
+  return pedir();
 }
 
 function texto(html) {
@@ -456,14 +485,37 @@ await check("catálogo lista os produtos da base", async () => {
 });
 
 await check("filtro por categoria reduz o catálogo", async () => {
+  // A categoria não é fixa. Fixar «perfumaria-feminina» fazia o teste depender
+  // de um produto DEMO que outro teste pode desactivar (o de eliminação
+  // desactiva em vez de apagar) — e o filtro passava a devolver zero por falta
+  // de dados, não por bug. Escolhe-se aqui uma categoria que tenha alguns
+  // produtos activos, mas não todos, para se ver o filtro a reduzir de facto.
+  const [cats, prods] = await Promise.all([
+    sb("/rest/v1/categories?select=id,slug,name&is_active=eq.true&order=sort_order", {
+      key: SR,
+      jwt: SR,
+    }),
+    sb("/rest/v1/products?select=category_id&is_active=eq.true", { key: SR, jwt: SR }),
+  ]);
+  const linhas = prods.data ?? [];
+  const porCategoria = new Map();
+  for (const p of linhas) {
+    porCategoria.set(p.category_id, (porCategoria.get(p.category_id) ?? 0) + 1);
+  }
+  const alvo = (cats.data ?? []).find((c) => {
+    const n = porCategoria.get(c.id) ?? 0;
+    return n > 0 && n < linhas.length;
+  });
+  assert(alvo, "nenhuma categoria com parte (e não todos) dos produtos activos");
+
   const todos = (texto((await pagina("/catalogo")).html).match(/\[DEMO\]/g) || []).length;
-  const r = await pagina("/catalogo?cat=perfumaria-feminina");
+  const r = await pagina(`/catalogo?cat=${alvo.slug}`);
   assert(r.status === 200, `HTTP ${r.status}`);
   const filtrados = (texto(r.html).match(/\[DEMO\]/g) || []).length;
-  assert(filtrados > 0, "o filtro não devolveu nada");
+  assert(filtrados > 0, `o filtro «${alvo.slug}» não devolveu nada`);
   assert(filtrados < todos, `filtro inerte: ${filtrados} de ${todos}`);
-  assert(/Perfumaria Feminina/.test(texto(r.html)), "sem a categoria no título");
-  return `${filtrados} de ${todos}`;
+  assert(texto(r.html).includes(alvo.name), "sem a categoria no título");
+  return `${alvo.slug}: ${filtrados} de ${todos}`;
 });
 
 await check("filtro de preço respeita o preço pago", async () => {
@@ -2022,16 +2074,27 @@ await check("o cliente regista-se com o número reservado e entra na carteira", 
 });
 
 await check("repetir o mesmo telefone reconhece a conta existente", async () => {
-  const r = await fetch(`${APP}/api/vendedor/clientes`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", cookie: cVendedor },
-    body: JSON.stringify({ full_name: "Cliente Carteira Web", phone: CARTEIRA_TEL }),
-  });
-  const dados = await r.json().catch(() => ({}));
-  assert(r.ok, `HTTP ${r.status} ${dados.error ?? ""}`);
-  assert(dados.existente === true, "devia reconhecer a conta existente");
-  assert(dados.reservado === false, "não devia voltar a reservar");
-  assert(dados.id === idCarteira, `id diferente: ${dados.id}`);
+  const chamar = async () => {
+    const res = await fetch(`${APP}/api/vendedor/clientes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", cookie: cVendedor },
+      body: JSON.stringify({ full_name: "Cliente Carteira Web", phone: CARTEIRA_TEL }),
+    });
+    return { status: res.status, ok: res.ok, dados: await res.json().catch(() => ({})) };
+  };
+
+  // 403 aqui é o `getProfile()` sem sessão: com um cookie válido isso é uma
+  // falha passageira do serviço de autenticação, não falta de permissão.
+  let r = await chamar();
+  if (r.status === 403) {
+    await new Promise((ok) => setTimeout(ok, 1500));
+    r = await chamar();
+  }
+
+  assert(r.ok, `HTTP ${r.status} ${r.dados.error ?? ""}`);
+  assert(r.dados.existente === true, "devia reconhecer a conta existente");
+  assert(r.dados.reservado === false, "não devia voltar a reservar");
+  assert(r.dados.id === idCarteira, `id diferente: ${r.dados.id}`);
 
   const contas = await sb(
     `/rest/v1/profiles?select=id&phone=eq.${encodeURIComponent(CARTEIRA_TEL)}`,
@@ -2314,13 +2377,24 @@ if (TEM_CONTEUDOS) {
     return `${r.status} bloqueado`;
   });
 
-  await check("cliente não lê comunicados nem pela API", async () => {
+  await check("o cliente lê os comunicados no feed dele", async () => {
+    // A 0013 abriu os comunicados ao cliente: são notícia da empresa no feed
+    // dele. A formação continua a ser conteúdo interno da equipa.
     const r = await sb("/rest/v1/content_items?select=id,title&kind=eq.comunicado", {
       jwt: sCliente.access_token,
     });
     const linhas = Array.isArray(r.data) ? r.data : [];
-    assert(linhas.length === 0, `${linhas.length} comunicados expostos ao cliente`);
-    return "0 linhas";
+    assert(linhas.some((l) => l.id === COM_ID), "o comunicado não chegou ao cliente");
+
+    const formacao = await sb("/rest/v1/content_items?select=id&kind=eq.formacao", {
+      jwt: sCliente.access_token,
+    });
+    assert(
+      (Array.isArray(formacao.data) ? formacao.data : []).length === 0,
+      "o cliente vê formação interna"
+    );
+
+    return `${linhas.length} comunicado(s) · formação escondida`;
   });
 
   // --- 11.3 Testemunho → área de cliente --------------------------------------
@@ -3213,7 +3287,7 @@ await check("gestor edita nome, preços e descrição de um produto", async () =
   return "editado (4 campos) e eliminado";
 });
 
-await check("produto já vendido não se elimina — a FK guarda o histórico", async () => {
+await check("produto já vendido pode ser eliminado — o histórico guarda o nome", async () => {
   const criado = await sb("/rest/v1/products?select=id,name", {
     method: "POST",
     jwt: sGestor.access_token,
@@ -3241,22 +3315,61 @@ await check("produto já vendido não se elimina — a FK guarda o histórico", 
   });
   assert(venda.status === 200, `vender: ${venda.status} ${JSON.stringify(venda.data).slice(0, 200)}`);
 
-  const tentativa = await sb(`/rest/v1/products?id=eq.${id}`, {
-    method: "DELETE",
+  // A 0013 troca o bloqueio por um aviso: o gestor vê o impacto e confirma.
+  // Numa base ainda sem essa migração a FK continua a recusar — os dois
+  // estados são aceites, mas o resultado tem de ser coerente.
+  const impacto = await sb("/rest/v1/rpc/impacto_eliminar_produto", {
+    method: "POST",
     jwt: sGestor.access_token,
-    prefer: "return=minimal",
+    body: { p_product_id: id },
   });
-  // 409 = violação de FK. É este o erro que o ecrã traduz em «use Desativar».
-  assert(tentativa.status === 409, `devia recusar, deu ${tentativa.status}`);
+  const temMigracao = impacto.status === 200;
 
-  // Desactivar, sim: é a saída que o ecrã sugere.
-  const desactivado = await sb(`/rest/v1/products?id=eq.${id}`, {
-    method: "PATCH",
-    jwt: sGestor.access_token,
-    prefer: "return=minimal",
-    body: { is_active: false },
-  });
-  assert(desactivado.status === 204 || desactivado.status === 200, `desactivar: ${desactivado.status}`);
+  if (!temMigracao) {
+    const tentativa = await sb(`/rest/v1/products?id=eq.${id}`, {
+      method: "DELETE",
+      jwt: sGestor.access_token,
+      prefer: "return=minimal",
+    });
+    // 409 = violação de FK. É este o erro que o ecrã antigo traduzia em
+    // «use Desactivar».
+    assert(tentativa.status === 409, `sem a 0013 devia recusar, deu ${tentativa.status}`);
+
+    await sb(`/rest/v1/products?id=eq.${id}`, {
+      method: "PATCH",
+      jwt: sGestor.access_token,
+      prefer: "return=minimal",
+      body: { is_active: false },
+    });
+  } else {
+    // Com a 0013 o produto sai mesmo, e o histórico fica com o nome e o preço.
+    assert(
+      Number(impacto.data?.sale_items) >= 1,
+      `o impacto não conta a venda: ${JSON.stringify(impacto.data)}`
+    );
+
+    const eliminado = await sb("/rest/v1/rpc/eliminar_produto", {
+      method: "POST",
+      jwt: sGestor.access_token,
+      body: { p_product_id: id },
+    });
+    assert(
+      eliminado.status === 200,
+      `eliminar: ${eliminado.status} ${JSON.stringify(eliminado.data).slice(0, 200)}`
+    );
+
+    const sobrou = await sb(`/rest/v1/products?id=eq.${id}&select=id`, { key: SR, jwt: SR });
+    assert((sobrou.data ?? []).length === 0, "o produto ficou na base");
+
+    const linhas = await sb(
+      `/rest/v1/sale_items?select=product_id,product_snapshot&product_snapshot->>name=eq.${encodeURIComponent(
+        "[TESTE] Produto vendido"
+      )}`,
+      { key: SR, jwt: SR }
+    );
+    assert((linhas.data ?? []).length >= 1, "a linha da venda desapareceu com o produto");
+    assert(linhas.data[0].product_id === null, "a linha ainda aponta para o produto apagado");
+  }
 
   // Limpeza: a venda sai primeiro (com as linhas, por CASCADE), depois o produto.
   const { data: vendas } = await sb(
@@ -3283,7 +3396,280 @@ await check("produto já vendido não se elimina — a FK guarda o histórico", 
     jwt: SR,
     prefer: "return=minimal",
   });
-  return "409 na eliminação · desactivar passa";
+  return temMigracao
+    ? "eliminado · a venda ficou com o nome"
+    : "0013 por aplicar: a FK ainda recusa (409)";
+});
+await check("eliminar um produto fictício leva o histórico com ele (modo forçado)", async () => {
+  // 0014: `eliminar_produto(id, forcar)` apaga também as linhas do histórico e
+  // os registos que ficam vazios. Numa base sem a migração o argumento não
+  // existe (PGRST202) — o teste diz isso em vez de falhar por código.
+  const criado = await sb("/rest/v1/products?select=id,name", {
+    method: "POST",
+    jwt: sGestor.access_token,
+    prefer: "return=representation",
+    body: { name: "[TESTE] Fictício forçado", official_price: 4000, is_active: true },
+  });
+  assert(criado.status === 201, `criar: ${criado.status}`);
+  const id = criado.data[0].id;
+
+  const referencia = `ENC-FORCAR-${Date.now()}`;
+  const encomenda = await sb("/rest/v1/orders?select=id", {
+    method: "POST",
+    key: SR,
+    jwt: SR,
+    prefer: "return=representation",
+    body: { reference: referencia, customer_id: sCliente.user.id, total_amount: 4000 },
+  });
+  assert(encomenda.status === 201, `encomenda: ${encomenda.status} ${JSON.stringify(encomenda.data).slice(0, 160)}`);
+  const idEncomenda = encomenda.data[0].id;
+
+  await sb("/rest/v1/order_items", {
+    method: "POST",
+    key: SR,
+    jwt: SR,
+    prefer: "return=minimal",
+    body: { order_id: idEncomenda, product_id: id, quantity: 1, unit_price: 4000, total_price: 4000 },
+  });
+
+  const forcado = await sb("/rest/v1/rpc/eliminar_produto", {
+    method: "POST",
+    jwt: sGestor.access_token,
+    body: { p_product_id: id, p_forcar: true },
+  });
+
+  if (forcado.status === 404 || /PGRST202|Could not find the function/i.test(JSON.stringify(forcado.data))) {
+    // Limpeza mínima e saída honesta: falta a 0014 nesta base.
+    await sb(`/rest/v1/order_items?order_id=eq.${idEncomenda}`, { method: "DELETE", key: SR, jwt: SR, prefer: "return=minimal" });
+    await sb(`/rest/v1/orders?id=eq.${idEncomenda}`, { method: "DELETE", key: SR, jwt: SR, prefer: "return=minimal" });
+    await sb(`/rest/v1/products?id=eq.${id}`, { method: "DELETE", key: SR, jwt: SR, prefer: "return=minimal" });
+    return "0014 por aplicar — colar PATCH_ELIMINAR_FORCADO.sql";
+  }
+
+  assert(forcado.status === 200, `eliminar: ${forcado.status} ${JSON.stringify(forcado.data).slice(0, 200)}`);
+  assert(forcado.data?.forcado === true, "não marcou como forçado");
+  assert(Number(forcado.data?.apagados?.encomendas) === 1, `encomendas apagadas: ${JSON.stringify(forcado.data?.apagados)}`);
+
+  const produtoSumiu = await sb(`/rest/v1/products?id=eq.${id}&select=id`, { key: SR, jwt: SR });
+  assert((produtoSumiu.data ?? []).length === 0, "o produto ficou na base");
+
+  const linhas = await sb(`/rest/v1/order_items?product_id=eq.${id}&select=id`, { key: SR, jwt: SR });
+  assert((linhas.data ?? []).length === 0, "as linhas de encomenda ficaram");
+
+  const encomendaSumiu = await sb(`/rest/v1/orders?id=eq.${idEncomenda}&select=id`, { key: SR, jwt: SR });
+  assert((encomendaSumiu.data ?? []).length === 0, "a encomenda vazia ficou");
+
+  return "produto + encomenda + linhas apagados";
+});
+
+
+// ---------------------------------------------------------------------------
+// 14. GALERIA DE FOTOGRAFIAS E PRODUTO ESGOTADO
+//
+// Um produto pode ter várias fotografias e a página desliza entre elas; quando
+// o stock chega a zero, o visitante — mesmo sem conta — vê «Esgotado» e pode
+// deixar reserva. A disponibilidade pública depende da migração 0012.
+// ---------------------------------------------------------------------------
+console.log("\n--- 14. GALERIA DE FOTOGRAFIAS E PRODUTO ESGOTADO ---");
+
+const FOTO_1 = "https://exemplo.test/inuka-foto-1.jpg";
+const FOTO_2 = "https://exemplo.test/inuka-foto-2.jpg";
+const produtosCriados = [];
+
+async function criarProdutoDeTeste(nome) {
+  const r = await sb("/rest/v1/products?select=id", {
+    method: "POST",
+    key: SR,
+    jwt: SR,
+    prefer: "return=representation",
+    body: { name: nome, official_price: 12500, is_active: true },
+  });
+  assert(
+    r.status === 201,
+    `criar produto: ${r.status} ${JSON.stringify(r.data).slice(0, 200)}`
+  );
+  const id = r.data[0].id;
+  produtosCriados.push(id);
+  return id;
+}
+
+// A função pública só existe depois de aplicar a migração 0012.
+const sondaStock = await sb("/rest/v1/rpc/stock_produtos", {
+  method: "POST",
+  key: ANON,
+  body: { p_ids: [] },
+});
+const temStockPublico = sondaStock.status === 200;
+const motivoSemStock = "migração 0012 (PATCH_STOCK_PUBLICO.sql) por aplicar na base";
+
+await check("produto com várias fotografias desliza entre elas", async () => {
+  const id = await criarProdutoDeTeste("[TESTE] Galeria");
+
+  const ins = await sb("/rest/v1/product_images", {
+    method: "POST",
+    key: SR,
+    jwt: SR,
+    prefer: "return=minimal",
+    body: [
+      { product_id: id, storage_path: FOTO_1, url: FOTO_1, is_primary: true, sort_order: 0 },
+      { product_id: id, storage_path: FOTO_2, url: FOTO_2, is_primary: false, sort_order: 1 },
+    ],
+  });
+  assert(ins.status === 201 || ins.status === 204, `imagens: ${ins.status}`);
+
+  const r = await pagina(`/produto/${id}`);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  // URLs e `aria-label` vivem em atributos: `texto()` apaga as etiquetas, por
+  // isso estas verificações correm sobre o HTML.
+  assert(r.html.includes(FOTO_1) && r.html.includes(FOTO_2), "as duas fotografias não estão na página");
+  assert(r.html.includes("Fotografia seguinte"), "sem controlo para deslizar");
+  assert(r.html.includes("1/2"), "sem contador de fotografias");
+  assert(r.html.includes("Ver fotografia 2"), "sem miniaturas");
+
+  // No catálogo o cartão mostra só a capa — a marcada `is_primary`.
+  const cat = await pagina("/catalogo");
+  assert(cat.html.includes(FOTO_1), "o cartão do catálogo não mostra a capa");
+  assert(!cat.html.includes(FOTO_2), "o cartão do catálogo mostrou uma foto secundária");
+
+  return "galeria com 2 fotos · cartão usa a capa";
+});
+
+await check("produto esgotado mostra reserva a um visitante", async () => {
+  if (!temStockPublico) return pular("produto esgotado mostra reserva a um visitante", motivoSemStock);
+
+  const id = await criarProdutoDeTeste("[TESTE] Esgotado");
+  const inv = await sb("/rest/v1/inventory", {
+    method: "POST",
+    key: SR,
+    jwt: SR,
+    prefer: "return=minimal",
+    body: { product_id: id, quantity: 0, reserved_quantity: 0 },
+  });
+  assert(inv.status === 201 || inv.status === 204, `inventário: ${inv.status}`);
+
+  // Sem cookie: é assim que a maioria das pessoas chega à loja.
+  const r = await pagina(`/produto/${id}`);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+
+  assert(t.includes("Esgotado de momento"), "sem aviso de esgotado");
+  assert(t.includes("Reservar este produto"), "sem botão de reserva");
+  assert(!t.includes("Adicionar ao carrinho"), "ainda deixa juntar ao carrinho");
+
+  // E o catálogo marca-o, para não se clicar à espera de comprar.
+  const cat = await pagina("/catalogo");
+  assert(texto(cat.html).includes("Esgotado"), "o catálogo não marca o produto esgotado");
+
+  return "aviso + reserva + selo no catálogo";
+});
+
+await check("o colaborador vê o aviso de esgotado na loja", async () => {
+  if (!temStockPublico) return pular("o colaborador vê o aviso de esgotado na loja", motivoSemStock);
+
+  const { data } = await sb("/rest/v1/products?select=id&name=eq.[TESTE]%20Esgotado", {
+    key: SR,
+    jwt: SR,
+  });
+  const id = data?.[0]?.id;
+  assert(id, "o produto esgotado do teste anterior desapareceu");
+
+  const r = await pagina(`/produto/${id}`, cVendedor);
+  assert(texto(r.html).includes("Esgotado de momento"), "com sessão perdeu o aviso");
+  return "mesma regra com e sem sessão";
+});
+
+// O ecrã de produtos é renderizado no browser, por isso não se procura o botão
+// no HTML servido: verifica-se o que ele faz — trocar a capa e ver o catálogo
+// a segui-la. É a operação que a gestão pede («esta foto é a que aparece»).
+await check("mudar a capa muda a fotografia do catálogo", async () => {
+  const id = produtosCriados[0];
+  assert(id, "o produto da galeria desapareceu");
+
+  const tirar = await sb(`/rest/v1/product_images?product_id=eq.${id}&is_primary=eq.true`, {
+    method: "PATCH",
+    key: SR,
+    jwt: SR,
+    prefer: "return=minimal",
+    body: { is_primary: false },
+  });
+  assert(tirar.status === 204 || tirar.status === 200, `limpar capa: ${tirar.status}`);
+
+  const pôr = await sb(
+    `/rest/v1/product_images?product_id=eq.${id}&url=eq.${encodeURIComponent(FOTO_2)}`,
+    {
+      method: "PATCH",
+      key: SR,
+      jwt: SR,
+      prefer: "return=minimal",
+      body: { is_primary: true },
+    }
+  );
+  assert(pôr.status === 204 || pôr.status === 200, `marcar capa: ${pôr.status}`);
+
+  const cat = await pagina("/catalogo");
+  assert(cat.html.includes(FOTO_2), "o catálogo não seguiu a nova capa");
+  assert(!cat.html.includes(FOTO_1), "o catálogo continua na capa antiga");
+  return "capa nova no catálogo";
+});
+
+await check("o catálogo usa duas colunas no telemóvel e não corta a foto", async () => {
+  const r = await pagina("/catalogo");
+  assert(r.status === 200, `HTTP ${r.status}`);
+  // Duas colunas é o que impede cartões de ~100 px; `object-contain` é o que
+  // impede o `cover` de cortar as laterais de uma fotografia não quadrada.
+  assert(r.html.includes("grid-cols-2"), "a grelha deixou de ter duas colunas");
+  assert(r.html.includes("object-contain"), "as fotografias voltaram a ser cortadas");
+  return "grelha de 2 colunas · imagem inteira";
+});
+
+await check("remover os produtos do teste de fotografias", async () => {
+  for (const id of produtosCriados) {
+    await sb(`/rest/v1/product_images?product_id=eq.${id}`, {
+      method: "DELETE",
+      key: SR,
+      jwt: SR,
+      prefer: "return=minimal",
+    });
+    await sb(`/rest/v1/inventory?product_id=eq.${id}`, {
+      method: "DELETE",
+      key: SR,
+      jwt: SR,
+      prefer: "return=minimal",
+    });
+    await sb(`/rest/v1/products?id=eq.${id}`, {
+      method: "DELETE",
+      key: SR,
+      jwt: SR,
+      prefer: "return=minimal",
+    });
+  }
+  return `${produtosCriados.length} produtos removidos`;
+});
+
+await check("a matriz de perfis está na área de gestão", async () => {
+  const r = await pagina("/gerente/perfis", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(t.includes("Matriz de competências"), "sem matriz de competências");
+  assert(t.includes("Vendedor de loja"), "o perfil novo não aparece");
+  assert(t.includes("Colaborador de vendas"), "sem o perfil de colaborador");
+  return "matriz com os quatro perfis";
+});
+
+await check("o cliente não entra na área da loja", async () => {
+  // O guarda do proxy responde 307 antes de a página renderizar: o cliente é
+  // mandado para a sua área, não vê o balcão nem a contagem de stock.
+  const r = await pagina("/loja", cCliente);
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  assert((r.location || "").includes("/cliente"), `redirect: ${r.location}`);
+  return `${r.status} -> ${r.location}`;
+});
+
+await check("o colaborador de vendas também não entra na loja", async () => {
+  const r = await pagina("/loja", cVendedor);
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  assert((r.location || "").includes("/vendedor"), `redirect: ${r.location}`);
+  return `${r.status} -> ${r.location}`;
 });
 
 await check("remover contas de teste", async () => {

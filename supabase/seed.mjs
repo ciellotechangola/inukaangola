@@ -205,6 +205,19 @@ async function seedProdutos(catMap) {
     });
   }
 
+  // Os DEMO que já existiam podem ter ficado desactivados (um teste de
+  // eliminação desactiva em vez de apagar, por causa das encomendas antigas).
+  // O seed garante o estado de demonstração: cinco produtos activos, um por
+  // categoria, para o catálogo e o filtro por categoria continuarem a ter
+  // matéria. Só toca em `sku like DEMO-*`.
+  if (jaExiste.size) {
+    await rest("products?sku=like.DEMO-*&is_active=eq.false", {
+      method: "PATCH",
+      body: { is_active: true },
+      prefer: "return=minimal",
+    });
+  }
+
   // Inventário para todos os produtos DEMO
   const todos = await rest("products?select=id,sku&sku=like.DEMO-*");
   const inventario = PRODUTOS.map((p) => {
@@ -212,6 +225,7 @@ async function seedProdutos(catMap) {
     return row
       ? {
           product_id: row.id,
+          provincia_id: null,
           quantity: p.stock,
           reserved_quantity: 0,
           low_stock_threshold: 5,
@@ -219,12 +233,29 @@ async function seedProdutos(catMap) {
       : null;
   }).filter(Boolean);
 
-  if (inventario.length) {
-    await rest("inventory?on_conflict=product_id", {
-      method: "POST",
-      body: inventario,
-      prefer: "resolution=merge-duplicates,return=minimal",
-    });
+  // A 0005 deu ao inventário uma linha por província e o índice único passou a
+  // ser (product_id, provincia_id) — o `on_conflict=product_id` deixou de
+  // existir e o seed falhava com 42P10. Como `provincia_id` NULL (sede) não é
+  // comparável num ON CONFLICT, lê-se primeiro e escreve-se a seguir: PATCH na
+  // linha da sede se já existir, INSERT se ainda não houver.
+  for (const item of inventario) {
+    const existentes = await rest(
+      `inventory?select=id&product_id=eq.${item.product_id}&provincia_id=is.null&limit=1`,
+    );
+
+    if (existentes?.length) {
+      await rest(`inventory?id=eq.${existentes[0].id}`, {
+        method: "PATCH",
+        body: {
+          quantity: item.quantity,
+          reserved_quantity: 0,
+          low_stock_threshold: item.low_stock_threshold,
+        },
+        prefer: "return=minimal",
+      });
+    } else {
+      await rest("inventory", { method: "POST", body: item, prefer: "return=minimal" });
+    }
   }
 
   console.log(

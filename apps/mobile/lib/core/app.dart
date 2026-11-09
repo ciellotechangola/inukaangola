@@ -5,6 +5,7 @@ import '../features/auth/login_page.dart';
 import '../features/cart/cart_page.dart';
 import '../features/cart/cart_store.dart';
 import '../features/catalog/catalog_page.dart';
+import '../features/feed/feed_page.dart';
 import '../features/chat/conversations_page.dart';
 import '../features/profile/profile_page.dart';
 
@@ -112,6 +113,9 @@ class _MainShellState extends State<MainShell> {
 
   final pages = const [
     CatalogPage(),
+    // Notícias fica ao lado do catálogo: é o que o cliente abre depois de ver
+    // os produtos. O feed só mostra conteúdo publicado para clientes.
+    FeedPage(),
     CartPage(),
     ConversationsPage(),
   ];
@@ -137,6 +141,10 @@ class _MainShellState extends State<MainShell> {
             onTap: (i) => setState(() => _index = i),
             items: [
               const BottomNavigationBarItem(icon: Icon(Icons.grid_view), label: 'Catálogo'),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.newspaper_outlined),
+                label: 'Notícias',
+              ),
               BottomNavigationBarItem(
                 icon: Badge(
                   isLabelVisible: noCarrinho > 0,

@@ -1328,10 +1328,35 @@ await check("cliente NÃO lê auditoria", async () => {
 // ---------------------------------------------------------------------------
 group("18. LIMPEZA — remoção dos dados de teste");
 // ---------------------------------------------------------------------------
-await check("produto com histórico não pode ser apagado (integridade)", async () => {
-  const res = await sr(`/rest/v1/products?id=eq.${produtoId}`, { method: "DELETE", prefer: "return=minimal" });
-  assert(!res.ok, "apagou produto com encomendas associadas");
-  return `HTTP ${res.status} — usar desativação`;
+await check("produto com histórico: a 0013 permite eliminar e guarda o nome", async () => {
+  // Antes da 0013 a FK recusava (409) e a saída era desactivar. Agora a gestão
+  // elimina a todo o custo: o impacto é mostrado e confirmado, e as linhas de
+  // encomenda/venda ficam com o nome e o preço. Numa base sem a migração o
+  // comportamento antigo mantém-se — os dois estados são aceites.
+  const impacto = await rpc("impacto_eliminar_produto", { p_product_id: produtoId }, sessoes[G.phone].jwt);
+  if (impacto.status !== 200) {
+    const res = await sr(`/rest/v1/products?id=eq.${produtoId}`, {
+      method: "DELETE",
+      prefer: "return=minimal",
+    });
+    assert(!res.ok, "apagou produto com encomendas associadas sem a 0013");
+    return `0013 por aplicar — HTTP ${res.status}, usar desativação`;
+  }
+
+  assert(Number(impacto.data?.order_items) > 0, `impacto sem encomendas: ${JSON.stringify(impacto.data)}`);
+
+  const eliminado = await rpc("eliminar_produto", { p_product_id: produtoId }, sessoes[G.phone].jwt);
+  assert(eliminado.status === 200, `eliminar: ${eliminado.status} ${JSON.stringify(eliminado.data)}`);
+
+  const sobrou = await sr(`/rest/v1/products?select=id&id=eq.${produtoId}`);
+  assert((sobrou.data ?? []).length === 0, "o produto ficou na base");
+
+  const linhas = await sr(
+    `/rest/v1/order_items?select=product_id,product_name&product_id=is.null&order=created_at.desc&limit=20`
+  );
+  const comNome = (linhas.data ?? []).some((l) => l.product_name);
+  assert(comNome, "as linhas da encomenda perderam o nome do produto");
+  return "eliminado · histórico com o nome";
 });
 
 await check("desativar o produto é o caminho correto", async () => {

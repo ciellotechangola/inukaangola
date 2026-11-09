@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ExternalLink, Loader2 } from "lucide-react";
+import { Check, ExternalLink, Loader2, Truck } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
 import {
   CHAVE_DEFINICOES,
@@ -11,20 +11,37 @@ import {
   origemDoLink,
   type DefinicoesLoja,
 } from "@/lib/definicoes";
+import {
+  CHAVE_ENTREGA,
+  normalizarEntrega,
+  resumoEntrega,
+  type DefinicoesEntrega,
+} from "@/lib/entrega";
 
 const ENTRADA =
   "w-full rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none";
 
 const ROTULO = "mb-1 block text-[10px] uppercase tracking-wider text-[#8A8A8A]";
 
+interface Props {
+  iniciais: DefinicoesLoja;
+  entregaInicial: DefinicoesEntrega;
+  /** Províncias activas, para escolher onde a entrega é gratuita. */
+  provincias: { slug: string; nome: string }[];
+}
+
 /**
  * Formulário das definições da loja.
  *
- * Grava numa linha só de `platform_settings` (chave `loja`): assim o e-mail
- * novo e o link novo entram juntos, e a loja nunca fica a mostrar metade de
- * uma alteração.
+ * Grava em duas linhas de `platform_settings` (chaves `loja` e `entrega`):
+ * cada assunto num valor só, para a loja nunca ficar a mostrar metade de uma
+ * alteração.
  */
-export default function FormularioDefinicoes({ iniciais }: { iniciais: DefinicoesLoja }) {
+export default function FormularioDefinicoes({
+  iniciais,
+  entregaInicial,
+  provincias,
+}: Props) {
   const router = useRouter();
 
   const [email, setEmail] = useState(iniciais.email);
@@ -34,12 +51,31 @@ export default function FormularioDefinicoes({ iniciais }: { iniciais: Definicoe
   const [versao, setVersao] = useState(iniciais.versao);
   const [novidades, setNovidades] = useState(iniciais.novidades ?? "");
 
+  const [taxaPadrao, setTaxaPadrao] = useState(String(entregaInicial.taxaPadrao));
+  const [gratis, setGratis] = useState<string[]>(entregaInicial.gratis);
+  const [nota, setNota] = useState(entregaInicial.nota ?? "");
+
   const [erro, setErro] = useState("");
   const [aviso, setAviso] = useState("");
   const [aGravar, setAGravar] = useState(false);
 
   const androidDirecto = linkDeDownload(androidUrl);
   const iosDirecto = linkDeDownload(iosUrl);
+
+  const entregaPrevia = normalizarEntrega({
+    taxaPadrao,
+    gratis,
+    nota,
+  });
+  const nomesGratis = gratis
+    .map((s) => provincias.find((p) => p.slug === s)?.nome)
+    .filter((n): n is string => Boolean(n));
+
+  function alternarGratis(slug: string) {
+    setGratis((atual) =>
+      atual.includes(slug) ? atual.filter((s) => s !== slug) : [...atual, slug]
+    );
+  }
 
   async function guardar(e: React.FormEvent) {
     e.preventDefault();
@@ -73,32 +109,58 @@ export default function FormularioDefinicoes({ iniciais }: { iniciais: Definicoe
       }
     }
 
+    const taxa = Number(String(taxaPadrao).replace(/[^\d.,-]/g, "").replace(",", "."));
+    if (!Number.isFinite(taxa) || taxa < 0) {
+      setErro("A taxa de entrega tem de ser um número igual ou superior a zero.");
+      return;
+    }
+
     setAGravar(true);
     const supabase = createClientBrowser();
     const { data: sessao } = await supabase.auth.getUser();
+    const agora = new Date().toISOString();
+    const autor = sessao.user?.id ?? null;
 
-    const valor = {
-      email: email.trim(),
-      telefones: lista,
-      androidUrl: androidUrl.trim() || null,
-      iosUrl: iosUrl.trim() || null,
-      versao: versao.trim() || "1.0.0",
-      novidades: novidades.trim() || null,
-    };
-
-    const { error } = await supabase.from("platform_settings").upsert(
+    const { error: erroLoja } = await supabase.from("platform_settings").upsert(
       {
         key: CHAVE_DEFINICOES,
-        value: valor,
-        updated_by: sessao.user?.id ?? null,
-        updated_at: new Date().toISOString(),
+        value: {
+          email: email.trim(),
+          telefones: lista,
+          androidUrl: androidUrl.trim() || null,
+          iosUrl: iosUrl.trim() || null,
+          versao: versao.trim() || "1.0.0",
+          novidades: novidades.trim() || null,
+        },
+        updated_by: autor,
+        updated_at: agora,
+      },
+      { onConflict: "key" }
+    );
+
+    if (erroLoja) {
+      setAGravar(false);
+      setErro(erroLoja.message);
+      return;
+    }
+
+    const { error: erroEntrega } = await supabase.from("platform_settings").upsert(
+      {
+        key: CHAVE_ENTREGA,
+        value: {
+          taxaPadrao: Math.round(taxa),
+          gratis,
+          nota: nota.trim() || null,
+        },
+        updated_by: autor,
+        updated_at: agora,
       },
       { onConflict: "key" }
     );
 
     setAGravar(false);
-    if (error) {
-      setErro(error.message);
+    if (erroEntrega) {
+      setErro(erroEntrega.message);
       return;
     }
     setAviso("Definições guardadas. A loja já mostra estes valores.");
@@ -228,6 +290,99 @@ export default function FormularioDefinicoes({ iniciais }: { iniciais: Definicoe
             </div>
           </div>
         </div>
+      </section>
+
+      {/* ----------------------------------------------------------- entrega */}
+      <section className="rounded-xl border border-[#262626] bg-[#141414] p-5">
+        <h2 className="mb-1 flex items-center gap-2 text-sm font-medium text-[#F5F5F5]">
+          <Truck className="h-4 w-4 text-[#C9A962]" />
+          Taxa de entrega
+        </h2>
+        <p className="mb-4 text-[11px] leading-relaxed text-[#6F6F6F]">
+          A entrega ao domicílio é gratuita nas províncias assinaladas e paga nas restantes. O
+          levantamento na delegação nunca tem taxa.
+        </p>
+
+        <div className="grid gap-4 sm:grid-cols-[160px_1fr]">
+          <div>
+            <label className={ROTULO} htmlFor="taxa">
+              Taxa padrão (Kz)
+            </label>
+            <input
+              id="taxa"
+              value={taxaPadrao}
+              onChange={(e) => setTaxaPadrao(e.target.value)}
+              inputMode="numeric"
+              placeholder="2000"
+              className={ENTRADA}
+            />
+            <p className="mt-1 text-[11px] text-[#525252]">0 = entrega grátis em todo o país.</p>
+          </div>
+          <div>
+            <label className={ROTULO} htmlFor="nota-entrega">
+              Nota para o cliente (opcional)
+            </label>
+            <input
+              id="nota-entrega"
+              value={nota}
+              onChange={(e) => setNota(e.target.value)}
+              placeholder="Entrega em 24 a 48 horas úteis"
+              className={ENTRADA}
+            />
+            <p className="mt-1 text-[11px] text-[#525252]">
+              Aparece no carrinho, junto à taxa.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5">
+          <p className={ROTULO}>Entrega gratuita em</p>
+          <div className="mt-1 grid max-h-52 grid-cols-2 gap-1.5 overflow-y-auto rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] p-2.5 sm:grid-cols-3">
+            {provincias.map((p) => {
+              const marcada = gratis.includes(p.slug);
+              return (
+                <label
+                  key={p.slug}
+                  className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs transition ${
+                    marcada
+                      ? "bg-[#C9A962]/10 text-[#C9A962]"
+                      : "text-[#A3A3A3] hover:bg-[#1A1A1A]"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={marcada}
+                    onChange={() => alternarGratis(p.slug)}
+                    className="accent-[#C9A962]"
+                  />
+                  {p.nome}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-[#C9A962]/25 bg-[#0F0F0F] p-3">
+          <p className="text-[10px] uppercase tracking-wider text-[#6F6F6F]">Como o cliente vê</p>
+          <p className="mt-1 text-xs text-[#E5E5E5]">
+            {resumoEntrega(entregaPrevia, nomesGratis)}
+          </p>
+          {entregaPrevia.gratis.length === 0 && entregaPrevia.taxaPadrao > 0 && (
+            <p className="mt-1 text-[11px] text-[#F59E0B]">
+              Nenhuma província isenta: toda a entrega é paga.
+            </p>
+          )}
+          {entregaPrevia.taxaPadrao <= 0 && (
+            <p className="mt-1 text-[11px] text-[#F59E0B]">
+              Taxa a zero: a entrega fica gratuita em todo o país.
+            </p>
+          )}
+        </div>
+
+        <p className="mt-3 text-[11px] leading-relaxed text-[#525252]">
+          A taxa é somada ao total da encomenda pelo servidor, a partir da província do perfil do
+          cliente — não vem do browser, por isso não pode ser alterada por quem compra.
+        </p>
       </section>
 
       <div className="flex flex-wrap items-center gap-3">

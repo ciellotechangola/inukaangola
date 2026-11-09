@@ -95,7 +95,8 @@ class _CatalogPageState extends State<CatalogPage> {
       var consulta = Supabase.instance.client
           .from('products')
           .select('id, name, description, official_price, promotional_price, '
-              'is_featured, category:categories(id, name), images:product_images(url)')
+              'is_featured, category:categories(id, name), '
+              'images:product_images(url, is_primary, sort_order)')
           .eq('is_active', true);
 
       if (_categoriaId != null) {
@@ -276,19 +277,46 @@ class _CatalogPageState extends State<CatalogPage> {
 
     return RefreshIndicator(
       onRefresh: () => _carregarProdutos(),
-      child: GridView.builder(
-        padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
-        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-          // 2 colunas num telemóvel normal, 3 num tablet — sem números mágicos.
-          maxCrossAxisExtent: 220,
-          childAspectRatio: 0.66,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-        ),
-        itemCount: _produtos.length + (_temMais ? 1 : 0),
-        itemBuilder: (context, index) {
-          if (index >= _produtos.length) return _botaoMais();
-          return _CartaoProduto(produto: _produtos[index]);
+      // A altura do cartão é calculada, não imposta por uma proporção fixa.
+      //
+      // Com `childAspectRatio: 0.66` o cartão tinha sempre a mesma altura: em
+      // ecrãs estreitos (ou com a letra do sistema maior) o texto do nome e do
+      // preço não cabia e o cartão era cortado no fundo — era isto que se via
+      // como «produtos cortados» no telemóvel.
+      child: LayoutBuilder(
+        builder: (context, restricoes) {
+          final largura = restricoes.maxWidth;
+          final colunas = largura >= 900
+              ? 4
+              : largura >= 600
+                  ? 3
+                  : 2;
+          const espaco = 10.0;
+          const margemLateral = 12.0;
+          final larguraCartao =
+              (largura - margemLateral * 2 - espaco * (colunas - 1)) / colunas;
+
+          // Quanto mede o texto debaixo da fotografia: 8+8 de margem, 4 de
+          // intervalo, duas linhas de nome e a linha do preço. A escala do
+          // texto do sistema entra na conta — quem aumenta a letra não perde
+          // nada.
+          final escala = MediaQuery.textScalerOf(context).scale(1.0);
+          final alturaTexto = 16 + 4 + (30 * escala) + (20 * escala) + 4;
+
+          return GridView.builder(
+            padding: const EdgeInsets.fromLTRB(margemLateral, 4, margemLateral, 16),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: colunas,
+              mainAxisExtent: larguraCartao + alturaTexto,
+              crossAxisSpacing: espaco,
+              mainAxisSpacing: espaco,
+            ),
+            itemCount: _produtos.length + (_temMais ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (index >= _produtos.length) return _botaoMais();
+              return _CartaoProduto(produto: _produtos[index]);
+            },
+          );
         },
       ),
     );
@@ -315,10 +343,21 @@ class _CartaoProduto extends StatelessWidget {
 
   final Map<String, dynamic> produto;
 
+  /// Capa: a marcada `is_primary`; sem marca, a primeira por `sort_order`.
   String? get _imagem {
     final imagens = produto['images'] as List?;
     if (imagens == null || imagens.isEmpty) return null;
-    return (imagens.first as Map)['url'] as String?;
+
+    final lista = imagens.map((e) => Map<String, dynamic>.from(e as Map)).toList()
+      ..sort((a, b) {
+        final capaA = a['is_primary'] == true ? 0 : 1;
+        final capaB = b['is_primary'] == true ? 0 : 1;
+        if (capaA != capaB) return capaA - capaB;
+        return ((a['sort_order'] as num?) ?? 0)
+            .compareTo((b['sort_order'] as num?) ?? 0);
+      });
+
+    return lista.first['url'] as String?;
   }
 
   @override
@@ -344,10 +383,18 @@ class _CartaoProduto extends StatelessWidget {
                 fit: StackFit.expand,
                 children: [
                   _imagem != null
-                      ? Image.network(
-                          _imagem!,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => const _SemImagem(),
+                      ? Container(
+                          // `contain` e não `cover`: numa coluna de ~170 px o
+                          // `cover` cortava as laterais das fotografias não
+                          // quadradas (frasco sem tampa ou sem rótulo). Assim
+                          // a fotografia inteira cabe, com margem curta.
+                          color: AppConfig.dark,
+                          padding: const EdgeInsets.all(6),
+                          child: Image.network(
+                            _imagem!,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => const _SemImagem(),
+                          ),
                         )
                       : const _SemImagem(),
                   if (desconto > 0)
@@ -388,9 +435,15 @@ class _CartaoProduto extends StatelessWidget {
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      Text(
-                        kz(preco),
-                        style: const TextStyle(color: AppConfig.gold, fontSize: 13),
+                      // Os dois preços podem encolher: um valor alto
+                      // («12.500.000 Kz») empurrava a linha para fora do cartão.
+                      Flexible(
+                        child: Text(
+                          kz(preco),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: AppConfig.gold, fontSize: 13),
+                        ),
                       ),
                       if (promo != null && oficial != null) ...[
                         const SizedBox(width: 6),

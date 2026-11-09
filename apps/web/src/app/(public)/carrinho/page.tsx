@@ -1,14 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import ProductImage from "@/components/ProductImage";
 import Link from "next/link";
-import { Trash2, ArrowRight } from "lucide-react";
+import { Trash2, ArrowRight, Truck, Store, Info } from "lucide-react";
 import { useCart } from "@/components/cart-context";
 import { createClientBrowser } from "@/lib/supabase-browser";
 import { placeOrder } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
+import { etiquetaTaxa, type EstadoEntrega } from "@/lib/entrega";
 
 export default function CartPage() {
   const router = useRouter();
@@ -20,7 +21,37 @@ export default function CartPage() {
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState<{ reference: string; total: number } | null>(null);
+  const [success, setSuccess] = useState<{
+    reference: string;
+    total: number;
+    taxa: number;
+  } | null>(null);
+
+  // ---------------------------------------------------------------- entrega
+  // A taxa depende da província do cliente, que só o servidor conhece (vem do
+  // perfil). Enquanto não chega, mostra-se a regra geral em vez de um valor
+  // inventado.
+  const [entrega, setEntrega] = useState<EstadoEntrega | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    fetch("/api/entrega")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (vivo && d) setEntrega(d as EstadoEntrega);
+      })
+      .catch(() => {
+        /* sem rede: fica a nota genérica */
+      });
+    return () => {
+      vivo = false;
+    };
+  }, []);
+
+  // Enquanto a taxa não chega não se escreve «Grátis»: um cliente do Huambo
+  // veria entrega gratuita durante um segundo e depois o preço mudava.
+  const taxa = deliveryMethod === "delivery" && entrega ? entrega.taxa : 0;
+  const totalComEntrega = total + taxa;
 
   async function handleCheckout() {
     setError("");
@@ -48,7 +79,11 @@ export default function CartPage() {
           notes: notes || undefined,
         }
       );
-      setSuccess({ reference: result.reference, total: Number(result.total) });
+      setSuccess({
+        reference: result.reference,
+        total: Number(result.total),
+        taxa: Number(result.delivery_fee ?? taxa ?? 0),
+      });
       clear();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Não foi possível concluir a encomenda.");
@@ -64,7 +99,14 @@ export default function CartPage() {
           <h1 className="mb-3 text-2xl font-light text-[#C9A962]">Encomenda registada</h1>
           <p className="mb-2 text-[#A3A3A3]">A sua referência é</p>
           <p className="mb-4 text-2xl font-medium tracking-wider text-[#F5F5F5]">{success.reference}</p>
-          <p className="mb-8 text-[#A3A3A3]">Total: {formatCurrency(success.total)}</p>
+          <p className={success.taxa > 0 ? "text-[#A3A3A3]" : "mb-8 text-[#A3A3A3]"}>
+            Total: {formatCurrency(success.total)}
+          </p>
+          {success.taxa > 0 && (
+            <p className="mb-8 text-xs text-[#6F6F6F]">
+              Inclui {formatCurrency(success.taxa)} de entrega ao domicílio.
+            </p>
+          )}
           <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
             <Link
               href="/cliente/encomendas"
@@ -224,40 +266,86 @@ export default function CartPage() {
           )}
 
           <div className="mb-4 space-y-2">
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-[#A3A3A3]">
+            <label
+              className={`flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-sm transition ${
+                deliveryMethod === "pickup"
+                  ? "border-[#C9A962]/60 bg-[#C9A962]/5 text-[#F5F5F5]"
+                  : "border-[#333] text-[#A3A3A3] hover:border-[#4A4A4A]"
+              }`}
+            >
               <input
                 type="radio"
                 checked={deliveryMethod === "pickup"}
                 onChange={() => setDeliveryMethod("pickup")}
                 className="accent-[#C9A962]"
               />
-              Levantamento
+              <Store className="h-4 w-4 shrink-0 text-[#C9A962]" />
+              <span className="flex-1">Levantamento na delegação</span>
+              <span className="shrink-0 text-[11px] font-medium text-[#6F6F6F]">sem taxa</span>
             </label>
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-[#A3A3A3]">
+
+            <label
+              className={`flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-sm transition ${
+                deliveryMethod === "delivery"
+                  ? "border-[#C9A962]/60 bg-[#C9A962]/5 text-[#F5F5F5]"
+                  : "border-[#333] text-[#A3A3A3] hover:border-[#4A4A4A]"
+              }`}
+            >
               <input
                 type="radio"
                 checked={deliveryMethod === "delivery"}
                 onChange={() => setDeliveryMethod("delivery")}
                 className="accent-[#C9A962]"
               />
-              Entrega ao domicílio
+              <Truck className="h-4 w-4 shrink-0 text-[#C9A962]" />
+              <span className="flex-1">Entrega ao domicílio</span>
+              <span className="shrink-0 text-[11px] font-medium text-[#C9A962]">
+                {entrega ? etiquetaTaxa(entrega.taxa) : "…"}
+              </span>
             </label>
           </div>
 
           {deliveryMethod === "delivery" && (
-            <textarea
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="Endereço de entrega"
-              rows={2}
-              className="mb-3 w-full rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none"
-            />
+            <>
+              <div className="mb-3 flex items-start gap-2 rounded-lg border border-[#2A2A2A] bg-[#0F0F0F] p-2.5 text-[11px] leading-relaxed text-[#8A8A8A]">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#C9A962]" />
+                <span>
+                  {entrega?.provincia ? (
+                    <>
+                      Província: <strong className="text-[#E5E5E5]">{entrega.provincia.nome}</strong>{" "}
+                      — {entrega.gratis ? "entrega gratuita." : `taxa ${formatCurrency(entrega.taxa)}.`}
+                    </>
+                  ) : entrega ? (
+                    <>
+                      A sua conta ainda não tem província definida, por isso aplica-se a taxa
+                      padrão de {formatCurrency(entrega.taxaPadrao)}. Pode defini-la em{" "}
+                      <Link href="/cliente/perfil" className="text-[#C9A962] underline-offset-2 hover:underline">
+                        Perfil
+                      </Link>
+                      .
+                    </>
+                  ) : (
+                    <>A calcular a taxa da sua província…</>
+                  )}
+                  {entrega?.gratis && entrega.nota ? ` ${entrega.nota}` : ""}
+                </span>
+              </div>
+
+              <textarea
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="Endereço de entrega (bairro, rua, ponto de referência)"
+                rows={2}
+                className="mb-3 w-full rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none"
+              />
+            </>
           )}
 
           <input
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             placeholder="Telefone de contacto"
+            inputMode="tel"
             className="mb-3 w-full rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none"
           />
 
@@ -269,10 +357,43 @@ export default function CartPage() {
             className="mb-4 w-full rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none"
           />
 
-          <div className="mb-4 flex items-center justify-between border-t border-[#262626] pt-4">
-            <span className="text-[#A3A3A3]">Total</span>
-            <span className="text-lg font-medium text-[#C9A962]">{formatCurrency(total)}</span>
+          <div className="mb-4 space-y-1.5 border-t border-[#262626] pt-4 text-sm">
+            <div className="flex items-center justify-between text-[#A3A3A3]">
+              <span>Subtotal</span>
+              <span className="text-[#E5E5E5]">{formatCurrency(total)}</span>
+            </div>
+            <div className="flex items-center justify-between text-[#A3A3A3]">
+              <span>
+                Entrega
+                {deliveryMethod === "delivery" && entrega?.provincia
+                  ? ` (${entrega.provincia.nome})`
+                  : ""}
+              </span>
+              {deliveryMethod === "pickup" ? (
+                <span className="text-[#6F6F6F]">sem taxa</span>
+              ) : !entrega ? (
+                <span className="text-[#6F6F6F]">a calcular…</span>
+              ) : taxa > 0 ? (
+                <span className="text-[#E5E5E5]">{formatCurrency(taxa)}</span>
+              ) : (
+                <span className="font-medium text-[#22C55E]">Grátis</span>
+              )}
+            </div>
+            <div className="mt-2 flex items-center justify-between border-t border-[#262626] pt-2.5">
+              <span className="text-[#F5F5F5]">Total</span>
+              <span className="text-lg font-medium text-[#C9A962]">
+                {formatCurrency(totalComEntrega)}
+              </span>
+            </div>
           </div>
+
+          {deliveryMethod === "delivery" && taxa > 0 && (
+            <p className="mb-3 text-[11px] text-[#6F6F6F]">
+              {entrega?.gratisNomes.length
+                ? `Entrega grátis em ${entrega.gratisNomes.join(" · ")}.`
+                : "Entrega gratuita no Uíge."}
+            </p>
+          )}
 
           <button
             onClick={handleCheckout}

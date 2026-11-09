@@ -212,7 +212,7 @@ class _ProfilePageState extends State<ProfilePage> {
               icone: Icons.chat_bubble_outline,
               titulo: 'Mensagens',
               descricao: 'Falar com o seu colaborador',
-              aoTocar: () => widget.aoIrParaSeparador?.call(2),
+              aoTocar: () => widget.aoIrParaSeparador?.call(3),
             ),
             if (eColaborador) ...[
               const SizedBox(height: 20),

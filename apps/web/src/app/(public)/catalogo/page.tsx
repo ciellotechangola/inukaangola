@@ -1,16 +1,16 @@
 import Link from "next/link";
 import { SlidersHorizontal } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
-import ProductCard, { precoEfetivo } from "@/components/ProductCard";
+import ProductCard, { fotoPrincipal, precoEfetivo } from "@/components/ProductCard";
 import ComprarNovamente from "@/components/ComprarNovamente";
+import OrdenarCatalogo from "@/components/OrdenarCatalogo";
 import { produtosComprados } from "@/lib/recompras";
+import { stockDosProdutos } from "@/lib/stock";
 import type { Category, Product } from "@/types";
 
 export const dynamic = "force-dynamic";
 
-type ProdutoComEstoque = Product & {
-  inventory?: { quantity: number; reserved_quantity: number } | null;
-};
+type ProdutoComEstoque = Product;
 
 const ORDENS = [
   { chave: "relevancia", etiqueta: "Relevância" },
@@ -38,9 +38,8 @@ function texto(valor: string | string[] | undefined): string | undefined {
   return bruto && bruto.trim() ? bruto.trim() : undefined;
 }
 
-function disponibilidade(p: ProdutoComEstoque): number | null {
-  if (!p.inventory) return null;
-  return Math.max(0, p.inventory.quantity - p.inventory.reserved_quantity);
+function disponibilidade(stock: Map<string, number>, id: string): number | null {
+  return stock.get(id) ?? null;
 }
 
 export default async function CatalogPage({
@@ -69,9 +68,7 @@ export default async function CatalogPage({
   // ---------------------------------------------------------------- consulta
   let consulta = supabase
     .from("products")
-    .select(
-      "*, category:categories(*), images:product_images(*), inventory(quantity, reserved_quantity)"
-    )
+    .select("*, category:categories(*), images:product_images(*)")
     .eq("is_active", true);
 
   // Categoria inexistente não deve devolver o catálogo inteiro como se nada
@@ -111,6 +108,12 @@ export default async function CatalogPage({
   } = await supabase.auth.getUser();
   const comprados = user ? await produtosComprados(user.id, 6) : [];
   const idsComprados = new Set(comprados.map((p) => p.id));
+
+  // Stock numa só chamada, para a grelha e para a faixa de recompra. Vem de
+  // uma função pública: um visitante sem conta também tem de ver «Esgotado».
+  const stock = await stockDosProdutos(supabase, [
+    ...new Set([...produtos.map((p) => p.id), ...comprados.map((p) => p.id)]),
+  ]);
 
   produtos = [...produtos].sort((a, b) => {
     if (ordem === "preco-asc") return precoEfetivo(a) - precoEfetivo(b);
@@ -234,8 +237,8 @@ export default async function CatalogPage({
   );
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8">
-      <nav className="mb-5 flex items-center gap-2 text-xs text-[#6F6F6F]">
+    <main className="mx-auto max-w-7xl px-4 py-6 sm:py-8">
+      <nav className="mb-4 flex items-center gap-2 text-xs text-[#6F6F6F] sm:mb-5">
         <Link href="/" className="transition hover:text-[#C9A962]">
           Início
         </Link>
@@ -253,12 +256,16 @@ export default async function CatalogPage({
         )}
       </nav>
 
-      <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-light tracking-tight text-[#F5F5F5]">
+      {/* No telemóvel: título e depois a fila de ordenação (uma linha que
+          desliza). A grelha de uma coluna tem `minmax(0,1fr)` — um `flex`
+          aqui deixava a fila de chips esticar o `body` e cortava o lado
+          direito do catálogo. A partir de `sm` volta a ser uma linha só. */}
+      <div className="mb-4 grid grid-cols-1 gap-3 sm:mb-7 sm:flex sm:flex-wrap sm:items-end sm:justify-between sm:gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-light tracking-tight text-[#F5F5F5] sm:text-3xl">
             {categoriaAtual ? categoriaAtual.name : "Catálogo"}
           </h1>
-          <p className="mt-1.5 text-sm text-[#7A7A7A]">
+          <p className="mt-1 text-xs text-[#7A7A7A] sm:mt-1.5 sm:text-sm">
             {produtos.length === 0
               ? "Nenhum produto encontrado."
               : produtos.length === 1
@@ -267,13 +274,24 @@ export default async function CatalogPage({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="mr-1 text-[11px] uppercase tracking-wider text-[#5A5A5A]">Ordenar</span>
+        <OrdenarCatalogo
+          atual={ordem}
+          opcoes={ORDENS.map((o) => ({
+            chave: o.chave,
+            etiqueta: o.etiqueta,
+            href: hrefCom({ ordem: o.chave === "relevancia" ? undefined : o.chave }),
+          }))}
+        />
+
+        <div className="hidden items-center gap-1.5 sm:flex sm:flex-wrap">
+          <span className="mr-1 shrink-0 text-[11px] uppercase tracking-wider text-[#5A5A5A]">
+            Ordenar
+          </span>
           {ORDENS.map((o) => (
             <Link
               key={o.chave}
               href={hrefCom({ ordem: o.chave === "relevancia" ? undefined : o.chave })}
-              className={`rounded-full border px-3 py-1 text-xs transition ${
+              className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs transition ${
                 ordem === o.chave
                   ? "border-[#C9A962] text-[#C9A962]"
                   : "border-[#333] text-[#8A8A8A] hover:border-[#C9A962]/60 hover:text-[#C9A962]"
@@ -290,27 +308,32 @@ export default async function CatalogPage({
           id: p.id,
           name: p.name,
           price: precoEfetivo(p),
-          image: p.images?.[0]?.url ?? null,
-          disponivel: disponibilidade(p),
+          image: fotoPrincipal(p),
+          disponivel: disponibilidade(stock, p.id),
         }))}
       />
 
       <div className="lg:grid lg:grid-cols-[220px_1fr] lg:gap-8">
         {/* Filtros no telemóvel: <details> nativo, sem JavaScript. */}
-        <aside className="mb-6 lg:mb-0">
-          <details className="rounded-xl border border-[#262626] bg-[#121212] p-4 lg:hidden">
+        <aside className="mb-4 sm:mb-6 lg:mb-0">
+          <details className="rounded-xl border border-[#262626] bg-[#121212] px-3.5 py-3 lg:hidden">
             <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium text-[#E5E5E5]">
               <SlidersHorizontal className="h-4 w-4 text-[#C9A962]" />
               Filtros
+              {temFiltro && (
+                <span className="ml-auto rounded-full bg-[#C9A962]/15 px-2 py-0.5 text-[10px] font-medium text-[#C9A962]">
+                  activos
+                </span>
+              )}
             </summary>
-            <div className="mt-5">{filtros}</div>
+            <div className="mt-4">{filtros}</div>
           </details>
           <div className="hidden lg:block">{filtros}</div>
         </aside>
 
-        <div>
+        <div className="min-w-0">
           {produtos.length === 0 ? (
-            <div className="rounded-xl border border-[#262626] bg-[#141414] p-12 text-center">
+            <div className="rounded-xl border border-[#262626] bg-[#141414] p-8 text-center sm:p-12">
               <p className="text-[#A3A3A3]">
                 {temFiltro
                   ? "Nenhum produto corresponde aos filtros escolhidos."
@@ -331,12 +354,12 @@ export default async function CatalogPage({
               )}
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <div className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 sm:gap-4 xl:grid-cols-4">
               {produtos.map((p) => (
                 <ProductCard
                   key={p.id}
                   product={p}
-                  disponivel={disponibilidade(p)}
+                  disponivel={disponibilidade(stock, p.id)}
                   jaComprou={idsComprados.has(p.id)}
                 />
               ))}

@@ -58,6 +58,11 @@ for (const rel of [
   "migrations/0007_conteudos.sql",
   "migrations/0008_taxas_pedidos.sql",
   "migrations/0009_reservas_clientes.sql",
+  "migrations/0010_taxa_entrega.sql",
+  "migrations/0011_chat_equipa.sql",
+  "migrations/0012_stock_publico.sql",
+  "migrations/0013_perfis_loja.sql",
+  "migrations/0014_eliminar_forcado.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -1364,17 +1369,18 @@ check("comunicado aparece no feed do colaborador",
   feedColab[0].r.length === 1 && feedColab[0].r[0].title === "Reunião geral de sexta",
   String(feedColab[0].r.length));
 
-// 16.3 o cliente não vê — nem pelo feed, nem pela tabela
+// 16.3 o cliente vê o comunicado: é notícia da empresa no feed dele (0013)
 const feedCliente = await asUser(C1, async () =>
   q(`SELECT public.conteudo_feed('comunicado') AS r`)
 );
-check("comunicado não chega ao cliente", feedCliente[0].r.length === 0,
+check("comunicado chega ao cliente no feed de notícias",
+  feedCliente[0].r.length === 1 && feedCliente[0].r[0].title === "Reunião geral de sexta",
   String(feedCliente[0].r.length));
 
 const linhaCliente = await asUser(C1, async () =>
   q(`SELECT count(*)::int n FROM public.content_items WHERE kind = 'comunicado'`)
 );
-check("cliente não lê comunicados nem pedindo a tabela", Number(linhaCliente[0].n) === 0,
+check("cliente lê o comunicado publicado na tabela", Number(linhaCliente[0].n) === 1,
   String(linhaCliente[0].n));
 
 // 16.4 rascunho nunca sai
@@ -1732,7 +1738,7 @@ try {
 await exec(`RESET ROLE;`);
 check("candidatura não entra já aprovada", recusouAprovada);
 
-// 17.10 falar com a equipa junta colaborador e gestão
+// 17.10 falar com a equipa abre conversa PRIVADA com a gestão
 await exec(`DELETE FROM public.seller_customers WHERE customer_id = '${C_UIGE}'`);
 await exec(`
   INSERT INTO public.seller_customers (seller_id, customer_id, is_active)
@@ -1740,16 +1746,153 @@ await exec(`
 
 const s17Conv = await asUser(C_UIGE, async () =>
   q(`SELECT public.abrir_conversa_equipa() AS id`));
+
+const s17Tipo = await q(
+  `SELECT type FROM public.conversations WHERE id = '${s17Conv[0].id}'`);
+check("falar com a equipa abre conversa directa", s17Tipo[0].type === "direct",
+  String(s17Tipo[0].type));
+
 const s17Membros = await q(`
-  SELECT user_id, role FROM public.conversation_members
-  WHERE conversation_id = '${s17Conv[0].id}' ORDER BY role`);
-check("conversa de equipa junta cliente, colaborador e gestão",
-  s17Membros.length === 3, `${s17Membros.length} membros`);
+  SELECT user_id FROM public.conversation_members
+  WHERE conversation_id = '${s17Conv[0].id}'`);
+check("a conversa é só do cliente com o gestor", s17Membros.length === 2,
+  `${s17Membros.length} membros`);
+
+const s17TemColab = s17Membros.some((m) => m.user_id === S_UIGE);
+check("o colaborador do cliente não entra na conversa", !s17TemColab);
+
+// O outro lado tem de ser gestão — e da mesma província, quando existe.
+const s17Outro = s17Membros.find((m) => m.user_id !== C_UIGE);
+const s17OutroPerfil = await q(
+  `SELECT role, provincia_id FROM public.profiles WHERE id = '${s17Outro.user_id}'`);
+check("o outro lado da conversa é a gestão",
+  s17OutroPerfil[0].role === "manager", JSON.stringify(s17OutroPerfil[0]));
+
+const s17ProvCliente = await q(
+  `SELECT provincia_id FROM public.profiles WHERE id = '${C_UIGE}'`);
+check("a gestão escolhida é da província do cliente",
+  s17OutroPerfil[0].provincia_id === s17ProvCliente[0].provincia_id);
 
 const s17Conv2 = await asUser(C_UIGE, async () =>
   q(`SELECT public.abrir_conversa_equipa() AS id`));
 check("abrir a conversa duas vezes não cria uma segunda",
   s17Conv2[0].id === s17Conv[0].id, `${s17Conv[0].id} / ${s17Conv2[0].id}`);
+
+// 17.11 grupos são só da equipa
+let grupoComClienteRecusado = false;
+try {
+  await asUser(M_UIGE, async () =>
+    q(`SELECT public.criar_grupo_equipa('Com clientes', ARRAY['${C_UIGE}']::uuid[])`));
+} catch (e) {
+  grupoComClienteRecusado = /só para membros da empresa/i.test(e.message);
+}
+check("a gestão não põe um cliente num grupo", grupoComClienteRecusado);
+
+const s17Grupo = await asUser(M_UIGE, async () =>
+  q(`SELECT public.criar_grupo_equipa('Equipa Uíge', ARRAY['${S_UIGE}']::uuid[]) AS id`));
+const s17GrupoMembros = await q(`
+  SELECT user_id FROM public.conversation_members
+  WHERE conversation_id = '${s17Grupo[0].id}'`);
+check("a gestão cria grupo só com colaboradores", s17GrupoMembros.length === 2,
+  `${s17GrupoMembros.length} membros`);
+
+const s17GrupoTipo = await q(
+  `SELECT type, title FROM public.conversations WHERE id = '${s17Grupo[0].id}'`);
+check("o grupo fica marcado como grupo",
+  s17GrupoTipo[0].type === "group" && s17GrupoTipo[0].title === "Equipa Uíge",
+  JSON.stringify(s17GrupoTipo[0]));
+
+let colabNaoCriaGrupo = false;
+try {
+  await asUser(S_UIGE, async () =>
+    q(`SELECT public.criar_grupo_equipa('Do colaborador', '{}'::uuid[])`));
+} catch (e) {
+  colabNaoCriaGrupo = /só a gestão cria grupos/i.test(e.message);
+}
+check("o colaborador não cria grupos", colabNaoCriaGrupo);
+
+let clienteNaoEntraNoGrupo = false;
+try {
+  await asUser(M_UIGE, async () =>
+    q(`SELECT public.adicionar_membro_grupo('${s17Grupo[0].id}', '${C_UIGE}')`));
+} catch (e) {
+  clienteNaoEntraNoGrupo = /só para membros da empresa/i.test(e.message);
+}
+check("a gestão não acrescenta um cliente ao grupo", clienteNaoEntraNoGrupo);
+
+// O gatilho é a última barreira: mesmo um INSERT directo é recusado.
+let gatilhoRecusa = false;
+try {
+  await exec(`
+    INSERT INTO public.conversation_members (conversation_id, user_id)
+    VALUES ('${s17Grupo[0].id}', '${C_UIGE}')`);
+} catch (e) {
+  gatilhoRecusa = /só para membros da empresa/i.test(e.message);
+}
+check("o gatilho recusa um cliente num grupo", gatilhoRecusa);
+
+await asUser(M_UIGE, async () =>
+  q(`SELECT public.remover_membro_grupo('${s17Grupo[0].id}', '${S_UIGE}')`));
+const s17DepoisRemover = await q(`
+  SELECT user_id FROM public.conversation_members
+  WHERE conversation_id = '${s17Grupo[0].id}'`);
+check("a gestão remove um membro do grupo", s17DepoisRemover.length === 1,
+  `${s17DepoisRemover.length} membros`);
+
+// 17.12 disponibilidade pública (migração 0012)
+// A montra é servida a visitantes sem conta; o inventário só é legível com
+// sessão. Sem esta função, «Esgotado» nunca aparecia a quem não tem conta.
+const pStock = (await q(`
+  INSERT INTO public.products (name, official_price)
+  VALUES ('[TESTE] Stock público', 1000) RETURNING id`))[0].id;
+const pSemStock = (await q(`
+  INSERT INTO public.products (name, official_price)
+  VALUES ('[TESTE] Sem inventário', 1000) RETURNING id`))[0].id;
+await q(`
+  INSERT INTO public.inventory (product_id, quantity, reserved_quantity)
+  VALUES ('${pStock}', 5, 2)`);
+
+// `anon` é o papel de quem chega ao site sem sessão.
+async function comoAnon(fn) {
+  await exec(`SET ROLE anon;`);
+  try {
+    return await fn();
+  } finally {
+    await exec(`RESET ROLE;`);
+  }
+}
+
+const stockPub = await comoAnon(async () =>
+  q(`SELECT product_id, disponivel FROM public.stock_produtos(
+       ARRAY['${pStock}','${pSemStock}']::uuid[])`));
+
+const linhaStock = stockPub.find((l) => l.product_id === pStock);
+check("visitante vê as unidades disponíveis",
+  Number(linhaStock?.disponivel) === 3, JSON.stringify(linhaStock));
+
+const linhaVazia = stockPub.find((l) => l.product_id === pSemStock);
+check("produto sem inventário devolve NULL (não zero)",
+  linhaVazia?.disponivel === null, JSON.stringify(linhaVazia));
+
+// Esgotado é zero, e zero tem de chegar como zero — não como «sem controlo».
+await q(`UPDATE public.inventory SET quantity = 2 WHERE product_id = '${pStock}'`);
+const esgotadoPub = await comoAnon(async () =>
+  q(`SELECT disponivel FROM public.stock_produtos(ARRAY['${pStock}']::uuid[])`));
+check("stock todo reservado aparece como zero",
+  Number(esgotadoPub[0].disponivel) === 0, JSON.stringify(esgotadoPub[0]));
+
+// O chamador manda a lista de ids da página; uma página vazia não pode dar erro.
+const vazio = await comoAnon(async () =>
+  q(`SELECT disponivel FROM public.stock_produtos('{}'::uuid[])`));
+check("lista vazia devolve zero linhas", vazio.length === 0, `${vazio.length} linhas`);
+
+// A função é estreita: devolve o número, não a tabela do inventário. A RLS
+// não levanta erro — filtra as linhas —, por isso o que se verifica é que o
+// visitante não vê nenhuma.
+const anonVeInventario = await comoAnon(async () =>
+  q(`SELECT * FROM public.inventory`));
+check("o visitante continua sem ler a tabela de inventário",
+  anonVeInventario.length === 0, `${anonVeInventario.length} linhas`);
 
 console.log("\n--- 18. RESERVA DE CLIENTES (SEM CRIAR CONTAS) ---");
 
@@ -1920,6 +2063,360 @@ const reservasDeOutro = await asUser(SELLER, async () =>
   q(`SELECT count(*)::int n FROM public.reserved_customers WHERE phone = '${telVenda}'`));
 check("outro colaborador não vê a reserva alheia",
   reservasDeOutro[0].n === 0, `${reservasDeOutro[0].n} linhas`);
+
+
+console.log("\n--- 19. PERFIS: VENDEDOR DE LOJA, ELIMINAÇÃO E FEED ---");
+
+// 19.1 conta de vendedor de loja
+const LOJA = "bbbb1111-1111-4111-8111-111111111111";
+await exec(`
+  INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
+    ('${LOJA}', 'loja@inuka.ao', '{"full_name":"Vendedor de Loja","phone":"923000777"}');
+  UPDATE public.profiles
+  SET role = 'store_seller', provincia_id = '${UIG}'
+  WHERE id = '${LOJA}';
+`);
+
+const papeisLoja = await asUser(LOJA, async () =>
+  q(`SELECT public.is_store_seller() AS loja,
+            public.can_manage_stock() AS stock,
+            public.can_sell_at_store() AS balcao,
+            public.is_seller() AS comissao,
+            public.is_manager() AS gestao`));
+check("vendedor de loja tem stock e balcão, não é colaborador de comissão",
+  papeisLoja[0].loja && papeisLoja[0].stock && papeisLoja[0].balcao
+  && !papeisLoja[0].comissao && !papeisLoja[0].gestao,
+  JSON.stringify(papeisLoja[0]));
+
+// 19.2 produto próprio para a loja
+const prodLoja = await q(`
+  INSERT INTO public.products (name, sku, official_price, promotional_price, provincia_id)
+  VALUES ('Perfume da Loja', 'LOJA-13', 10000, 8000, '${UIG}')
+  RETURNING id`);
+const ID_LOJA = prodLoja[0].id;
+
+const stockLoja = await asUser(LOJA, async () =>
+  q(`SELECT public.set_product_stock('${ID_LOJA}', 10, 'Carga inicial') AS r`));
+check("vendedor de loja carrega stock na sua província",
+  Number(stockLoja[0].r.quantity) === 10, JSON.stringify(stockLoja[0].r));
+
+const stockFora = await asUser(LOJA, async () => {
+  try {
+    await q(`SELECT public.set_product_stock('${ID_LOJA}', 5, 'Fora', '${LDA}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("vendedor de loja não mexe no stock de outra província",
+  /sua província/i.test(stockFora ?? ""), stockFora ?? "não deu erro");
+
+const stockCliente = await asUser(C1, async () => {
+  try {
+    await q(`SELECT public.set_product_stock('${ID_LOJA}', 99)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("cliente não altera stock", /Apenas a loja/i.test(stockCliente ?? ""),
+  stockCliente ?? "não deu erro");
+
+// 19.3 venda ao balcão: preço vem da base, stock sai na hora
+const vendaLoja = await asUser(LOJA, async () =>
+  q(`SELECT public.registar_venda_loja(
+       '[{"product_id":"${ID_LOJA}","quantity":2,"unit_price":1}]'::jsonb,
+       'dinheiro', NULL, 'Venda de teste', 'loja-ref-1') AS r`));
+check("venda ao balcão usa o preço promocional da base (2 × 8 000)",
+  Number(vendaLoja[0].r.total) === 16000, JSON.stringify(vendaLoja[0].r));
+
+const stockDepois = await asUser(LOJA, async () =>
+  q(`SELECT quantity FROM public.inventory
+     WHERE product_id = '${ID_LOJA}' AND provincia_id = '${UIG}'`));
+check("venda ao balcão desconta o stock", Number(stockDepois[0].quantity) === 8,
+  String(stockDepois[0].quantity));
+
+const itemVenda = await asUser(LOJA, async () =>
+  q(`SELECT product_snapshot, unit_price FROM public.sale_items
+     WHERE product_id = '${ID_LOJA}'`));
+check("item da venda guarda o nome do produto",
+  itemVenda[0]?.product_snapshot?.name === "Perfume da Loja",
+  JSON.stringify(itemVenda[0]?.product_snapshot));
+check("item da venda guarda o preço da base, não o do browser",
+  Number(itemVenda[0]?.unit_price) === 8000, String(itemVenda[0]?.unit_price));
+
+const comissaoLoja = await q(`
+  SELECT amount FROM public.sale_commissions
+  WHERE sale_id = '${vendaLoja[0].r.sale_id}'`);
+check("venda ao balcão não gera comissão", Number(comissaoLoja[0]?.amount ?? 0) === 0,
+  JSON.stringify(comissaoLoja));
+
+const duplicada = await asUser(LOJA, async () =>
+  q(`SELECT public.registar_venda_loja(
+       '[{"product_id":"${ID_LOJA}","quantity":1}]'::jsonb,
+       'dinheiro', NULL, NULL, 'loja-ref-1') AS r`));
+check("repetir a mesma venda não cobra duas vezes",
+  duplicada[0].r.duplicated === true && duplicada[0].r.sale_id === vendaLoja[0].r.sale_id,
+  JSON.stringify(duplicada[0].r));
+
+const semStock = await asUser(LOJA, async () => {
+  try {
+    await q(`SELECT public.registar_venda_loja(
+      '[{"product_id":"${ID_LOJA}","quantity":99}]'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("venda acima do stock é recusada com o nome do produto",
+  /Stock insuficiente/i.test(semStock ?? "") && /Perfume da Loja/.test(semStock ?? ""),
+  semStock ?? "não deu erro");
+
+const vendaCliente = await asUser(C1, async () => {
+  try {
+    await q(`SELECT public.registar_venda_loja(
+      '[{"product_id":"${ID_LOJA}","quantity":1}]'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("cliente não vende ao balcão", /Apenas a loja/i.test(vendaCliente ?? ""),
+  vendaCliente ?? "não deu erro");
+
+// 19.4 o colaborador de comissão continua a registar as vendas dele
+const vendaColab = await asUser(SELLER, async () => {
+  try {
+    await q(`SELECT public.registar_venda_loja(
+      '[{"product_id":"${ID_LOJA}","quantity":1}]'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("colaborador de comissão não usa o balcão da loja",
+  /Apenas a loja/i.test(vendaColab ?? ""), vendaColab ?? "não deu erro");
+
+// 19.5 eliminar produto com histórico
+const encomendaLoja = await q(`
+  INSERT INTO public.orders (reference, customer_id, total_amount)
+  VALUES ('ENC-LOJA-13', '${C1}', 10000) RETURNING id`);
+await exec(`
+  INSERT INTO public.order_items (order_id, product_id, quantity, unit_price, total_price)
+  VALUES ('${encomendaLoja[0].id}', '${ID_LOJA}', 1, 10000, 10000);
+`);
+
+const impacto = await asUser(MANAGER, async () =>
+  q(`SELECT public.impacto_eliminar_produto('${ID_LOJA}') AS r`));
+check("o impacto mostra a encomenda e a venda antes de eliminar",
+  Number(impacto[0].r.order_items) === 1 && Number(impacto[0].r.sale_items) === 1,
+  JSON.stringify(impacto[0].r));
+
+const lojaElimina = await asUser(LOJA, async () => {
+  try {
+    await q(`SELECT public.eliminar_produto('${ID_LOJA}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("vendedor de loja não elimina produtos", /Apenas a gerência/i.test(lojaElimina ?? ""),
+  lojaElimina ?? "não deu erro");
+
+const eliminado = await asUser(MANAGER, async () =>
+  q(`SELECT public.eliminar_produto('${ID_LOJA}') AS r`));
+check("a gestão elimina um produto que já está numa encomenda",
+  eliminado[0].r.name === "Perfume da Loja", JSON.stringify(eliminado[0].r));
+
+const produtoSumiu = await q(`SELECT count(*)::int n FROM public.products WHERE id = '${ID_LOJA}'`);
+check("o produto desapareceu do catálogo", produtoSumiu[0].n === 0, String(produtoSumiu[0].n));
+
+const itemPreservado = await q(`
+  SELECT product_id, product_name FROM public.order_items
+  WHERE order_id = '${encomendaLoja[0].id}'`);
+check("a encomenda fica sem produto mas mantém o nome",
+  itemPreservado[0].product_id === null && itemPreservado[0].product_name === "Perfume da Loja",
+  JSON.stringify(itemPreservado[0]));
+
+const vendaPreservada = await q(`
+  SELECT product_id, product_snapshot FROM public.sale_items
+  WHERE sale_id = '${vendaLoja[0].r.sale_id}'`);
+check("a venda fica sem produto mas mantém o instantâneo",
+  vendaPreservada[0].product_id === null
+  && vendaPreservada[0].product_snapshot?.name === "Perfume da Loja",
+  JSON.stringify(vendaPreservada[0]));
+
+// 19.5b eliminação forçada — para produtos fictícios, o histórico sai com ele
+const ficticio = await q(`
+  INSERT INTO public.products (name, sku, official_price, is_active)
+  VALUES ('[TESTE] Fictício', 'FICT-14', 5000, true) RETURNING id`);
+const ID_FICT = ficticio[0].id;
+
+const real = await q(`
+  INSERT INTO public.products (name, sku, official_price, is_active)
+  VALUES ('[TESTE] Real', 'REAL-14', 7000, true) RETURNING id`);
+const ID_REAL = real[0].id;
+
+// (a) uma encomenda só com o produto fictício — desaparece por inteiro
+const encSoFict = await q(`
+  INSERT INTO public.orders (reference, customer_id, total_amount)
+  VALUES ('ENC-FICT-14', '${C1}', 5000) RETURNING id`);
+await exec(`
+  INSERT INTO public.order_items (order_id, product_id, quantity, unit_price, total_price)
+  VALUES ('${encSoFict[0].id}', '${ID_FICT}', 1, 5000, 5000);
+`);
+
+// (b) uma encomenda mista — sobrevive, mas o total é recalculado
+const encMista = await q(`
+  INSERT INTO public.orders (reference, customer_id, total_amount)
+  VALUES ('ENC-MISTA-14', '${C1}', 12000) RETURNING id`);
+await exec(`
+  INSERT INTO public.order_items (order_id, product_id, quantity, unit_price, total_price)
+  VALUES ('${encMista[0].id}', '${ID_FICT}', 1, 5000, 5000),
+         ('${encMista[0].id}', '${ID_REAL}', 1, 7000, 7000);
+`);
+
+// (c) uma venda só com o fictício e (d) uma reserva só com o fictício
+const vendaFict = await q(`
+  INSERT INTO public.sales (reference, seller_id, total_amount, payment_status)
+  VALUES ('VEN-FICT-14', '${LOJA}', 5000, 'paid') RETURNING id`);
+await exec(`
+  INSERT INTO public.sale_items (sale_id, product_id, quantity, unit_price, total_price)
+  VALUES ('${vendaFict[0].id}', '${ID_FICT}', 1, 5000, 5000);
+`);
+const reservaFict = await q(`
+  INSERT INTO public.reservations (customer_id, status)
+  VALUES ('${C1}', 'active') RETURNING id`);
+await exec(`
+  INSERT INTO public.reservation_items (reservation_id, product_id, quantity, unit_price)
+  VALUES ('${reservaFict[0].id}', '${ID_FICT}', 1, 5000);
+`);
+
+const impactoForcado = await asUser(MANAGER, async () =>
+  q(`SELECT public.impacto_eliminar_produto('${ID_FICT}') AS r`));
+check("o impacto diz quantos registos ficariam vazios",
+  Number(impactoForcado[0].r.orders_emptied) === 1
+  && Number(impactoForcado[0].r.sales_emptied) === 1
+  && Number(impactoForcado[0].r.reservations_emptied) === 1,
+  JSON.stringify(impactoForcado[0].r));
+
+const forcado = await asUser(MANAGER, async () =>
+  q(`SELECT public.eliminar_produto('${ID_FICT}', true) AS r`));
+check("a eliminação forçada apaga o produto e o histórico",
+  forcado[0].r.forcado === true
+  && Number(forcado[0].r.apagados.encomendas) === 1
+  && Number(forcado[0].r.apagados.vendas) === 1
+  && Number(forcado[0].r.apagados.reservas) === 1,
+  JSON.stringify(forcado[0].r.apagados));
+
+const linhasFict = await q(`
+  SELECT
+    (SELECT count(*)::int FROM public.order_items      WHERE product_id = '${ID_FICT}') AS encomendas,
+    (SELECT count(*)::int FROM public.sale_items       WHERE product_id = '${ID_FICT}') AS vendas,
+    (SELECT count(*)::int FROM public.reservation_items WHERE product_id = '${ID_FICT}') AS reservas`);
+check("nenhuma linha do produto fictício ficou no histórico",
+  linhasFict[0].encomendas === 0 && linhasFict[0].vendas === 0 && linhasFict[0].reservas === 0,
+  JSON.stringify(linhasFict[0]));
+
+const encApagada = await q(`
+  SELECT count(*)::int n FROM public.orders WHERE id = '${encSoFict[0].id}'`);
+check("a encomenda que só tinha o fictício foi apagada", encApagada[0].n === 0,
+  String(encApagada[0].n));
+
+const encMistaDepois = await q(`
+  SELECT o.total_amount, count(oi.id)::int AS itens
+  FROM public.orders o
+  LEFT JOIN public.order_items oi ON oi.order_id = o.id
+  WHERE o.id = '${encMista[0].id}'
+  GROUP BY o.total_amount`);
+check("a encomenda mista sobrevive com o total recalculado",
+  encMistaDepois[0]?.itens === 1 && Number(encMistaDepois[0]?.total_amount) === 7000,
+  JSON.stringify(encMistaDepois[0]));
+
+const vendaApagada = await q(`
+  SELECT count(*)::int n FROM public.sales WHERE id = '${vendaFict[0].id}'`);
+check("a venda que só tinha o fictício foi apagada", vendaApagada[0].n === 0,
+  String(vendaApagada[0].n));
+
+const reservaApagada = await q(`
+  SELECT count(*)::int n FROM public.reservations WHERE id = '${reservaFict[0].id}'`);
+check("a reserva que só tinha o fictício foi apagada", reservaApagada[0].n === 0,
+  String(reservaApagada[0].n));
+
+// O produto real da encomenda mista continua no sítio.
+const realIntacto = await q(`
+  SELECT count(*)::int n FROM public.products WHERE id = '${ID_REAL}'`);
+check("o outro produto da encomenda mista não foi tocado", realIntacto[0].n === 1,
+  String(realIntacto[0].n));
+
+// 19.5c o modo normal continua a existir (forçar é opt-in)
+const ficticio2 = await q(`
+  INSERT INTO public.products (name, sku, official_price, is_active)
+  VALUES ('[TESTE] Fictício 2', 'FICT-15', 3000, true) RETURNING id`);
+const enc2 = await q(`
+  INSERT INTO public.orders (reference, customer_id, total_amount)
+  VALUES ('ENC-FICT-15', '${C1}', 3000) RETURNING id`);
+await exec(`
+  INSERT INTO public.order_items (order_id, product_id, quantity, unit_price, total_price)
+  VALUES ('${enc2[0].id}', '${ficticio2[0].id}', 1, 3000, 3000);
+`);
+const semForcar = await asUser(MANAGER, async () =>
+  q(`SELECT public.eliminar_produto('${ficticio2[0].id}') AS r`));
+const enc2Depois = await q(`
+  SELECT product_id, product_name FROM public.order_items WHERE order_id = '${enc2[0].id}'`);
+check("sem forçar, a encomenda fica com o nome do produto",
+  semForcar[0].r.forcado === false
+  && enc2Depois[0]?.product_id === null
+  && enc2Depois[0]?.product_name === "[TESTE] Fictício 2",
+  JSON.stringify(enc2Depois[0]));
+
+// 19.6 feed: formação continua fora do feed do cliente
+await exec(`
+  INSERT INTO public.content_items (kind, title, status, published_at)
+  VALUES ('formacao', 'Aula interna', 'publicado', now());
+`);
+const feedFormacao = await asUser(C1, async () =>
+  q(`SELECT public.conteudo_feed('formacao') AS r`));
+check("formação continua fora do feed do cliente",
+  feedFormacao[0].r.length === 0, String(feedFormacao[0].r.length));
+
+const feedGeral = await asUser(C1, async () =>
+  q(`SELECT public.conteudo_feed(NULL, 30) AS r`));
+check("o feed do cliente traz comunicados e testemunhos",
+  feedGeral[0].r.some((c) => c.kind === "comunicado"),
+  feedGeral[0].r.map((c) => c.kind).join(","));
+
+// 19.7 o cliente reage ao comunicado que agora vê
+const reacao = await asUser(C1, async () => {
+  try {
+    await q(`INSERT INTO public.content_reactions (item_id, user_id, reaction)
+             SELECT id, '${C1}', 'gosto' FROM public.content_items
+             WHERE kind = 'comunicado' AND status = 'publicado' LIMIT 1`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("cliente reage ao comunicado", reacao === null, reacao ?? "");
+
+
+// 19.8 a loja prepara encomendas da sua província — e só dessas
+const prodLoja2 = await q(`
+  INSERT INTO public.products (name, sku, official_price, provincia_id)
+  VALUES ('Sabonete da Loja', 'LOJA-14', 3000, '${UIG}')
+  RETURNING id`);
+
+const encUige = await q(`
+  INSERT INTO public.orders (reference, customer_id, provincia_id, total_amount)
+  VALUES ('ENC-UIGE-13', '${C1}', '${UIG}', 3000) RETURNING id`);
+await exec(`
+  INSERT INTO public.order_items (order_id, product_id, quantity, unit_price, total_price)
+  VALUES ('${encUige[0].id}', '${prodLoja2[0].id}', 1, 3000, 3000);
+`);
+
+const prep = await asUser(LOJA, async () =>
+  q(`SELECT public.update_order_status('${encUige[0].id}', 'preparing') AS r`));
+check("vendedor de loja prepara encomenda da sua província",
+  prep[0].r.changed === true && prep[0].r.status === "preparing", JSON.stringify(prep[0].r));
+
+const encLda = await q(`
+  INSERT INTO public.orders (reference, customer_id, provincia_id, total_amount)
+  VALUES ('ENC-LDA-13', '${C2}', '${LDA}', 3000) RETURNING id`);
+
+const foraDaProvincia = await asUser(LOJA, async () => {
+  try {
+    await q(`SELECT public.update_order_status('${encLda[0].id}', 'preparing')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("vendedor de loja não mexe em encomenda de outra província",
+  /outra província/i.test(foraDaProvincia ?? ""), foraDaProvincia ?? "não deu erro");
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

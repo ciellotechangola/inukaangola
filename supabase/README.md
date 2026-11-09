@@ -54,6 +54,11 @@ npm run setup:sql     # concatena migrations/ em SETUP_COMPLETO.sql
 | `PATCH_CONTEUDOS.sql` | **Obrigatório** para comunicados, testemunhos, promoções e formação INUKA. É a migração 0007 isolada: 10 tabelas, 26 políticas, 11 funções, 6 gatilhos, bucket `content-media` e as 9 categorias de formação. |
 | `PATCH_TAXAS_PEDIDOS.sql` | **Obrigatório** para a taxa de comissão da empresa, confirmação de entrega pelo cliente e candidaturas a revendedor. É a migração 0008 isolada. |
 | `PATCH_RESERVAS.sql` | **Obrigatório** para a carteira de clientes. É a migração 0009 isolada: o colaborador deixa de criar contas e passa a reservar (`reserved_customers`), a venda aceita um telefone sem conta (`sales.customer_phone`), e o registo do próprio cliente liga a reserva e herda as compras (`ligar_reserva_ao_cliente`, `minhas_compras`). |
+| `PATCH_TAXA_ENTREGA.sql` | **Obrigatório** para a entrega ao domicílio com preço: gratuita no Uíge, 2 000 Kz nas outras províncias (`orders.delivery_fee`, `taxa_entrega()`). É a migração 0010 isolada. |
+| `PATCH_CHAT_EQUIPA.sql` | **Obrigatório** para o chat separado: o cliente fala em privado com a gestão e os grupos são só de membros da empresa, geridos pela gerência. É a migração 0011 isolada. |
+| `PATCH_STOCK_PUBLICO.sql` | **Obrigatório** para «Esgotado» aparecer a quem não tem conta (`stock_produtos`). É a migração 0012 isolada. |
+| `PATCH_PERFIS_LOJA.sql` | **Obrigatório** para o perfil «vendedor de loja», a separação de competências, a eliminação de produtos com histórico e os comunicados no feed do cliente. É a migração 0013 isolada. |
+| `PATCH_ELIMINAR_FORCADO.sql` | Elimina um produto **e o histórico dele** (linhas de encomenda, venda e reserva, e os registos que ficam vazios). Para produtos fictícios, de demonstração ou de teste. É a migração 0014 isolada. Depende da 0013. |
 
 ### Ordem de aplicação numa base já existente
 
@@ -65,6 +70,13 @@ npm run setup:sql     # concatena migrations/ em SETUP_COMPLETO.sql
 6. `PATCH_RESERVAS.sql`
 7. `PATCH_designer.sql` outra vez — acrescenta o gatilho que fecha a escrita do
    estúdio a quem não é gestão (o resto do ficheiro é idempotente)
+8. `PATCH_TAXA_ENTREGA.sql`
+9. `PATCH_CHAT_EQUIPA.sql`
+10. `PATCH_STOCK_PUBLICO.sql`
+11. `PATCH_PERFIS_LOJA.sql`
+12. `PATCH_ELIMINAR_FORCADO.sql`
+
+`npm run estado` diz, item a item, o que ainda falta na base alojada.
 
 A migração provincial **não apaga nada**. Os registos antigos ficam atribuídos à
 província-sede (`is_default = true`, por omissão **Luanda**). Se a sede for

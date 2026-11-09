@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getProfile } from "@/lib/auth";
 import { lerDefinicoes } from "@/lib/definicoes-server";
+import { lerEntrega, nomesProvinciasGratis } from "@/lib/entrega-server";
+import { supabaseAdmin } from "@/lib/supabase-server";
 import FormularioDefinicoes from "./FormularioDefinicoes";
 
 export const dynamic = "force-dynamic";
@@ -9,16 +11,29 @@ export const dynamic = "force-dynamic";
 /**
  * Definições da loja.
  *
- * Existe por uma razão simples: o e-mail de atendimento e o link da aplicação
- * mudam sem aviso — um Gmail novo, um APK recompilado, um TestFlight que
- * expira. Antes isso obrigava a mexer no código e a publicar de novo; agora a
- * gerência muda aqui e a loja apanha na hora.
+ * Existe por uma razão simples: o e-mail de atendimento, o link da aplicação e
+ * a taxa de entrega mudam sem aviso — um Gmail novo, um APK recompilado, um
+ * TestFlight que expira, um preço de transporte que sobe. Antes isso obrigava
+ * a mexer no código e a publicar de novo; agora a gerência muda aqui e a loja
+ * apanha na hora.
  */
 export default async function DefinicoesPage() {
   const perfil = await getProfile();
   if (!perfil || perfil.role !== "manager") redirect("/");
 
-  const definicoes = await lerDefinicoes();
+  const [definicoes, entrega, provincias] = await Promise.all([
+    lerDefinicoes(),
+    lerEntrega(),
+    // Lista completa para as caixas de «entrega grátis».
+    supabaseAdmin
+      .from("provincias")
+      .select("slug, nome")
+      .eq("is_active", true)
+      .order("nome")
+      .then((r) => (r.data ?? []) as { slug: string; nome: string }[]),
+  ]);
+
+  const gratisNomes = await nomesProvinciasGratis(entrega);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -29,18 +44,26 @@ export default async function DefinicoesPage() {
       <div className="mb-6">
         <h1 className="text-3xl font-light text-[#F5F5F5]">Definições</h1>
         <p className="mt-1 text-sm text-[#A3A3A3]">
-          Contactos públicos e aplicações para descarregar. O que gravar aqui aparece na loja de
-          imediato — sem publicar nada.
+          Contactos públicos, aplicações para descarregar e taxa de entrega. O que gravar aqui
+          aparece na loja de imediato — sem publicar nada.
         </p>
       </div>
 
-      <FormularioDefinicoes iniciais={definicoes} />
+      <FormularioDefinicoes
+        iniciais={definicoes}
+        entregaInicial={entrega}
+        provincias={provincias}
+      />
 
       <p className="mt-8 text-xs leading-relaxed text-[#525252]">
-        Os valores ficam em <code className="text-[#6F6F6F]">platform_settings</code>, chave{" "}
-        <code className="text-[#6F6F6F]">loja</code>. Um link de partilha do Google Drive é
+        Os valores ficam em <code className="text-[#6F6F6F]">platform_settings</code>, chaves{" "}
+        <code className="text-[#6F6F6F]">loja</code> e{" "}
+        <code className="text-[#6F6F6F]">entrega</code>. Um link de partilha do Google Drive é
         convertido automaticamente em descarga directa: quem clica recebe o ficheiro, não uma
         pré-visualização com outro botão.
+        {gratisNomes.length > 0 && (
+          <> Entrega gratuita: {gratisNomes.join(" · ")}.</>
+        )}
         {definicoes.actualizadoEm && (
           <>
             {" "}

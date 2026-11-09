@@ -3,14 +3,15 @@ import Link from "next/link";
 import { ArrowRight, BadgeCheck, CreditCard, Download, Headphones, Sparkles, Truck, Users } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
 import { TELEFONES_INUKA, telHref } from "@/lib/contactos";
+import { lerEntrega, nomesProvinciasGratis } from "@/lib/entrega-server";
+import { formatCurrency } from "@/lib/utils";
 import ProductCard from "@/components/ProductCard";
+import { stockDosProdutos } from "@/lib/stock";
 import type { Category, Product } from "@/types";
 
 export const dynamic = "force-dynamic";
 
-type ProdutoComEstoque = Product & {
-  inventory?: { quantity: number; reserved_quantity: number } | null;
-};
+type ProdutoComEstoque = Product;
 
 async function getDados() {
   const supabase = await createClientServer();
@@ -18,29 +19,45 @@ async function getDados() {
   const [produtosRes, categoriasRes] = await Promise.all([
     supabase
       .from("products")
-      .select(
-        "*, category:categories(*), images:product_images(*), inventory(quantity, reserved_quantity)"
-      )
+      .select("*, category:categories(*), images:product_images(*)")
       .eq("is_active", true)
       .order("created_at", { ascending: false })
       .limit(24),
     supabase.from("categories").select("*").eq("is_active", true).order("sort_order"),
   ]);
 
+  const produtos = (produtosRes.data ?? []) as ProdutoComEstoque[];
+
+  // Stock numa só chamada. Vem de uma função pública (migração 0012): o
+  // inventário só é legível por contas autenticadas e a montra é para todos.
+  const stock = await stockDosProdutos(
+    supabase,
+    produtos.map((p) => p.id)
+  );
+
   return {
-    produtos: (produtosRes.data ?? []) as ProdutoComEstoque[],
+    produtos,
+    stock,
     categorias: (categoriasRes.data ?? []) as Category[],
   };
 }
 
 /** Unidades compráveis; `null` quando a base não tem registo de stock. */
-function disponibilidade(p: ProdutoComEstoque): number | null {
-  if (!p.inventory) return null;
-  return Math.max(0, p.inventory.quantity - p.inventory.reserved_quantity);
+function disponibilidade(stock: Map<string, number>, id: string): number | null {
+  return stock.get(id) ?? null;
 }
 
 export default async function HomePage() {
-  const { produtos, categorias } = await getDados();
+  const { produtos, stock, categorias } = await getDados();
+
+  // A regra de entrega é configurável: não se escreve «grátis em Luanda,
+  // Uíge e Huambo» à mão, senão o site promete o que a caixa não cobra.
+  const entrega = await lerEntrega();
+  const gratisNomes = await nomesProvinciasGratis(entrega);
+  const entregaCurta =
+    entrega.taxaPadrao <= 0
+      ? "Grátis em todo o país"
+      : `Grátis: ${gratisNomes.join(" · ") || "Uíge"} · ${formatCurrency(entrega.taxaPadrao)} fora`;
 
   const promocoes = produtos.filter((p) => p.promotional_price !== null).slice(0, 4);
 
@@ -54,7 +71,7 @@ export default async function HomePage() {
   ].slice(0, 4);
 
   const garantias = [
-    { Icone: Truck, titulo: "Entrega gratuita", detalhe: "Luanda, Uíge, Huambo e outras" },
+    { Icone: Truck, titulo: "Entrega ao domicílio", detalhe: entregaCurta },
     { Icone: BadgeCheck, titulo: "100% original", detalhe: "Distribuição oficial" },
     { Icone: CreditCard, titulo: "Pagamento na entrega", detalhe: "Dinheiro ou transferência" },
     { Icone: Headphones, titulo: "Apoio dedicado", detalhe: TELEFONES_INUKA.join(" · ") },
@@ -108,7 +125,7 @@ export default async function HomePage() {
 
             <p className="mt-8 text-xs text-[#6F6F6F]">
               {produtos.length > 0
-                ? `${produtos.length} produtos disponíveis · entrega gratuita em Luanda, Uíge, Huambo e outras províncias`
+                ? `${produtos.length} produtos disponíveis · ${entregaCurta.toLowerCase()}`
                 : "Catálogo em actualização · fale connosco para encomendar"}
             </p>
           </div>
@@ -214,7 +231,7 @@ export default async function HomePage() {
             </div>
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
               {promocoes.map((p) => (
-                <ProductCard key={p.id} product={p} disponivel={disponibilidade(p)} />
+                <ProductCard key={p.id} product={p} disponivel={disponibilidade(stock, p.id)} />
               ))}
             </div>
           </div>
@@ -243,7 +260,7 @@ export default async function HomePage() {
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
             {destaques.map((p) => (
-              <ProductCard key={p.id} product={p} disponivel={disponibilidade(p)} />
+              <ProductCard key={p.id} product={p} disponivel={disponibilidade(stock, p.id)} />
             ))}
           </div>
         )}

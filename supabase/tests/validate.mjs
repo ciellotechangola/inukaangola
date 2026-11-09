@@ -14,6 +14,11 @@ const files = [
   "migrations/0007_conteudos.sql",
   "migrations/0008_taxas_pedidos.sql",
   "migrations/0009_reservas_clientes.sql",
+  "migrations/0010_taxa_entrega.sql",
+  "migrations/0011_chat_equipa.sql",
+  "migrations/0012_stock_publico.sql",
+  "migrations/0013_perfis_loja.sql",
+  "migrations/0014_eliminar_forcado.sql",
 ];
 
 const db = new PGlite();

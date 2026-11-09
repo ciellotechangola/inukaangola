@@ -371,11 +371,20 @@ export interface Contacto {
   role: string;
 }
 
-export async function carregarContactos(): Promise<Contacto[]> {
+/**
+ * Quem posso contactar.
+ *
+ * `apenasEquipa` deixa de fora os clientes. Serve para o grupo: um grupo é
+ * uma sala da empresa — clientes falam em privado com a gestão. A regra é
+ * imposta na base (gatilho `trg_conversation_members_so_equipa`); aqui só se
+ * evita mostrar uma lista de nomes que o servidor ia recusar.
+ */
+export async function carregarContactos(apenasEquipa = false): Promise<Contacto[]> {
   const r = await fetch("/api/contactos", { cache: "no-store" });
   if (!r.ok) throw new Error("Não foi possível carregar os contactos.");
   const corpo = (await r.json()) as { contactos?: Contacto[] };
-  return corpo.contactos ?? [];
+  const lista = corpo.contactos ?? [];
+  return apenasEquipa ? lista.filter((c) => c.role !== "customer") : lista;
 }
 
 export async function abrirConversaDirecta(otherUserId: string): Promise<string> {
@@ -387,36 +396,46 @@ export async function abrirConversaDirecta(otherUserId: string): Promise<string>
   return data as string;
 }
 
+/**
+ * Cria um grupo da equipa.
+ *
+ * Quem cria tem de ser gestão, e os membros têm de ser colaboradores ou
+ * gestores activos — a função na base recusa o resto. Não se faz INSERT
+ * directo em `conversations`/`conversation_members`: essas políticas passaram
+ * a ser exclusivas da gestão e o caminho certo é a RPC, que valida tudo numa
+ * transacção.
+ */
 export async function criarGrupo(
-  supabase: Cliente,
-  userId: string,
   nome: string,
   membros: string[]
 ): Promise<string> {
-  const { data: conv, error: erroConv } = await supabase
-    .from("conversations")
-    .insert({ type: "group", title: nome, created_by: userId })
-    .select("id")
-    .single();
-  if (erroConv) throw new Error(erroConv.message);
-
-  const conversationId = (conv as { id: string }).id;
-
-  const { error: erroMembros } = await supabase.from("conversation_members").insert([
-    { conversation_id: conversationId, user_id: userId, role: "admin" },
-    ...membros.filter((m) => m !== userId).map((m) => ({ conversation_id: conversationId, user_id: m, role: "member" })),
-  ]);
-  if (erroMembros) throw new Error(erroMembros.message);
-
-  const { error: erroGrupo } = await supabase.from("groups").insert({
-    conversation_id: conversationId,
-    name: nome,
-    created_by: userId,
-    is_private: true,
+  const supabase = createClientBrowser();
+  const { data, error } = await supabase.rpc("criar_grupo_equipa", {
+    p_nome: nome,
+    p_membros: membros,
   });
-  if (erroGrupo) throw new Error(erroGrupo.message);
+  if (error) throw new Error(error.message);
+  return data as string;
+}
 
-  return conversationId;
+/** Acrescenta alguém a um grupo. Só gestão; só membros da empresa. */
+export async function adicionarMembroGrupo(conversationId: string, userId: string) {
+  const supabase = createClientBrowser();
+  const { error } = await supabase.rpc("adicionar_membro_grupo", {
+    p_conversation_id: conversationId,
+    p_user_id: userId,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/** Remove alguém de um grupo. Só gestão. */
+export async function removerMembroGrupo(conversationId: string, userId: string) {
+  const supabase = createClientBrowser();
+  const { error } = await supabase.rpc("remover_membro_grupo", {
+    p_conversation_id: conversationId,
+    p_user_id: userId,
+  });
+  if (error) throw new Error(error.message);
 }
 
 /** Etiquetas e formatos partilhados pela interface. */

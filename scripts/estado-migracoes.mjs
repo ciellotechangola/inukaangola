@@ -61,6 +61,9 @@ const tabelas = [
 const colunas = [
   ["sales", "customer_phone"],
   ["platform_settings", "updated_by"],
+  ["orders", "delivery_fee"],
+  ["order_items", "product_name"],
+  ["discount_requests", "product_name"],
 ];
 
 // Funções chamáveis por RPC.
@@ -70,13 +73,26 @@ const funcoes = [
   "register_sale",
   "minhas_compras",
   "abrir_conversa_equipa",
+  "stock_produtos",
+  "criar_grupo_equipa",
+  "adicionar_membro_grupo",
+  "remover_membro_grupo",
   "link_customer_by_phone",
   "taxa_comissao",
   "taxa_comissao_de",
   "definir_taxa_comissao",
+  "taxa_entrega",
   "place_order",
   "update_order_status",
   "colaborador_painel",
+  "is_store_seller",
+  "is_staff",
+  "can_manage_stock",
+  "can_sell_at_store",
+  "registar_venda_loja",
+  "impacto_eliminar_produto",
+  "eliminar_produto",
+  "conteudo_comentarios",
 ];
 
 let especificacao = null;
@@ -104,6 +120,12 @@ if (especificacao) {
     const existe = especificacao.includes(`"/rpc/${f}"`);
     linhas.push([`função ${f}()`, existe ? "OK" : "em falta"]);
   }
+
+  // A 0014 acrescentou `p_forcar` a `eliminar_produto`. O nome da função já
+  // existia desde a 0013, por isso a presença dele não distingue as versões —
+  // o argumento novo sim.
+  const forcado = especificacao.includes('"p_forcar"');
+  linhas.push(["eliminar_produto(forçar histórico)", forcado ? "OK" : "em falta"]);
 } else {
   linhas.push(["funções (OpenAPI)", "não foi possível ler /rest/v1/"]);
 }

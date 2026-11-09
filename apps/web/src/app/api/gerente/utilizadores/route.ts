@@ -35,7 +35,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Pedido inválido." }, { status: 400 });
   }
 
-  const papel = corpo.role === "seller" ? "seller" : "customer";
+  const papel =
+    corpo.role === "seller"
+      ? "seller"
+      : corpo.role === "store_seller"
+        ? "store_seller"
+        : "customer";
   const full_name = String(corpo.full_name ?? "").trim();
   const rawPhone = String(corpo.phone ?? "").trim();
   const password = String(corpo.password ?? "");
@@ -161,6 +166,20 @@ export async function POST(request: Request) {
       { error: "Não foi possível guardar o perfil. Tente novamente." },
       { status: 500 }
     );
+  }
+
+  if (papel === "store_seller") {
+    // Vendedor de loja: conta de equipa sem carteira de clientes e sem
+    // `seller_profiles` — não recebe comissão por venda ao balcão.
+    const { error: erroPapel } = await supabaseAdmin
+      .from("profiles")
+      .update({ role: "store_seller" })
+      .eq("id", id);
+
+    if (erroPapel) {
+      await desfazer();
+      return NextResponse.json({ error: erroPapel.message }, { status: 400 });
+    }
   }
 
   if (papel === "seller") {

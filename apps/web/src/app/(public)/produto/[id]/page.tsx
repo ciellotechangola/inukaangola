@@ -2,17 +2,17 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { BadgeCheck, CreditCard, ShieldCheck, Truck } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
+import { lerEntrega, nomesProvinciasGratis } from "@/lib/entrega-server";
 import ProductActions from "@/components/ProductActions";
-import ProductImage from "@/components/ProductImage";
 import ProductCard, { percentagemDesconto, precoEfetivo } from "@/components/ProductCard";
+import ProductGallery from "@/components/ProductGallery";
+import { stockDosProdutos } from "@/lib/stock";
 import { formatCurrency } from "@/lib/utils";
 import type { Product } from "@/types";
 
 export const dynamic = "force-dynamic";
 
-type ProdutoComEstoque = Product & {
-  inventory?: { quantity: number; reserved_quantity: number } | null;
-};
+type ProdutoComEstoque = Product;
 
 export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -20,7 +20,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
   const { data: product, error } = await supabase
     .from("products")
-    .select("*, category:categories(*), images:product_images(*), inventory(quantity, reserved_quantity)")
+    .select("*, category:categories(*), images:product_images(*)")
     .eq("id", id)
     .single();
 
@@ -29,19 +29,31 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const p = product as ProdutoComEstoque;
   const desconto = percentagemDesconto(p);
   const preco = precoEfetivo(p);
-  const imagens = (p.images ?? []).filter((i) => Boolean(i.url));
+  const imagens = (p.images ?? [])
+    .filter((i) => Boolean(i.url))
+    .sort(
+      (a, b) =>
+        Number(Boolean(b.is_primary)) - Number(Boolean(a.is_primary)) ||
+        (a.sort_order ?? 0) - (b.sort_order ?? 0)
+    );
   const primaryImage = imagens[0]?.url ?? null;
 
-  const disponivel = p.inventory
-    ? Math.max(0, p.inventory.quantity - p.inventory.reserved_quantity)
-    : null;
+  // Entrega: a mesma regra que o carrinho e o `place_order` usam. Escrita à
+  // mão («grátis em Luanda, Uíge, Huambo») ficava a mentir no dia em que a
+  // gerência mudasse a taxa.
+  const defsEntrega = await lerEntrega();
+  const gratisNomes = await nomesProvinciasGratis(defsEntrega);
+  const entregaCurta =
+    defsEntrega.taxaPadrao <= 0
+      ? "Grátis em todo o país"
+      : `Grátis: ${gratisNomes.join(" · ") || "Uíge"} · ${formatCurrency(defsEntrega.taxaPadrao)} fora`;
 
   // Relacionados: mesma categoria, nunca o próprio.
   const relacionados = p.category_id
     ? (((
         await supabase
           .from("products")
-          .select("*, category:categories(*), images:product_images(*), inventory(quantity, reserved_quantity)")
+          .select("*, category:categories(*), images:product_images(*)")
           .eq("is_active", true)
           .eq("category_id", p.category_id)
           .neq("id", p.id)
@@ -49,9 +61,16 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
       ).data ?? []) as ProdutoComEstoque[])
     : [];
 
+  // Stock público (migração 0012): o inventário só é legível com sessão, e a
+  // página do produto é aberta por visitantes — sem isto, a rutura ficava
+  // invisível e o formulário de reserva nunca aparecia a quem não tem conta.
+  // Uma só chamada serve o produto e os relacionados.
+  const stock = await stockDosProdutos(supabase, [p.id, ...relacionados.map((r) => r.id)]);
+  const disponivel = stock.get(p.id) ?? null;
+
   const garantias = [
     { Icone: BadgeCheck, titulo: "Produto original", detalhe: "Distribuição oficial INUKA" },
-    { Icone: Truck, titulo: "Entrega gratuita", detalhe: "Luanda, Uíge, Huambo e outras" },
+    { Icone: Truck, titulo: "Entrega ao domicílio", detalhe: entregaCurta },
     { Icone: CreditCard, titulo: "Pagamento na entrega", detalhe: "Dinheiro ou transferência" },
     { Icone: ShieldCheck, titulo: "Reserva garantida", detalhe: "Stock reservado ao encomendar" },
   ];
@@ -81,46 +100,12 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
       <div className="grid gap-10 md:grid-cols-2">
         {/* ------------------------------------------------------------- imagem */}
         <div>
-          <div className="overflow-hidden rounded-2xl border border-[#262626] bg-[#111]">
-            <div className="relative aspect-square">
-              {primaryImage ? (
-                <ProductImage
-                  src={primaryImage}
-                  alt={p.name}
-                  width={700}
-                  height={700}
-                  priority
-                  sizes="(max-width: 768px) 100vw, 50vw"
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_50%_40%,#1C1C1C,#0B0B0B)]">
-                  <span className="text-sm tracking-[0.4em] text-[#3A3A3A]">INUKA</span>
-                </div>
-              )}
-              {desconto > 0 && (
-                <span className="absolute left-3 top-3 rounded-full bg-[#C9A962] px-2.5 py-1 text-xs font-bold text-[#0A0A0A]">
-                  -{desconto}%
-                </span>
-              )}
-            </div>
-          </div>
-
-          {imagens.length > 1 && (
-            <div className="mt-3 grid grid-cols-4 gap-2">
-              {imagens.slice(1, 5).map((img) => (
-                <div key={img.id} className="overflow-hidden rounded-lg border border-[#262626] bg-[#111]">
-                  <ProductImage
-                    src={img.url as string}
-                    alt={p.name}
-                    width={160}
-                    height={160}
-                    className="aspect-square h-full w-full object-cover"
-                  />
-                </div>
-              ))}
-            </div>
-          )}
+          <ProductGallery
+            imagens={imagens.map((i) => ({ id: i.id, url: i.url as string }))}
+            alt={p.name}
+            desconto={desconto}
+            esgotado={disponivel === 0}
+          />
         </div>
 
         {/* -------------------------------------------------------------- detalhe */}
@@ -154,8 +139,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
           <p className="mt-3 text-sm">
             {disponivel === null ? (
-              // O inventário é legível apenas por contas autenticadas (RLS).
-              // Para um visitante não inventamos stock: dizemos a verdade.
+              // Sem linha de inventário não há stock a anunciar — é diferente
+              // de zero. Não se inventa um número.
               <span className="text-[#A3A3A3]">
                 Disponibilidade confirmada ao finalizar a encomenda
               </span>
@@ -164,12 +149,20 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
                 Em stock · {disponivel} {disponivel === 1 ? "unidade" : "unidades"}
               </span>
             ) : (
-              <span className="text-[#DC2626]">Esgotado de momento</span>
+              <span className="text-[#DC2626]">
+                Esgotado de momento — pode deixar reserva abaixo
+              </span>
             )}
           </p>
 
           <div className="mt-7 border-t border-[#1F1F1F] pt-7">
-            <ProductActions productId={p.id} name={p.name} price={preco} image={primaryImage} />
+            <ProductActions
+              productId={p.id}
+              name={p.name}
+              price={preco}
+              image={primaryImage}
+              disponivel={disponivel}
+            />
           </div>
 
           <div className="mt-7 grid grid-cols-2 gap-3">
@@ -212,9 +205,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
               <ProductCard
                 key={r.id}
                 product={r}
-                disponivel={
-                  r.inventory ? Math.max(0, r.inventory.quantity - r.inventory.reserved_quantity) : null
-                }
+                disponivel={stock.get(r.id) ?? null}
               />
             ))}
           </div>

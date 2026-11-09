@@ -6,13 +6,14 @@ import { MessageCircle, Users } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
 
 /**
- * Abre a conversa da equipa INUKA.
+ * Abre a conversa privada com a gestão.
  *
- * Não é uma conversa directa com o colaborador: é um grupo com o colaborador
- * vinculado **e** a gestão. Uma mensagem para o colaborador que está de folga
- * ficava sem resposta; assim alguém da equipa vê.
+ * Já não é um grupo com o colaborador **e** a gestão: o cliente via-se numa
+ * sala de três pessoas e nunca sabia quem respondia. Passa a ser uma conversa
+ * directa com o gestor (migração 0011). Grupos ficaram reservados à equipa
+ * interna.
  */
-export default function FalarComEquipa({ temColaborador }: { temColaborador: boolean }) {
+export default function FalarComEquipa(_props: { temColaborador?: boolean }) {
   const router = useRouter();
   const [aAbrir, setAAbrir] = useState(false);
   const [erro, setErro] = useState("");
@@ -50,9 +51,7 @@ export default function FalarComEquipa({ temColaborador }: { temColaborador: boo
 
       <p className="mt-2 flex items-center gap-1.5 text-[11px] text-[#6F6F6F]">
         <Users className="h-3 w-3" />
-        {temColaborador
-          ? "Vai para a conversa com o seu colaborador e a gestão."
-          : "Vai para a conversa com a gestão INUKA."}
+        Conversa privada com a gestão INUKA — só vocês dois.
       </p>
 
       {erro && <p className="mt-2 text-[11px] text-[#F87171]">{erro}</p>}

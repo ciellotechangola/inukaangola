@@ -109,6 +109,7 @@ export default async function proxy(request: NextRequest) {
     const AREA: Record<string, string> = {
       customer: "/cliente",
       seller: "/vendedor",
+      store_seller: "/loja",
       manager: "/gerente",
     };
     const destino = AREA[role] ?? "/";
@@ -117,6 +118,11 @@ export default async function proxy(request: NextRequest) {
       return NextResponse.redirect(new URL(destino, request.url));
     }
     if (pathname.startsWith("/vendedor") && role !== "seller" && role !== "manager") {
+      return NextResponse.redirect(new URL(destino, request.url));
+    }
+    // A loja é de quem conta stock e vende ao balcão. O colaborador de vendas
+    // tem a área dele (/vendedor) e não entra aqui.
+    if (pathname.startsWith("/loja") && role !== "store_seller" && role !== "manager") {
       return NextResponse.redirect(new URL(destino, request.url));
     }
     if (pathname.startsWith("/gerente") && role !== "manager") {

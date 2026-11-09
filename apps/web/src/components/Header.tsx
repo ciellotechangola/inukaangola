@@ -73,6 +73,7 @@ export default function Header() {
           // Compras = o que um colaborador registou em nome deste número,
           // incluindo antes de a conta existir.
           { href: "/cliente/compras", label: "Compras" },
+          { href: "/cliente/conteudo", label: "Notícias" },
         ]
       : []),
     // O estúdio de design é ferramenta de gestão: não aparece ao cliente nem
@@ -83,6 +84,7 @@ export default function Header() {
           { href: "/designer", label: "Designer" },
           { href: "/gerente/conteudos", label: "Conteúdos" },
           { href: "/gerente/formacao", label: "Formação" },
+          { href: "/gerente/perfis", label: "Perfis" },
         ]
       : []),
     ...(profile?.role === "seller"
@@ -90,6 +92,15 @@ export default function Header() {
           { href: "/vendedor/comunicados", label: "Comunicados" },
           { href: "/vendedor/formacao", label: "Formação" },
           { href: "/vendedor/perfil", label: "Perfil" },
+        ]
+      : []),
+    // A loja tem o seu próprio menu: stock e balcão são o dia-a-dia.
+    ...(profile?.role === "store_seller"
+      ? [
+          { href: "/loja", label: "Loja" },
+          { href: "/loja/stock", label: "Stock" },
+          { href: "/loja/vendas", label: "Vendas" },
+          { href: "/loja/encomendas", label: "Encomendas" },
         ]
       : []),
     ...(profile ? [{ href: "/referencia", label: "Referência" }] : []),
@@ -104,9 +115,11 @@ export default function Header() {
   const dashboardLink = profile
     ? profile.role === "manager"
       ? "/gerente"
-      : profile.role === "seller"
-        ? "/vendedor"
-        : "/cliente"
+      : profile.role === "store_seller"
+        ? "/loja"
+        : profile.role === "seller"
+          ? "/vendedor"
+          : "/cliente"
     : "/login";
 
   return (

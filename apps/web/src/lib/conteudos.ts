@@ -59,7 +59,7 @@ export const TIPOS: { key: TipoConteudo; label: string; descricao: string; desti
   {
     key: "comunicado",
     label: "Comunicado da gestão",
-    descricao: "Aparece no feed dos colaboradores.",
+    descricao: "Aparece no feed dos colaboradores e nas notícias dos clientes.",
     destino: "/vendedor/comunicados",
   },
   {
@@ -214,6 +214,22 @@ export async function reagir(itemId: string, reaction: string): Promise<void> {
       { onConflict: "item_id,user_id" }
     );
   if (error) throw new Error(error.message);
+}
+
+/** Comentário já com o nome de quem escreveu (RPC `conteudo_comentarios`). */
+export interface ComentarioFeed {
+  id: string;
+  body: string;
+  created_at: string;
+  autor: string;
+  eu: boolean;
+}
+
+export async function comentariosDoConteudo(itemId: string): Promise<ComentarioFeed[]> {
+  const supabase = createClientBrowser();
+  const { data, error } = await supabase.rpc("conteudo_comentarios", { p_item_id: itemId });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ComentarioFeed[];
 }
 
 export async function comentar(itemId: string, body: string): Promise<void> {

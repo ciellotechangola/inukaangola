@@ -47,8 +47,9 @@ export default async function MyReservationsPage() {
       <main className="mx-auto max-w-5xl px-4 py-10">
         <h1 className="mb-2 text-3xl font-light text-[#F5F5F5]">Reservas</h1>
         <p className="mb-8 text-[#A3A3A3]">
-          Reservas guardam o stock durante o prazo indicado. Depois de expirar, os
-          produtos voltam a ficar disponíveis para outros clientes.
+          Reservas de produtos com stock guardam as unidades durante o prazo indicado. As
+          reservas de produtos esgotados ficam registadas à espera de reposição — a equipa
+          entra em contacto consigo.
         </p>
 
         {error && (
@@ -115,6 +116,12 @@ export default async function MyReservationsPage() {
                       ),
                     )}
                   </ul>
+
+                  {reserva.notes && (
+                    <p className="mb-3 rounded-lg border border-[#262626] bg-[#141414] px-3 py-2 text-xs leading-relaxed text-[#A3A3A3]">
+                      {reserva.notes}
+                    </p>
+                  )}
 
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#262626] pt-3 text-sm">
                     <span className="text-[#A3A3A3]">

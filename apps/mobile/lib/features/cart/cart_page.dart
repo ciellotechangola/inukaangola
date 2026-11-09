@@ -16,14 +16,38 @@ class CartPage extends StatefulWidget {
 class _CartPageState extends State<CartPage> {
   final _telefoneCtrl = TextEditingController();
   final _notasCtrl = TextEditingController();
+  final _enderecoCtrl = TextEditingController();
   bool _aEnviar = false;
   String? _erro;
   String? _referencia;
+
+  /// `pickup` = levantar na delegação (sem taxa); `delivery` = em casa.
+  String _metodo = 'pickup';
+
+  /// Taxa de entrega da província do cliente. `null` = ainda não se sabe
+  /// (sem rede, ou migração da taxa por aplicar) — nesse caso não se mostra
+  /// um número inventado.
+  double? _taxa;
 
   @override
   void initState() {
     super.initState();
     CartStore.instance.addListener(_redesenhar);
+    _carregarTaxa();
+  }
+
+  /// A regra é do servidor (`minha_taxa_entrega` → `taxa_entrega`): grátis no
+  /// Uíge, taxa nas outras províncias. A app não a repete.
+  Future<void> _carregarTaxa() async {
+    if (Supabase.instance.client.auth.currentUser == null) return;
+    try {
+      final resposta = await Supabase.instance.client.rpc('minha_taxa_entrega');
+      if (!mounted) return;
+      setState(() => _taxa = (resposta as num).toDouble());
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _taxa = null);
+    }
   }
 
   @override
@@ -31,6 +55,7 @@ class _CartPageState extends State<CartPage> {
     CartStore.instance.removeListener(_redesenhar);
     _telefoneCtrl.dispose();
     _notasCtrl.dispose();
+    _enderecoCtrl.dispose();
     super.dispose();
   }
 
@@ -41,6 +66,11 @@ class _CartPageState extends State<CartPage> {
   Future<void> _finalizar() async {
     final carrinho = CartStore.instance;
     if (carrinho.vazio) return;
+
+    if (_metodo == 'delivery' && _enderecoCtrl.text.trim().isEmpty) {
+      setState(() => _erro = 'Indique o endereço de entrega.');
+      return;
+    }
 
     setState(() {
       _aEnviar = true;
@@ -53,7 +83,9 @@ class _CartPageState extends State<CartPage> {
       // uma segunda.
       final resposta = await Supabase.instance.client.rpc('place_order', params: {
         'p_items': carrinho.payload,
-        'p_delivery_method': 'pickup',
+        'p_delivery_method': _metodo,
+        'p_delivery_address':
+            _metodo == 'delivery' ? _enderecoCtrl.text.trim() : null,
         'p_contact_phone': _telefoneCtrl.text.trim().isEmpty ? null : _telefoneCtrl.text.trim(),
         'p_notes': _notasCtrl.text.trim().isEmpty ? null : _notasCtrl.text.trim(),
         'p_client_ref': const Uuid().v4(),
@@ -168,6 +200,46 @@ class _CartPageState extends State<CartPage> {
                     ),
                   ),
                 const SizedBox(height: 8),
+                const Text('Como quer receber?',
+                    style: TextStyle(color: AppConfig.muted, fontSize: 12)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    ChoiceChip(
+                      label: const Text('Levantar na delegação'),
+                      selected: _metodo == 'pickup',
+                      onSelected: (_) => setState(() => _metodo = 'pickup'),
+                    ),
+                    ChoiceChip(
+                      label: const Text('Entrega em casa'),
+                      selected: _metodo == 'delivery',
+                      onSelected: (_) => setState(() => _metodo = 'delivery'),
+                    ),
+                  ],
+                ),
+                if (_metodo == 'delivery') ...[
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _enderecoCtrl,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'Endereço de entrega *',
+                      hintText: 'Bairro, rua, casa, ponto de referência',
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _taxa == null
+                        ? 'A taxa de entrega é confirmada pelo servidor ao finalizar.'
+                        : _taxa! <= 0
+                            ? 'Entrega gratuita na sua província.'
+                            : 'Entrega: ${_dinheiro(_taxa!)} (fora do Uíge).',
+                    style: const TextStyle(color: AppConfig.muted, fontSize: 11),
+                  ),
+                ],
+                const SizedBox(height: 12),
                 TextField(
                   controller: _telefoneCtrl,
                   keyboardType: TextInputType.phone,
@@ -183,10 +255,44 @@ class _CartPageState extends State<CartPage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Total', style: TextStyle(color: AppConfig.muted)),
+                    const Text('Produtos', style: TextStyle(color: AppConfig.muted)),
                     Text(_dinheiro(carrinho.total),
-                        style: const TextStyle(
-                            color: AppConfig.gold, fontSize: 18, fontWeight: FontWeight.w600)),
+                        style: const TextStyle(color: AppConfig.text)),
+                  ],
+                ),
+                if (_metodo == 'delivery') ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Entrega', style: TextStyle(color: AppConfig.muted)),
+                      Text(
+                        _taxa == null
+                            ? 'a confirmar'
+                            : _taxa! <= 0
+                                ? 'Grátis'
+                                : _dinheiro(_taxa!),
+                        style: TextStyle(
+                          color: _taxa == null ? AppConfig.muted : AppConfig.text,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 10),
+                  child: Divider(height: 1),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Total', style: TextStyle(color: AppConfig.muted)),
+                    Text(
+                      _dinheiro(carrinho.total +
+                          (_metodo == 'delivery' ? (_taxa ?? 0) : 0)),
+                      style: const TextStyle(
+                          color: AppConfig.gold, fontSize: 18, fontWeight: FontWeight.w600),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 4),

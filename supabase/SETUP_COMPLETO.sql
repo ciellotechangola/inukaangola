@@ -22,6 +22,11 @@
 --    PARTE 7  CONTEÚDOS PUBLICADOS E FORMAÇÃO
 --    PARTE 8  TAXA DE COMISSÃO, PEDIDOS E REVENDEDORES
 --    PARTE 9  RESERVA DE CLIENTES E COMPRAS DO CLIENTE
+--    PARTE 10  TAXA DE ENTREGA
+--    PARTE 11  CHAT: CLIENTE FALA COM A GESTÃO, GRUPOS SÓ DA EQUIPA
+--    PARTE 12  DISPONIBILIDADE VISÍVEL A QUEM NÃO TEM CONTA
+--    PARTE 13  PERFIS: VENDEDOR DE LOJA, ELIMINAÇÃO DE PRODUTOS E FEED
+--    PARTE 14  ELIMINAR PRODUTO COM O HISTÓRICO (MODO FORÇADO)
 --
 --  Gerado por supabase/build-setup.mjs — não editar à mão.
 --  A fonte são os ficheiros em supabase/migrations/.
@@ -29,7 +34,7 @@
 
 
 -- ###########################################################################
--- ##  PARTE 1 de 9 — ESQUEMA
+-- ##  PARTE 1 de 14 — ESQUEMA
 -- ###########################################################################
 
 -- =============================================================================
@@ -850,7 +855,7 @@ FOR EACH ROW EXECUTE FUNCTION public.prevent_role_escalation();
 
 
 -- ###########################################################################
--- ##  PARTE 2 de 9 — ROW LEVEL SECURITY
+-- ##  PARTE 2 de 14 — ROW LEVEL SECURITY
 -- ###########################################################################
 
 -- =============================================================================
@@ -1540,7 +1545,7 @@ END $$;
 
 
 -- ###########################################################################
--- ##  PARTE 3 de 9 — LÓGICA DE NEGÓCIO + REALTIME
+-- ##  PARTE 3 de 14 — LÓGICA DE NEGÓCIO + REALTIME
 -- ###########################################################################
 
 -- =============================================================================
@@ -2979,7 +2984,7 @@ REVOKE ALL ON FUNCTION public.promote_to_seller(text, text) FROM PUBLIC, anon, a
 
 
 -- ###########################################################################
--- ##  PARTE 4 de 9 — DESIGNER (ESTÚDIO DE DESIGN)
+-- ##  PARTE 4 de 14 — DESIGNER (ESTÚDIO DE DESIGN)
 -- ###########################################################################
 
 -- =============================================================================
@@ -3788,7 +3793,7 @@ CREATE TRIGGER design_projects_so_gestao
 
 
 -- ###########################################################################
--- ##  PARTE 5 de 9 — GESTÃO MULTIPROVINCIAL
+-- ##  PARTE 5 de 14 — GESTÃO MULTIPROVINCIAL
 -- ###########################################################################
 
 -- =============================================================================
@@ -5739,7 +5744,7 @@ END $$;
 
 
 -- ###########################################################################
--- ##  PARTE 6 de 9 — IDENTIDADE E GESTÃO DE COLABORADORES
+-- ##  PARTE 6 de 14 — IDENTIDADE E GESTÃO DE COLABORADORES
 -- ###########################################################################
 
 -- =============================================================================
@@ -7154,7 +7159,7 @@ END $$;
 
 
 -- ###########################################################################
--- ##  PARTE 7 de 9 — CONTEÚDOS PUBLICADOS E FORMAÇÃO
+-- ##  PARTE 7 de 14 — CONTEÚDOS PUBLICADOS E FORMAÇÃO
 -- ###########################################################################
 
 -- =============================================================================
@@ -8237,7 +8242,7 @@ ON CONFLICT (slug) DO NOTHING;
 
 
 -- ###########################################################################
--- ##  PARTE 8 de 9 — TAXA DE COMISSÃO, PEDIDOS E REVENDEDORES
+-- ##  PARTE 8 de 14 — TAXA DE COMISSÃO, PEDIDOS E REVENDEDORES
 -- ###########################################################################
 
 -- =============================================================================
@@ -8877,7 +8882,7 @@ END $$;
 
 
 -- ###########################################################################
--- ##  PARTE 9 de 9 — RESERVA DE CLIENTES E COMPRAS DO CLIENTE
+-- ##  PARTE 9 de 14 — RESERVA DE CLIENTES E COMPRAS DO CLIENTE
 -- ###########################################################################
 
 -- =============================================================================
@@ -9141,6 +9146,15 @@ BEGIN
     ON CONFLICT (seller_id, customer_id) DO UPDATE SET is_active = true;
     v_carteira := v_carteira + 1;
 
+    -- Quem se registou sem escolher província fica com a da reserva. É a mesma
+    -- regra que a carteira já impunha quando criava a conta: o cliente pertence
+    -- à delegação de quem o registou.
+    IF v_res.provincia_id IS NOT NULL THEN
+      UPDATE public.profiles p
+      SET provincia_id = v_res.provincia_id, updated_at = now()
+      WHERE p.id = p_customer_id AND p.provincia_id IS NULL;
+    END IF;
+
     UPDATE public.reserved_customers
     SET status = 'ligado', customer_id = p_customer_id, linked_at = now()
     WHERE id = v_res.id;
@@ -9236,3 +9250,2034 @@ REVOKE ALL ON FUNCTION public.minhas_compras(int) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.register_sale_by_phone(jsonb, text, text, public.payment_status, text, text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.ligar_reserva_ao_cliente(uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.minhas_compras(int) TO authenticated;
+
+
+-- ###########################################################################
+-- ##  PARTE 10 de 14 — TAXA DE ENTREGA
+-- ###########################################################################
+
+-- =============================================================================
+--  0010 — TAXA DE ENTREGA
+-- =============================================================================
+--  A entrega passa a ter preço: gratuita no Uíge, paga nas outras províncias.
+--
+--  O QUE MUDA
+--    1. `orders.delivery_fee` — quanto custou a entrega desta encomenda.
+--       `orders.total_amount` passa a ser produtos + entrega.
+--    2. `taxa_entrega(provincia)` — a regra, num sítio só. Lê a configuração
+--       que a gerência grava em `platform_settings` (chave `entrega`).
+--    3. `place_order` grava a taxa. O cliente não a envia: se viesse do
+--       browser, bastava editá-la para viajar de graça.
+--    4. `recalc_order_total` soma a taxa. Sem isto o gatilho que recalcula o
+--       total a partir das linhas voltava a apagá-la a cada item inserido.
+--
+--  CONFIGURAÇÃO (opcional — o padrão já é «grátis no Uíge, 2 000 Kz fora»)
+--
+--    INSERT INTO public.platform_settings (key, value) VALUES ('entrega',
+--      '{"taxaPadrao": 2000, "gratis": ["uige"], "nota": null}'::jsonb)
+--    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+--
+--  Idempotente. Pode correr mais do que uma vez.
+-- =============================================================================
+
+-- ----------------------------------------------------------------- 1. COLUNA
+ALTER TABLE public.orders
+  ADD COLUMN IF NOT EXISTS delivery_fee numeric(12,2) NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'orders_delivery_fee_positive'
+      AND conrelid = 'public.orders'::regclass
+  ) THEN
+    ALTER TABLE public.orders
+      ADD CONSTRAINT orders_delivery_fee_positive CHECK (delivery_fee >= 0);
+  END IF;
+END $$;
+
+COMMENT ON COLUMN public.orders.delivery_fee IS
+  'Taxa de entrega cobrada nesta encomenda. 0 = entrega gratuita. Já incluída em total_amount.';
+
+-- ------------------------------------------------------- 2. TOTAL COM TAXA
+-- O gatilho das linhas mandava no total: recalculava-o só a partir de
+-- `order_items` e, a cada item inserido, apagava a taxa. Passa a somá-la.
+CREATE OR REPLACE FUNCTION public.recalc_order_total()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_order_id uuid := COALESCE(NEW.order_id, OLD.order_id);
+BEGIN
+  UPDATE public.orders o
+  SET total_amount = (
+        SELECT COALESCE(SUM(oi.total_price), 0)
+        FROM public.order_items oi
+        WHERE oi.order_id = v_order_id
+      ) + COALESCE(o.delivery_fee, 0),
+      updated_at = now()
+  WHERE o.id = v_order_id;
+  RETURN NULL;
+END;
+$$;
+
+-- ---------------------------------------------------------- 3. A REGRA
+-- Espelho exacto de `apps/web/src/lib/entrega.ts`. Se uma mudar, a outra
+-- muda com ela — esta é a que manda, porque é a que grava.
+CREATE OR REPLACE FUNCTION public.taxa_entrega(p_provincia uuid DEFAULT NULL)
+RETURNS numeric
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_def  jsonb;
+  v_slug text;
+  v_taxa numeric := 2000;   -- mesmo valor de ENTREGA_PADRAO no TypeScript
+BEGIN
+  SELECT value INTO v_def FROM public.platform_settings WHERE key = 'entrega';
+
+  -- Sem configuração gravada: aplica-se o padrão (Uíge grátis, resto paga).
+  IF v_def IS NULL OR jsonb_typeof(v_def) <> 'object' THEN
+    v_def := '{"taxaPadrao": 2000, "gratis": ["uige"]}'::jsonb;
+  END IF;
+
+  IF p_provincia IS NOT NULL THEN
+    SELECT pr.slug INTO v_slug FROM public.provincias pr WHERE pr.id = p_provincia;
+  END IF;
+
+  -- Província isenta (por omissão, o Uíge).
+  IF v_slug IS NOT NULL
+     AND jsonb_typeof(COALESCE(v_def->'gratis', '[]'::jsonb)) = 'array'
+     AND (COALESCE(v_def->'gratis', '[]'::jsonb) @> to_jsonb(v_slug)) THEN
+    RETURN 0;
+  END IF;
+
+  IF jsonb_typeof(v_def->'taxaPadrao') = 'number' THEN
+    v_taxa := (v_def->>'taxaPadrao')::numeric;
+  END IF;
+
+  RETURN GREATEST(COALESCE(v_taxa, 0), 0);
+END;
+$$;
+
+-- ------------------------------------------------ 4. ENCOMENDA COM TAXA
+CREATE OR REPLACE FUNCTION public.place_order(
+  p_items            jsonb,
+  p_delivery_method  text DEFAULT 'pickup',
+  p_delivery_address text DEFAULT NULL,
+  p_contact_phone    text DEFAULT NULL,
+  p_notes            text DEFAULT NULL,
+  p_client_ref       text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_uid      uuid := auth.uid();
+  v_order_id uuid;
+  v_ref      text;
+  v_item     jsonb;
+  v_prod     record;
+  v_inv      record;
+  v_prov     uuid;
+  v_qty      int;
+  v_price    numeric(12,2);
+  v_total    numeric(12,2) := 0;
+  v_taxa     numeric(12,2) := 0;
+  v_existing public.orders;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'É necessário iniciar sessão' USING ERRCODE = '28000';
+  END IF;
+
+  IF NOT public.is_customer() THEN
+    RAISE EXCEPTION 'Apenas clientes podem criar encomendas' USING ERRCODE = '42501';
+  END IF;
+
+  IF p_items IS NULL OR jsonb_typeof(p_items) <> 'array' OR jsonb_array_length(p_items) = 0 THEN
+    RAISE EXCEPTION 'O carrinho está vazio';
+  END IF;
+
+  IF p_delivery_method NOT IN ('pickup', 'delivery') THEN
+    RAISE EXCEPTION 'Modalidade de entrega inválida';
+  END IF;
+
+  IF p_delivery_method = 'delivery' AND COALESCE(btrim(p_delivery_address), '') = '' THEN
+    RAISE EXCEPTION 'Indique o endereço de entrega';
+  END IF;
+
+  IF p_client_ref IS NOT NULL THEN
+    SELECT * INTO v_existing
+    FROM public.orders o
+    WHERE o.customer_id = v_uid AND o.client_ref = p_client_ref;
+
+    IF FOUND THEN
+      RETURN jsonb_build_object(
+        'order_id', v_existing.id,
+        'reference', v_existing.reference,
+        'total', v_existing.total_amount,
+        'delivery_fee', v_existing.delivery_fee,
+        'duplicated', true
+      );
+    END IF;
+  END IF;
+
+  v_ref := public.generate_order_reference();
+  -- A província da encomenda vem do perfil do cliente (nunca do cliente HTTP).
+  v_prov := public.my_province();
+
+  -- Levantamento na delegação não paga entrega. Só a entrega ao domicílio
+  -- paga — e só fora das províncias isentas.
+  IF p_delivery_method = 'delivery' THEN
+    v_taxa := public.taxa_entrega(v_prov);
+  END IF;
+
+  INSERT INTO public.orders (
+    reference, client_ref, customer_id, status, delivery_method,
+    delivery_address, contact_phone, notes, payment_status, provincia_id,
+    delivery_fee
+  )
+  VALUES (
+    v_ref, p_client_ref, v_uid, 'pending', p_delivery_method,
+    NULLIF(btrim(p_delivery_address), ''), NULLIF(btrim(p_contact_phone), ''),
+    NULLIF(btrim(p_notes), ''), 'pending', v_prov,
+    v_taxa
+  )
+  RETURNING id INTO v_order_id;
+
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items)
+  LOOP
+    v_qty := COALESCE((v_item->>'quantity')::int, 0);
+    IF v_qty <= 0 THEN
+      RAISE EXCEPTION 'Quantidade inválida';
+    END IF;
+
+    SELECT p.id, p.name, p.official_price, p.promotional_price, p.is_active, p.provincia_id
+      INTO v_prod
+    FROM public.products p
+    WHERE p.id = (v_item->>'product_id')::uuid;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Produto inexistente';
+    END IF;
+
+    IF NOT v_prod.is_active THEN
+      RAISE EXCEPTION 'Produto indisponível: %', v_prod.name;
+    END IF;
+
+    -- Produto provincial só se vende na sua província
+    IF v_prod.provincia_id IS NOT NULL AND v_prod.provincia_id IS DISTINCT FROM v_prov THEN
+      RAISE EXCEPTION 'O produto % não está disponível na sua província', v_prod.name
+        USING ERRCODE = '42501';
+    END IF;
+
+    v_price := COALESCE(v_prod.promotional_price, v_prod.official_price);
+
+    -- Linha de stock: a da província do cliente; se não existir, a da sede.
+    SELECT i.id, i.quantity, i.reserved_quantity INTO v_inv
+    FROM public.inventory i
+    WHERE i.product_id = v_prod.id
+      AND i.provincia_id IS NOT DISTINCT FROM v_prov
+    LIMIT 1;
+
+    IF NOT FOUND AND v_prov IS NOT NULL THEN
+      SELECT i.id, i.quantity, i.reserved_quantity INTO v_inv
+      FROM public.inventory i
+      WHERE i.product_id = v_prod.id AND i.provincia_id IS NULL
+      LIMIT 1;
+    END IF;
+
+    -- Última tentativa: o armazém-sede.
+    IF v_inv.id IS NULL THEN
+      SELECT i.id, i.quantity, i.reserved_quantity INTO v_inv
+      FROM public.inventory i
+      JOIN public.provincias pr ON pr.id = i.provincia_id
+      WHERE i.product_id = v_prod.id AND pr.is_default
+      ORDER BY i.updated_at DESC
+      LIMIT 1;
+    END IF;
+
+    IF v_inv.id IS NOT NULL THEN
+      UPDATE public.inventory i
+      SET reserved_quantity = i.reserved_quantity + v_qty,
+          updated_at = now()
+      WHERE i.id = v_inv.id
+        AND (i.quantity - i.reserved_quantity) >= v_qty;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'Stock insuficiente para %', v_prod.name;
+      END IF;
+    END IF;
+
+    INSERT INTO public.order_items (order_id, product_id, quantity, unit_price, total_price)
+    VALUES (v_order_id, v_prod.id, v_qty, v_price, v_price * v_qty);
+  END LOOP;
+
+  -- `recalc_order_total` já correu a cada linha e somou a taxa; este SELECT
+  -- só serve para devolver ao cliente o mesmo número que ficou gravado.
+  SELECT COALESCE(o.total_amount, 0) INTO v_total
+  FROM public.orders o WHERE o.id = v_order_id;
+
+  INSERT INTO public.order_status_history (order_id, status, previous_status, changed_by, notes)
+  VALUES (v_order_id, 'pending', NULL, v_uid, 'Encomenda criada');
+
+  RETURN jsonb_build_object(
+    'order_id', v_order_id,
+    'reference', v_ref,
+    'total', v_total,
+    'delivery_fee', v_taxa,
+    'duplicated', false
+  );
+END;
+$$;
+
+-- ------------------------------------------- 5. A TAXA DE QUEM ESTÁ A VER
+-- A app do telemóvel não sabe qual é a província do cliente (vem do perfil,
+-- no servidor). Esta função devolve a taxa que lhe toca — 0 no Uíge — para o
+-- carrinho poder mostrar o total certo antes de encomendar. É a mesma regra
+-- de `taxa_entrega`, não uma segunda cópia.
+CREATE OR REPLACE FUNCTION public.minha_taxa_entrega()
+RETURNS numeric
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+  SELECT public.taxa_entrega(public.my_province());
+$$;
+
+-- --------------------------------------------------------------- 6. ACESSOS
+GRANT EXECUTE ON FUNCTION public.taxa_entrega(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.minha_taxa_entrega() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.place_order(jsonb, text, text, text, text, text) TO authenticated;
+
+
+-- ###########################################################################
+-- ##  PARTE 11 de 14 — CHAT: CLIENTE FALA COM A GESTÃO, GRUPOS SÓ DA EQUIPA
+-- ###########################################################################
+
+-- =============================================================================
+--  0011 — CHAT: O CLIENTE FALA EM PRIVADO COM A GESTÃO
+-- =============================================================================
+--  O QUE ESTAVA MAL
+--    «Falar com a equipa» abria um grupo de três: cliente + colaborador +
+--    gestor. O cliente via-se numa sala com duas pessoas da empresa, sem
+--    saber quem respondia, e o colaborador ficava a par de tudo.
+--
+--  O QUE PASSA A ACONTECER
+--    1. `abrir_conversa_equipa()` devolve uma conversa **directa** entre o
+--       cliente e o gestor. Reutiliza a que já existir — nunca cria uma
+--       segunda em cada clique.
+--    2. **Grupos são só da empresa.** Um grupo aceita apenas colaboradores e
+--       gestores activos; um cliente não entra, nem por convite. Quem cria e
+--       quem mexe nos membros é a gestão:
+--         · `criar_grupo_equipa(nome, membros)`
+--         · `adicionar_membro_grupo(conversa, pessoa)`
+--         · `remover_membro_grupo(conversa, pessoa)`
+--    3. O gatilho `trg_conversation_members_so_equipa` fecha a porta a
+--       qualquer outro caminho (INSERT directo, RPC futura, correcção à mão).
+--    4. As conversas antigas «Equipa INUKA» (grupos com um cliente dentro)
+--       são **convertidas em conversas directas** com o gestor, mantendo as
+--       mensagens — ninguém perde o histórico.
+--
+--  Idempotente. Pode correr mais do que uma vez.
+-- =============================================================================
+
+-- ------------------------------------------------------- 1. QUEM É «EQUIPA»
+-- Colaborador ou gestor, com a conta activa. É a única definição usada em
+-- todos os sítios abaixo; se um dia houver mais papéis internos, muda-se aqui.
+CREATE OR REPLACE FUNCTION public.e_membro_equipa(p_user uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles p
+    WHERE p.id = p_user
+      AND p.is_active
+      AND p.role IN ('seller'::public.user_role, 'manager'::public.user_role)
+  );
+$$;
+
+-- ------------------------------------- 2. CLIENTE ↔ GESTOR (EM PRIVADO)
+-- O nome da função fica: é chamada em três sítios do site e mudá-lo obrigaria
+-- a mexer em todos. O que muda é o que ela devolve.
+CREATE OR REPLACE FUNCTION public.abrir_conversa_equipa()
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_me        uuid := auth.uid();
+  v_role      public.user_role;
+  v_provincia uuid;
+  v_gestor    uuid;
+  v_conv      uuid;
+BEGIN
+  IF v_me IS NULL THEN
+    RAISE EXCEPTION 'Sessão necessária' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT p.role, p.provincia_id INTO v_role, v_provincia
+  FROM public.profiles p WHERE p.id = v_me;
+
+  IF v_role = 'manager'::public.user_role THEN
+    RAISE EXCEPTION 'A gestão usa «Nova conversa» para falar com alguém'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- Gestor da mesma província; senão o mais antigo ainda activo.
+  SELECT p.id INTO v_gestor
+  FROM public.profiles p
+  WHERE p.role = 'manager'::public.user_role AND p.is_active
+  ORDER BY (p.provincia_id IS NOT DISTINCT FROM v_provincia) DESC, p.created_at
+  LIMIT 1;
+
+  IF v_gestor IS NULL THEN
+    RAISE EXCEPTION 'Ainda não há gestão disponível para responder. Tente mais tarde.';
+  END IF;
+
+  -- Uma conversa directa por par: reutiliza-se em vez de criar outra.
+  SELECT c.id INTO v_conv
+  FROM public.conversations c
+  WHERE c.type = 'direct'
+    AND (SELECT count(*) FROM public.conversation_members m WHERE m.conversation_id = c.id) = 2
+    AND EXISTS (SELECT 1 FROM public.conversation_members m
+                WHERE m.conversation_id = c.id AND m.user_id = v_me)
+    AND EXISTS (SELECT 1 FROM public.conversation_members m
+                WHERE m.conversation_id = c.id AND m.user_id = v_gestor)
+  LIMIT 1;
+
+  IF v_conv IS NULL THEN
+    INSERT INTO public.conversations (type, created_by)
+    VALUES ('direct', v_me)
+    RETURNING id INTO v_conv;
+
+    INSERT INTO public.conversation_members (conversation_id, user_id)
+    VALUES (v_conv, v_me), (v_conv, v_gestor);
+  END IF;
+
+  RETURN v_conv;
+END;
+$$;
+
+-- ------------------------------------------------------- 3. GRUPOS DA EQUIPA
+CREATE OR REPLACE FUNCTION public.criar_grupo_equipa(
+  p_nome    text,
+  p_membros uuid[] DEFAULT '{}'::uuid[]
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_me     uuid := auth.uid();
+  v_nome   text := btrim(COALESCE(p_nome, ''));
+  v_conv   uuid;
+  v_membro uuid;
+BEGIN
+  IF v_me IS NULL THEN
+    RAISE EXCEPTION 'Sessão necessária' USING ERRCODE = '42501';
+  END IF;
+
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Só a gestão cria grupos' USING ERRCODE = '42501';
+  END IF;
+
+  IF v_nome = '' THEN
+    RAISE EXCEPTION 'Dê um nome ao grupo';
+  END IF;
+
+  INSERT INTO public.conversations (type, title, created_by)
+  VALUES ('group', v_nome, v_me)
+  RETURNING id INTO v_conv;
+
+  INSERT INTO public.conversation_members (conversation_id, user_id, role)
+  VALUES (v_conv, v_me, 'admin');
+
+  FOREACH v_membro IN ARRAY COALESCE(p_membros, '{}'::uuid[])
+  LOOP
+    CONTINUE WHEN v_membro = v_me;
+
+    IF NOT public.e_membro_equipa(v_membro) THEN
+      RAISE EXCEPTION 'Grupos são só para membros da empresa. O cliente fala em privado com a gestão.'
+        USING ERRCODE = '42501';
+    END IF;
+
+    INSERT INTO public.conversation_members (conversation_id, user_id, role)
+    VALUES (v_conv, v_membro, 'member')
+    ON CONFLICT (conversation_id, user_id) DO NOTHING;
+  END LOOP;
+
+  INSERT INTO public.groups (conversation_id, name, created_by, is_private)
+  VALUES (v_conv, v_nome, v_me, true);
+
+  RETURN v_conv;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.adicionar_membro_grupo(
+  p_conversation_id uuid,
+  p_user_id         uuid
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_tipo text;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Só a gestão acrescenta membros' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT c.type INTO v_tipo FROM public.conversations c WHERE c.id = p_conversation_id;
+  IF v_tipo IS DISTINCT FROM 'group' THEN
+    RAISE EXCEPTION 'Esta conversa não é um grupo' USING ERRCODE = '42501';
+  END IF;
+
+  IF NOT public.e_membro_equipa(p_user_id) THEN
+    RAISE EXCEPTION 'Grupos são só para membros da empresa. O cliente fala em privado com a gestão.'
+      USING ERRCODE = '42501';
+  END IF;
+
+  INSERT INTO public.conversation_members (conversation_id, user_id, role)
+  VALUES (p_conversation_id, p_user_id, 'member')
+  ON CONFLICT (conversation_id, user_id) DO NOTHING;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.remover_membro_grupo(
+  p_conversation_id uuid,
+  p_user_id         uuid
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_tipo text;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Só a gestão remove membros' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT c.type INTO v_tipo FROM public.conversations c WHERE c.id = p_conversation_id;
+  IF v_tipo IS DISTINCT FROM 'group' THEN
+    RAISE EXCEPTION 'Esta conversa não é um grupo' USING ERRCODE = '42501';
+  END IF;
+
+  DELETE FROM public.conversation_members cm
+  WHERE cm.conversation_id = p_conversation_id AND cm.user_id = p_user_id;
+END;
+$$;
+
+-- --------------------------------------------- 4. O GATILHO QUE FECHA A PORTA
+-- A regra vive aqui e não só nas funções: qualquer INSERT (interface, script,
+-- correcção manual) passa por este gatilho. `SECURITY DEFINER` para poder ler
+-- `profiles` mesmo quando quem escreve é o próprio cliente.
+CREATE OR REPLACE FUNCTION public.validar_membro_de_grupo()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_tipo text;
+BEGIN
+  SELECT c.type INTO v_tipo FROM public.conversations c WHERE c.id = NEW.conversation_id;
+  IF v_tipo IS DISTINCT FROM 'group' THEN
+    RETURN NEW;
+  END IF;
+
+  IF NOT public.e_membro_equipa(NEW.user_id) THEN
+    RAISE EXCEPTION 'Grupos são só para membros da empresa. O cliente fala em privado com a gestão.'
+      USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_conversation_members_so_equipa ON public.conversation_members;
+CREATE TRIGGER trg_conversation_members_so_equipa
+BEFORE INSERT OR UPDATE OF user_id ON public.conversation_members
+FOR EACH ROW EXECUTE FUNCTION public.validar_membro_de_grupo();
+
+-- --------------------------------------------------------------- 5. ACESSOS
+-- Quem cria conversas é a gestão. As conversas directas nascem dentro de
+-- funções `SECURITY DEFINER`, que não passam por estas políticas.
+DROP POLICY IF EXISTS conversations_insert ON public.conversations;
+CREATE POLICY conversations_insert ON public.conversations
+  FOR INSERT TO authenticated
+  WITH CHECK (public.is_manager() AND conversations.created_by = auth.uid());
+
+-- Só a gestão acrescenta participantes. Antes, qualquer membro podia meter
+-- quem quisesse dentro de uma conversa — foi por aí que o cliente acabou num
+-- grupo de três.
+DROP POLICY IF EXISTS conversation_members_insert ON public.conversation_members;
+CREATE POLICY conversation_members_insert ON public.conversation_members
+  FOR INSERT TO authenticated
+  WITH CHECK (public.is_manager());
+
+-- ------------------------------- 6. CONVERSAS ANTIGAS: GRUPO → PRIVADO
+-- Um grupo criado por um cliente passa a conversa directa com o gestor que
+-- já lá estava. As mensagens ficam: muda o `type`, saem os restantes membros.
+DO $$
+DECLARE
+  r         record;
+  v_cliente uuid;
+  v_gestor  uuid;
+BEGIN
+  FOR r IN
+    SELECT c.id, c.created_by
+    FROM public.conversations c
+    JOIN public.profiles p ON p.id = c.created_by
+    WHERE c.type = 'group' AND p.role = 'customer'::public.user_role
+  LOOP
+    v_cliente := r.created_by;
+
+    SELECT m.user_id INTO v_gestor
+    FROM public.conversation_members m
+    JOIN public.profiles p ON p.id = m.user_id
+    WHERE m.conversation_id = r.id AND p.role = 'manager'::public.user_role
+    LIMIT 1;
+
+    IF v_gestor IS NULL THEN
+      SELECT p.id INTO v_gestor
+      FROM public.profiles p
+      WHERE p.role = 'manager'::public.user_role AND p.is_active
+      ORDER BY p.created_at
+      LIMIT 1;
+    END IF;
+
+    -- Sem gestor não há para onde converter: deixa-se como está e a gestão
+    -- resolve à mão.
+    CONTINUE WHEN v_gestor IS NULL;
+
+    DELETE FROM public.conversation_members m
+    WHERE m.conversation_id = r.id
+      AND m.user_id NOT IN (v_cliente, v_gestor);
+
+    -- Primeiro deixa de ser grupo; só depois volta a entrar o cliente. Ao
+    -- contrário, o gatilho da secção 4 recusava-o — e com razão.
+    UPDATE public.conversations
+    SET type = 'direct', title = NULL
+    WHERE id = r.id;
+
+    INSERT INTO public.conversation_members (conversation_id, user_id, role)
+    VALUES (r.id, v_cliente, 'member'), (r.id, v_gestor, 'admin')
+    ON CONFLICT (conversation_id, user_id) DO NOTHING;
+
+    DELETE FROM public.groups g WHERE g.conversation_id = r.id;
+  END LOOP;
+END $$;
+
+-- ------------------------------------------------------------ 7. PERMISSÕES
+GRANT EXECUTE ON FUNCTION public.e_membro_equipa(uuid)                   TO authenticated;
+GRANT EXECUTE ON FUNCTION public.abrir_conversa_equipa()                 TO authenticated;
+GRANT EXECUTE ON FUNCTION public.criar_grupo_equipa(text, uuid[])        TO authenticated;
+GRANT EXECUTE ON FUNCTION public.adicionar_membro_grupo(uuid, uuid)      TO authenticated;
+GRANT EXECUTE ON FUNCTION public.remover_membro_grupo(uuid, uuid)        TO authenticated;
+
+
+-- ###########################################################################
+-- ##  PARTE 12 de 14 — DISPONIBILIDADE VISÍVEL A QUEM NÃO TEM CONTA
+-- ###########################################################################
+
+-- =============================================================================
+--  0012 — DISPONIBILIDADE VISÍVEL A QUEM NÃO TEM CONTA
+-- =============================================================================
+--  O QUE ESTAVA MAL
+--    `inventory` só é legível por contas autenticadas (é a política certa: o
+--    stock é informação da empresa). Mas a loja usava exactamente essa leitura
+--    para decidir se mostrava «Esgotado». Resultado: um visitante — a maioria
+--    de quem entra no catálogo — nunca via o produto esgotado e, na página do
+--    produto, ficava sem o formulário de reserva. O aviso de rutura só existia
+--    para quem já tinha sessão.
+--
+--  O QUE PASSA A ACONTECER
+--    `stock_produtos(uuid[])` devolve, por produto, as unidades disponíveis
+--    (quantidade menos reservado), em bloco e numa só chamada:
+--      · número  → há inventário registado; é este o valor a mostrar;
+--      · NULL    → não há linha de inventário (produto sem controlo de stock),
+--                  que é diferente de zero — zero quer dizer esgotado.
+--    `SECURITY DEFINER` para poder ler `inventory` mesmo sem sessão; expõe
+--    apenas o número por produto, nunca o resto da tabela.
+--
+--  Idempotente. Pode correr mais do que uma vez.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION public.stock_produtos(p_ids uuid[])
+RETURNS TABLE (product_id uuid, disponivel int)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  -- `LEFT JOIN` para os produtos sem inventário aparecerem com NULL em vez
+  -- de desaparecerem da resposta (o chamador distingue «sem controlo» de
+  -- «esgotado»).
+  SELECT t.pid AS product_id,
+         CASE
+           WHEN i.product_id IS NULL THEN NULL
+           ELSE GREATEST(0, i.quantity - i.reserved_quantity)
+         END AS disponivel
+  FROM unnest(COALESCE(p_ids, '{}'::uuid[])) AS t(pid)
+  LEFT JOIN public.inventory i ON i.product_id = t.pid;
+$$;
+
+-- ------------------------------------------------------------ PERMISSÕES
+-- A loja pública é servida a `anon`; sem este GRANT o catálogo continuaria
+-- cego para visitantes.
+GRANT EXECUTE ON FUNCTION public.stock_produtos(uuid[]) TO anon, authenticated;
+
+
+-- ###########################################################################
+-- ##  PARTE 13 de 14 — PERFIS: VENDEDOR DE LOJA, ELIMINAÇÃO DE PRODUTOS E FEED
+-- ###########################################################################
+
+-- =============================================================================
+--  INUKA ANGOLA — PERFIS, VENDEDOR DE LOJA, ELIMINAÇÃO DE PRODUTOS E FEED
+-- =============================================================================
+--  Esta migração fecha a separação de perfis. Cada um passa a ter exactamente
+--  as competências que lhe pertencem:
+--
+--    manager       — tudo: catálogo, stock, encomendas, clientes, colaboradores,
+--                    conteúdos, formação, relatórios, definições e designer.
+--    seller        — colaborador/revendedor: carteira de clientes, vendas com
+--                    comissão, formação e comunicados. NÃO mexe em stock.
+--    store_seller  — vendedor de loja (novo): stock da sua província, vendas ao
+--                    balcão e encomendas para preparar/entregar. Sem carteira
+--                    de clientes e sem comissões.
+--    customer      — compra, reserva, favoritos, feed de notícias e conversa
+--                    privada com a gestão.
+--
+--  Também aqui:
+--    • um produto pode ser eliminado mesmo tendo histórico. As referências em
+--      encomendas, vendas, reservas e pedidos de desconto passam a ficar sem
+--      produto (ON DELETE SET NULL) mas guardam nome/preço — o histórico não
+--      se perde. A interface avisa antes de confirmar.
+--    • o feed de notícias do cliente passa a mostrar também os comunicados da
+--      gestão (antes eram só para colaboradores).
+--
+--  Idempotente: pode ser executado mais do que uma vez.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- 1. O PAPEL NOVO
+-- -----------------------------------------------------------------------------
+-- `ADD VALUE` não pode ser usado como valor de enum na MESMA transacção em que
+-- é criado. Por isso todas as verificações abaixo comparam `::text` — funcionam
+-- na hora e depois de a transacção fechar.
+ALTER TYPE public.user_role ADD VALUE IF NOT EXISTS 'store_seller';
+
+-- -----------------------------------------------------------------------------
+-- 2. COMPETÊNCIAS
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.is_store_seller()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+  SELECT public.current_user_role()::text = 'store_seller';
+$$;
+
+/** Quem trabalha na empresa: colaborador, vendedor de loja ou gestão. */
+CREATE OR REPLACE FUNCTION public.is_staff()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+  SELECT public.current_user_role()::text IN ('seller', 'store_seller', 'manager');
+$$;
+
+/** Stock é da loja: vendedor de loja e gestão. O colaborador de vendas não. */
+CREATE OR REPLACE FUNCTION public.can_manage_stock()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+  SELECT public.current_user_role()::text IN ('store_seller', 'manager');
+$$;
+
+/** Vendas ao balcão: as mesmas pessoas que mexem no stock. */
+CREATE OR REPLACE FUNCTION public.can_sell_at_store()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+  SELECT public.current_user_role()::text IN ('store_seller', 'manager');
+$$;
+
+GRANT EXECUTE ON FUNCTION public.is_store_seller()   TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_staff()          TO authenticated;
+GRANT EXECUTE ON FUNCTION public.can_manage_stock()  TO authenticated;
+GRANT EXECUTE ON FUNCTION public.can_sell_at_store() TO authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 3. POLÍTICAS POR PERFIL
+-- -----------------------------------------------------------------------------
+
+-- 3.1 Catálogo: o vendedor de loja precisa de ver também os produtos desactivados
+--     (para conferir stock antes de os reactivar).
+DROP POLICY IF EXISTS products_public_read ON public.products;
+CREATE POLICY products_public_read ON public.products
+  FOR SELECT TO anon, authenticated
+  USING (
+    -- A administração nacional vê tudo, incluindo inactivos.
+    public.is_national()
+    OR (
+      (
+        products.is_active = true
+        OR public.is_manager()
+        OR public.is_seller()
+        OR public.is_store_seller()
+      )
+      AND (
+        auth.uid() IS NULL                      -- visitante: montra pública
+        OR products.provincia_id IS NULL        -- produto nacional
+        OR products.provincia_id = public.my_province()
+      )
+    )
+  );
+
+DROP POLICY IF EXISTS product_images_public_read ON public.product_images;
+CREATE POLICY product_images_public_read ON public.product_images
+  FOR SELECT TO anon, authenticated
+  USING (
+    public.is_manager()
+    OR public.is_seller()
+    OR public.is_store_seller()
+    OR EXISTS (
+      SELECT 1 FROM public.products p
+      WHERE p.id = product_images.product_id AND p.is_active = true
+    )
+  );
+
+-- 3.2 Stock: escrita passa a ser da loja (antes era só gestão).
+DROP POLICY IF EXISTS inventory_manager_write ON public.inventory;
+CREATE POLICY inventory_manager_write ON public.inventory
+  FOR ALL TO authenticated
+  USING (public.can_manage_stock())
+  WITH CHECK (public.can_manage_stock());
+
+DROP POLICY IF EXISTS inventory_movements_read ON public.inventory_movements;
+CREATE POLICY inventory_movements_read ON public.inventory_movements
+  FOR SELECT TO authenticated
+  USING (public.can_manage_stock() OR public.is_seller());
+
+DROP POLICY IF EXISTS inventory_movements_manager_write ON public.inventory_movements;
+CREATE POLICY inventory_movements_manager_write ON public.inventory_movements
+  FOR ALL TO authenticated
+  USING (public.can_manage_stock())
+  WITH CHECK (public.can_manage_stock());
+
+-- 3.3 Encomendas: a loja vê o que tem de preparar e entregar.
+DROP POLICY IF EXISTS orders_select ON public.orders;
+CREATE POLICY orders_select ON public.orders
+  FOR SELECT TO authenticated
+  USING (
+    orders.customer_id = auth.uid()
+    OR orders.seller_id = auth.uid()
+    OR public.is_manager()
+    OR public.is_store_seller()
+    OR (public.is_seller() AND public.is_my_customer(orders.customer_id))
+  );
+
+DROP POLICY IF EXISTS orders_update_manager_seller ON public.orders;
+CREATE POLICY orders_update_manager_seller ON public.orders
+  FOR UPDATE TO authenticated
+  USING (
+    public.is_manager()
+    OR public.is_store_seller()
+    OR orders.seller_id = auth.uid()
+    OR (orders.customer_id = auth.uid() AND orders.status = 'pending')
+  )
+  WITH CHECK (
+    public.is_manager()
+    OR public.is_store_seller()
+    OR orders.seller_id = auth.uid()
+    OR orders.customer_id = auth.uid()
+  );
+
+-- 3.4 Reservas: a loja tem de as ver para não vender stock reservado.
+DROP POLICY IF EXISTS reservations_select ON public.reservations;
+CREATE POLICY reservations_select ON public.reservations
+  FOR SELECT TO authenticated
+  USING (
+    reservations.customer_id = auth.uid()
+    OR reservations.seller_id = auth.uid()
+    OR public.is_manager()
+    OR public.is_store_seller()
+    OR (public.is_seller() AND public.is_my_customer(reservations.customer_id))
+  );
+
+DROP POLICY IF EXISTS reservation_items_select ON public.reservation_items;
+CREATE POLICY reservation_items_select ON public.reservation_items
+  FOR SELECT TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.reservations r
+      WHERE r.id = reservation_items.reservation_id
+        AND (
+          r.customer_id = auth.uid()
+          OR r.seller_id = auth.uid()
+          OR public.is_manager()
+          OR public.is_store_seller()
+        )
+    )
+  );
+
+-- -----------------------------------------------------------------------------
+-- 4. AJUSTE DE STOCK (loja e gestão)
+-- -----------------------------------------------------------------------------
+-- Mantém a assinatura da 0005 (com província) para não quebrar chamadas.
+CREATE OR REPLACE FUNCTION public.set_product_stock(
+  p_product_id   uuid,
+  p_quantity     int,
+  p_reason       text DEFAULT NULL,
+  p_provincia_id uuid DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_prov uuid := COALESCE(p_provincia_id, public.my_province());
+  v_prev int := 0;
+  v_nome text;
+BEGIN
+  IF NOT public.can_manage_stock() THEN
+    RAISE EXCEPTION 'Apenas a loja e a gerência podem alterar stock'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- O vendedor de loja só mexe na província dele. A gestão segue a regra
+  -- provincial que já existia (um gestor provincial não mexe fora da sua).
+  IF public.is_manager() THEN
+    IF NOT public.can_manage_province(v_prov) THEN
+      RAISE EXCEPTION 'Só pode alterar stock da sua província' USING ERRCODE = '42501';
+    END IF;
+  ELSIF v_prov IS DISTINCT FROM public.my_province() THEN
+    RAISE EXCEPTION 'Só pode alterar stock da sua província' USING ERRCODE = '42501';
+  END IF;
+
+  IF p_quantity < 0 THEN
+    RAISE EXCEPTION 'A quantidade não pode ser negativa';
+  END IF;
+
+  SELECT name INTO v_nome FROM public.products WHERE id = p_product_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Produto inexistente';
+  END IF;
+
+  SELECT COALESCE(i.quantity, 0) INTO v_prev
+  FROM public.inventory i
+  WHERE i.product_id = p_product_id
+    AND i.provincia_id IS NOT DISTINCT FROM v_prov;
+
+  v_prev := COALESCE(v_prev, 0);
+
+  IF v_prov IS NULL THEN
+    INSERT INTO public.inventory (product_id, provincia_id, quantity)
+    VALUES (p_product_id, NULL, p_quantity)
+    ON CONFLICT (product_id) WHERE provincia_id IS NULL
+    DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = now();
+  ELSE
+    INSERT INTO public.inventory (product_id, provincia_id, quantity)
+    VALUES (p_product_id, v_prov, p_quantity)
+    ON CONFLICT (product_id, provincia_id) WHERE provincia_id IS NOT NULL
+    DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = now();
+  END IF;
+
+  INSERT INTO public.inventory_movements (
+    product_id, provincia_id, type, quantity, previous_quantity, new_quantity, notes, created_by
+  )
+  VALUES (
+    p_product_id, v_prov, 'adjustment', p_quantity - v_prev, v_prev, p_quantity,
+    COALESCE(NULLIF(btrim(p_reason), ''), 'Ajuste manual de stock'), auth.uid()
+  );
+
+  RETURN jsonb_build_object(
+    'product_id', p_product_id,
+    'product_name', v_nome,
+    'provincia_id', v_prov,
+    'quantity', p_quantity
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.set_product_stock(uuid, int, text, uuid) TO authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 5. VENDA AO BALCÃO (POS)
+-- -----------------------------------------------------------------------------
+-- Uma venda de loja é diferente de uma venda de colaborador:
+--   • o preço vem SEMPRE do produto (nunca do browser);
+--   • o stock sai no momento (não há reserva nem encomenda pelo meio);
+--   • não gera comissão — não é carteira de ninguém.
+CREATE OR REPLACE FUNCTION public.registar_venda_loja(
+  p_items          jsonb,
+  p_payment_method text DEFAULT 'dinheiro',
+  p_customer_phone text DEFAULT NULL,
+  p_notes          text DEFAULT NULL,
+  p_client_ref     text DEFAULT NULL,
+  p_provincia_id   uuid DEFAULT NULL,
+  p_payment_status public.payment_status DEFAULT 'paid'
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_uid       uuid := auth.uid();
+  v_prov      uuid := COALESCE(p_provincia_id, public.my_province());
+  v_item      jsonb;
+  v_prod      public.products;
+  v_qty       int;
+  v_price     numeric(12,2);
+  v_total     numeric(12,2) := 0;
+  v_stock     int;
+  v_sale_id   uuid;
+  v_ref       text;
+  v_existing  public.sales;
+  v_telefone  text;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'É necessário iniciar sessão' USING ERRCODE = '28000';
+  END IF;
+
+  IF NOT public.can_sell_at_store() THEN
+    RAISE EXCEPTION 'Apenas a loja e a gerência podem registar vendas ao balcão'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF NOT public.is_manager() AND v_prov IS DISTINCT FROM public.my_province() THEN
+    RAISE EXCEPTION 'Só pode vender na sua província' USING ERRCODE = '42501';
+  END IF;
+
+  IF p_items IS NULL OR jsonb_typeof(p_items) <> 'array' OR jsonb_array_length(p_items) = 0 THEN
+    RAISE EXCEPTION 'Nenhum produto indicado';
+  END IF;
+
+  -- Idempotência: um duplo toque no botão não pode cobrar duas vezes.
+  IF p_client_ref IS NOT NULL THEN
+    SELECT * INTO v_existing
+    FROM public.sales s
+    WHERE s.seller_id = v_uid AND s.client_ref = p_client_ref;
+
+    IF FOUND THEN
+      RETURN jsonb_build_object(
+        'sale_id', v_existing.id,
+        'reference', v_existing.reference,
+        'total', v_existing.total_amount,
+        'duplicated', true
+      );
+    END IF;
+  END IF;
+
+  v_ref := public.generate_sale_reference();
+  v_telefone := public.normalize_phone(p_customer_phone);
+
+  INSERT INTO public.sales (
+    reference, client_ref, seller_id, total_amount, payment_status,
+    payment_method, notes, provincia_id, is_offline, sync_status
+  )
+  VALUES (
+    v_ref, p_client_ref, v_uid, 0, p_payment_status,
+    NULLIF(btrim(COALESCE(p_payment_method, '')), ''),
+    NULLIF(btrim(COALESCE(p_notes, '')), ''), v_prov, false, 'synced'
+  )
+  RETURNING id INTO v_sale_id;
+
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items)
+  LOOP
+    v_qty := GREATEST(COALESCE((v_item->>'quantity')::int, 0), 0);
+
+    IF v_qty = 0 THEN
+      RAISE EXCEPTION 'Quantidade inválida';
+    END IF;
+
+    SELECT * INTO v_prod FROM public.products
+    WHERE id = (v_item->>'product_id')::uuid;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Produto inexistente';
+    END IF;
+
+    -- Preço da base de dados. O que o browser manda é ignorado de propósito.
+    v_price := COALESCE(v_prod.promotional_price, v_prod.official_price);
+
+    SELECT COALESCE(i.quantity, 0) INTO v_stock
+    FROM public.inventory i
+    WHERE i.product_id = v_prod.id
+      AND i.provincia_id IS NOT DISTINCT FROM v_prov
+    FOR UPDATE;
+
+    v_stock := COALESCE(v_stock, 0);
+
+    IF v_stock < v_qty THEN
+      RAISE EXCEPTION 'Stock insuficiente para «%»: pediu %, existem %',
+        v_prod.name, v_qty, v_stock USING ERRCODE = '23514';
+    END IF;
+
+    UPDATE public.inventory i
+    SET quantity = i.quantity - v_qty,
+        updated_at = now()
+    WHERE i.product_id = v_prod.id
+      AND i.provincia_id IS NOT DISTINCT FROM v_prov;
+
+    INSERT INTO public.inventory_movements (
+      product_id, provincia_id, type, quantity, previous_quantity, new_quantity,
+      reference, notes, created_by
+    )
+    VALUES (
+      v_prod.id, v_prov, 'out', v_qty, v_stock, v_stock - v_qty,
+      v_ref, 'Venda ao balcão', v_uid
+    );
+
+    INSERT INTO public.sale_items (
+      sale_id, product_id, quantity, unit_price, total_price, product_snapshot
+    )
+    VALUES (
+      v_sale_id, v_prod.id, v_qty, v_price, v_price * v_qty,
+      jsonb_build_object('name', v_prod.name, 'sku', v_prod.sku)
+    );
+
+    v_total := v_total + (v_price * v_qty);
+  END LOOP;
+
+  UPDATE public.sales SET total_amount = v_total, updated_at = now()
+  WHERE id = v_sale_id;
+
+  -- Telefone do comprador (opcional): guarda-se na nota para a loja poder
+  -- contactar sem inventar uma conta que a pessoa não pediu.
+  IF v_telefone IS NOT NULL THEN
+    UPDATE public.sales
+    SET notes = concat_ws(' · ', NULLIF(notes, ''), 'Contacto: ' || v_telefone)
+    WHERE id = v_sale_id;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'sale_id', v_sale_id,
+    'reference', v_ref,
+    'total', v_total,
+    'items', jsonb_array_length(p_items),
+    'provincia_id', v_prov
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION
+  public.registar_venda_loja(jsonb, text, text, text, text, uuid, public.payment_status)
+  TO authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 5.1 ESTADO DA ENCOMENDA: A LOJA TAMBÉM PREPARA E ENTREGA
+-- -----------------------------------------------------------------------------
+-- Duas correcções em relação à 0008:
+--   • o vendedor de loja passa a poder alterar o estado (é ele que prepara);
+--   • o stock é mexido **na província da encomenda**, não em todas. A 0005
+--     introduziu inventário por província e a 0008 continuava a actualizar
+--     todas as linhas do produto — concluir uma encomenda em Luanda baixava
+--     stock no Uíge.
+CREATE OR REPLACE FUNCTION public.update_order_status(
+  p_order_id uuid,
+  p_status   public.order_status,
+  p_notes    text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_order public.orders;
+  v_item  record;
+  v_sou_cliente boolean;
+  v_loja  boolean := public.is_store_seller();
+  v_alvo  record;
+BEGIN
+  SELECT * INTO v_order FROM public.orders o WHERE o.id = p_order_id FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Encomenda inexistente';
+  END IF;
+
+  IF NOT (
+    public.is_manager()
+    OR v_loja
+    OR v_order.customer_id = auth.uid()
+    OR COALESCE(v_order.seller_id = auth.uid(), false)
+  ) THEN
+    RAISE EXCEPTION 'Sem permissão para alterar esta encomenda' USING ERRCODE = '42501';
+  END IF;
+
+  -- A loja só mexe nas encomendas da sua província (ou nas da sede).
+  IF v_loja
+     AND NOT public.is_manager()
+     AND v_order.provincia_id IS NOT NULL
+     AND v_order.provincia_id IS DISTINCT FROM public.my_province() THEN
+    RAISE EXCEPTION 'Encomenda de outra província' USING ERRCODE = '42501';
+  END IF;
+
+  -- O comprador: pode cancelar ou confirmar a recepção. Não é um "gestor da
+  -- encomenda" — não lhe compete escolher "em preparação" ou "em entrega".
+  v_sou_cliente := COALESCE(v_order.customer_id = auth.uid(), false)
+                   AND NOT public.is_manager()
+                   AND NOT v_loja
+                   AND NOT COALESCE(v_order.seller_id = auth.uid(), false);
+
+  IF v_sou_cliente AND p_status NOT IN ('cancelled', 'completed') THEN
+    RAISE EXCEPTION 'O cliente apenas pode cancelar a encomenda ou confirmar a entrega'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF v_sou_cliente AND p_status = 'completed'
+     AND v_order.status NOT IN ('in_delivery', 'ready_pickup') THEN
+    RAISE EXCEPTION 'Ainda não pode confirmar esta entrega' USING ERRCODE = '42501';
+  END IF;
+
+  IF v_order.status = 'completed' THEN
+    RAISE EXCEPTION 'Encomenda já concluída não pode ser alterada';
+  END IF;
+
+  IF p_status = v_order.status THEN
+    RETURN jsonb_build_object('order_id', v_order.id, 'status', v_order.status, 'changed', false);
+  END IF;
+
+  -- Concluir: converter reserva em saída efetiva de stock.
+  --
+  -- A linha certa é a da província da encomenda. Se essa província ainda não
+  -- tem inventário próprio (a operação antiga só tinha armazém-sede), cai para
+  -- a linha da sede — é lá que o `place_order` reservou. Sem esta queda, uma
+  -- encomenda antiga concluía sem baixar stock nenhum.
+  IF p_status = 'completed' THEN
+    FOR v_item IN
+      SELECT oi.product_id, oi.quantity FROM public.order_items oi WHERE oi.order_id = v_order.id
+    LOOP
+      FOR v_alvo IN
+        SELECT DISTINCT prov
+        FROM unnest(ARRAY[v_order.provincia_id, NULL::uuid]) AS prov
+      LOOP
+        UPDATE public.inventory i
+        SET quantity = GREATEST(i.quantity - v_item.quantity, 0),
+            reserved_quantity = GREATEST(i.reserved_quantity - v_item.quantity, 0),
+            updated_at = now()
+        WHERE i.product_id = v_item.product_id
+          AND i.provincia_id IS NOT DISTINCT FROM v_alvo.prov;
+
+        IF FOUND THEN
+          INSERT INTO public.inventory_movements (
+            product_id, provincia_id, type, quantity, previous_quantity, new_quantity,
+            reference, notes, created_by
+          )
+          SELECT
+            v_item.product_id,
+            i.provincia_id,
+            'out',
+            v_item.quantity,
+            i.quantity + v_item.quantity,
+            i.quantity,
+            v_order.reference,
+            CASE WHEN v_sou_cliente THEN 'Entrega confirmada pelo cliente'
+                 ELSE 'Encomenda concluída' END,
+            auth.uid()
+          FROM public.inventory i
+          WHERE i.product_id = v_item.product_id
+            AND i.provincia_id IS NOT DISTINCT FROM v_alvo.prov;
+
+          EXIT;
+        END IF;
+      END LOOP;
+    END LOOP;
+  END IF;
+
+  -- Cancelar: libertar a reserva, com a mesma queda para a sede.
+  IF p_status = 'cancelled' THEN
+    FOR v_item IN
+      SELECT oi.product_id, oi.quantity FROM public.order_items oi WHERE oi.order_id = v_order.id
+    LOOP
+      FOR v_alvo IN
+        SELECT DISTINCT prov
+        FROM unnest(ARRAY[v_order.provincia_id, NULL::uuid]) AS prov
+      LOOP
+        UPDATE public.inventory i
+        SET reserved_quantity = GREATEST(i.reserved_quantity - v_item.quantity, 0),
+            updated_at = now()
+        WHERE i.product_id = v_item.product_id
+          AND i.provincia_id IS NOT DISTINCT FROM v_alvo.prov;
+
+        IF FOUND THEN
+          EXIT;
+        END IF;
+      END LOOP;
+    END LOOP;
+  END IF;
+
+  UPDATE public.orders o
+  SET status = p_status,
+      notes = COALESCE(p_notes, o.notes),
+      payment_status = CASE WHEN p_status = 'completed' THEN 'paid'::public.payment_status ELSE o.payment_status END,
+      updated_at = now()
+  WHERE o.id = v_order.id;
+
+  UPDATE public.order_status_history h
+  SET notes = p_notes
+  WHERE h.order_id = v_order.id
+    AND h.id = (
+      SELECT h2.id FROM public.order_status_history h2
+      WHERE h2.order_id = v_order.id
+      ORDER BY h2.created_at DESC LIMIT 1
+    );
+
+  RETURN jsonb_build_object(
+    'order_id', v_order.id,
+    'status', p_status,
+    'changed', true,
+    'pelo_cliente', v_sou_cliente
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.update_order_status(uuid, public.order_status, text)
+  TO authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 6. ELIMINAR PRODUTO — MESMO COM HISTÓRICO
+-- -----------------------------------------------------------------------------
+-- As quatro tabelas abaixo apontavam para o produto sem ON DELETE. Passam a
+-- aceitar NULL e a guardar o nome, para que a encomenda/venda continue legível
+-- depois de o produto desaparecer do catálogo.
+ALTER TABLE public.order_items       ADD COLUMN IF NOT EXISTS product_name text;
+ALTER TABLE public.discount_requests ADD COLUMN IF NOT EXISTS product_name text;
+
+ALTER TABLE public.order_items       ALTER COLUMN product_id DROP NOT NULL;
+ALTER TABLE public.sale_items        ALTER COLUMN product_id DROP NOT NULL;
+ALTER TABLE public.reservation_items ALTER COLUMN product_id DROP NOT NULL;
+ALTER TABLE public.discount_requests ALTER COLUMN product_id DROP NOT NULL;
+
+ALTER TABLE public.order_items       DROP CONSTRAINT IF EXISTS order_items_product_id_fkey;
+ALTER TABLE public.order_items
+  ADD CONSTRAINT order_items_product_id_fkey
+  FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE SET NULL;
+
+ALTER TABLE public.sale_items        DROP CONSTRAINT IF EXISTS sale_items_product_id_fkey;
+ALTER TABLE public.sale_items
+  ADD CONSTRAINT sale_items_product_id_fkey
+  FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE SET NULL;
+
+ALTER TABLE public.reservation_items DROP CONSTRAINT IF EXISTS reservation_items_product_id_fkey;
+ALTER TABLE public.reservation_items
+  ADD CONSTRAINT reservation_items_product_id_fkey
+  FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE SET NULL;
+
+ALTER TABLE public.discount_requests DROP CONSTRAINT IF EXISTS discount_requests_product_id_fkey;
+ALTER TABLE public.discount_requests
+  ADD CONSTRAINT discount_requests_product_id_fkey
+  FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_order_items_produto      ON public.order_items (product_id);
+CREATE INDEX IF NOT EXISTS idx_sale_items_produto       ON public.sale_items (product_id);
+CREATE INDEX IF NOT EXISTS idx_reservation_items_produto ON public.reservation_items (product_id);
+
+/**
+ * Impacto da eliminação, para a interface poder avisar antes de confirmar.
+ * Não apaga nada.
+ */
+CREATE OR REPLACE FUNCTION public.impacto_eliminar_produto(p_product_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_nome text;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Apenas a gerência pode eliminar produtos' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT name INTO v_nome FROM public.products WHERE id = p_product_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Produto inexistente';
+  END IF;
+
+  RETURN jsonb_build_object(
+    'product_id', p_product_id,
+    'name', v_nome,
+    'order_items', (SELECT count(*) FROM public.order_items WHERE product_id = p_product_id),
+    'sale_items', (SELECT count(*) FROM public.sale_items WHERE product_id = p_product_id),
+    'reservation_items', (SELECT count(*) FROM public.reservation_items WHERE product_id = p_product_id),
+    'discount_requests', (SELECT count(*) FROM public.discount_requests WHERE product_id = p_product_id),
+    'images', (SELECT count(*) FROM public.product_images WHERE product_id = p_product_id),
+    'favorites', (SELECT count(*) FROM public.favorites WHERE product_id = p_product_id)
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.impacto_eliminar_produto(uuid) TO authenticated;
+
+/**
+ * Elimina o produto a todo o custo. Só a gestão, e só depois de a interface
+ * avisar. O histórico de encomendas/vendas fica com o nome e o preço, sem o
+ * produto — é o que permite apagar um artigo que já foi vendido.
+ */
+CREATE OR REPLACE FUNCTION public.eliminar_produto(p_product_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_prod public.products;
+  v_impacto jsonb;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Apenas a gerência pode eliminar produtos' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT * INTO v_prod FROM public.products WHERE id = p_product_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Produto inexistente';
+  END IF;
+
+  v_impacto := jsonb_build_object(
+    'order_items', (SELECT count(*) FROM public.order_items WHERE product_id = p_product_id),
+    'sale_items', (SELECT count(*) FROM public.sale_items WHERE product_id = p_product_id),
+    'reservation_items', (SELECT count(*) FROM public.reservation_items WHERE product_id = p_product_id),
+    'discount_requests', (SELECT count(*) FROM public.discount_requests WHERE product_id = p_product_id)
+  );
+
+  -- Nome e preço ficam no registo histórico antes de o produto desaparecer.
+  UPDATE public.order_items
+  SET product_name = COALESCE(NULLIF(product_name, ''), v_prod.name)
+  WHERE product_id = p_product_id;
+
+  UPDATE public.sale_items
+  SET product_snapshot = product_snapshot || jsonb_build_object(
+    'name', v_prod.name,
+    'sku', v_prod.sku,
+    'official_price', v_prod.official_price
+  )
+  WHERE product_id = p_product_id
+    AND NOT (product_snapshot ? 'name');
+
+  UPDATE public.discount_requests
+  SET product_name = COALESCE(NULLIF(product_name, ''), v_prod.name)
+  WHERE product_id = p_product_id;
+
+  INSERT INTO public.audit_logs (user_id, action, entity, entity_id, old_data)
+  VALUES (
+    auth.uid(), 'eliminar_produto', 'products', p_product_id,
+    jsonb_build_object(
+      'name', v_prod.name,
+      'sku', v_prod.sku,
+      'official_price', v_prod.official_price,
+      'impacto', v_impacto
+    )
+  );
+
+  -- As imagens, o stock, os movimentos, os favoritos, o carrinho e as
+  -- associações a conteúdos caem por ON DELETE CASCADE.
+  DELETE FROM public.products WHERE id = p_product_id;
+
+  RETURN jsonb_build_object(
+    'product_id', p_product_id,
+    'name', v_prod.name,
+    'impacto', v_impacto
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.eliminar_produto(uuid) TO authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 7. FEED DE NOTÍCIAS DO CLIENTE
+-- -----------------------------------------------------------------------------
+-- O cliente passa a ver os comunicados da gestão no feed. A formação continua
+-- interna (é conteúdo de colaborador), e um visitante sem sessão continua a
+-- ver apenas testemunhos e promoções dentro das datas.
+CREATE OR REPLACE FUNCTION public.pode_ver_conteudo(p_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.content_items c
+    WHERE c.id = p_id
+      AND (
+        public.is_manager()
+        OR (
+          c.status = 'publicado'
+          AND public.can_see_province(c.provincia_id)
+          AND (
+            c.kind IN ('testemunho', 'promocao', 'comunicado')
+            OR public.is_seller()
+          )
+          AND (
+            auth.uid() IS NOT NULL
+            OR (
+              c.kind IN ('testemunho', 'promocao')
+              AND (
+                c.kind <> 'promocao'
+                OR (
+                  (c.starts_at IS NULL OR c.starts_at <= now())
+                  AND (c.ends_at IS NULL OR c.ends_at >= now())
+                )
+              )
+            )
+          )
+        )
+      )
+  );
+$$;
+
+DROP POLICY IF EXISTS content_items_read ON public.content_items;
+CREATE POLICY content_items_read ON public.content_items
+  FOR SELECT TO authenticated
+  USING (
+    public.is_manager()
+    OR (
+      status = 'publicado'
+      AND public.can_see_province(provincia_id)
+      AND (
+        kind IN ('testemunho', 'promocao', 'comunicado')
+        OR public.is_seller()
+      )
+    )
+  );
+
+-- Reescrita da função do feed com a mesma regra de visibilidade. O corpo é o
+-- da 0007; a única diferença é `comunicado` entrar na lista do cliente.
+CREATE OR REPLACE FUNCTION public.conteudo_feed(
+  p_kind  text DEFAULT NULL,
+  p_limit int  DEFAULT 40
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_out jsonb;
+BEGIN
+  SELECT coalesce(jsonb_agg(item ORDER BY fixado DESC, publicado DESC NULLS LAST), '[]'::jsonb)
+  INTO v_out
+  FROM (
+    SELECT
+      jsonb_build_object(
+        'id',              c.id,
+        'kind',            c.kind,
+        'title',           c.title,
+        'subtitle',        c.subtitle,
+        'body',            c.body,
+        'image_url',       c.image_url,
+        'status',          c.status,
+        'is_pinned',       c.is_pinned,
+        'allow_reactions', c.allow_reactions,
+        'allow_comments',  c.allow_comments,
+        'author_name',     c.author_name,
+        'author_photo',    c.author_photo,
+        'starts_at',       c.starts_at,
+        'ends_at',         c.ends_at,
+        'published_at',    c.published_at,
+        'cta_label',       c.cta_label,
+        'cta_href',        c.cta_href,
+        'metadata',        c.metadata,
+        'provincia_id',    c.provincia_id,
+        'provincia_nome',  pr.nome,
+        'project_id',      c.project_id,
+        'reacoes',         (SELECT count(*) FROM public.content_reactions r WHERE r.item_id = c.id),
+        'comentarios',     (SELECT count(*) FROM public.content_comments m
+                             WHERE m.item_id = c.id AND NOT m.is_hidden),
+        'minha_reacao',    (SELECT r.reaction FROM public.content_reactions r
+                             WHERE r.item_id = c.id AND r.user_id = auth.uid()),
+        'produtos',        (
+          SELECT coalesce(jsonb_agg(produto ORDER BY ordem), '[]'::jsonb)
+          FROM (
+            SELECT cp.sort_order AS ordem,
+                   jsonb_build_object(
+                     'id',    p.id,
+                     'name',  p.name,
+                     'sku',   p.sku,
+                     'preco', coalesce(p.promotional_price, p.official_price),
+                     'oficial', p.official_price,
+                     'imagem', (
+                       SELECT pi.url FROM public.product_images pi
+                       WHERE pi.product_id = p.id
+                       ORDER BY pi.is_primary DESC, pi.sort_order
+                       LIMIT 1
+                     )
+                   ) AS produto
+            FROM public.content_products cp
+            JOIN public.products p ON p.id = cp.product_id
+            WHERE cp.item_id = c.id
+          ) t
+        )
+      ) AS item,
+      c.is_pinned  AS fixado,
+      c.published_at AS publicado
+    FROM public.content_items c
+    LEFT JOIN public.provincias pr ON pr.id = c.provincia_id
+    WHERE (p_kind IS NULL OR c.kind = p_kind)
+      AND (
+        public.is_manager()
+        OR (
+          c.status = 'publicado'
+          AND public.can_see_province(c.provincia_id)
+          AND (
+            c.kind IN ('testemunho', 'promocao', 'comunicado')
+            OR public.is_seller()
+          )
+          AND (
+            auth.uid() IS NOT NULL
+            OR (
+              c.kind IN ('testemunho', 'promocao')
+              AND (
+                c.kind <> 'promocao'
+                OR (
+                  (c.starts_at IS NULL OR c.starts_at <= now())
+                  AND (c.ends_at IS NULL OR c.ends_at >= now())
+                )
+              )
+            )
+          )
+        )
+      )
+    ORDER BY c.is_pinned DESC, c.published_at DESC NULLS LAST, c.created_at DESC
+    LIMIT greatest(1, least(coalesce(p_limit, 40), 100))
+  ) lista;
+
+  RETURN v_out;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.conteudo_feed(text, int) TO authenticated, anon;
+
+/**
+ * Comentários de um conteúdo, com o nome de quem escreveu.
+ *
+ * `content_comments.user_id` aponta para `auth.users`, não para `profiles` —
+ * o PostgREST não consegue embutir o nome. Esta função resolve isso numa só
+ * chamada e respeita a visibilidade do conteúdo.
+ */
+CREATE OR REPLACE FUNCTION public.conteudo_comentarios(p_item_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_out jsonb;
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.pode_ver_conteudo(p_item_id) THEN
+    RETURN '[]'::jsonb;
+  END IF;
+
+  SELECT coalesce(jsonb_agg(linha ORDER BY criado), '[]'::jsonb)
+  INTO v_out
+  FROM (
+    SELECT
+      jsonb_build_object(
+        'id',         c.id,
+        'body',       c.body,
+        'created_at', c.created_at,
+        'autor',      COALESCE(NULLIF(p.full_name, ''), 'Cliente'),
+        'eu',         c.user_id = auth.uid()
+      ) AS linha,
+      c.created_at AS criado
+    FROM public.content_comments c
+    LEFT JOIN public.profiles p ON p.id = c.user_id
+    WHERE c.item_id = p_item_id
+      AND NOT c.is_hidden
+    ORDER BY c.created_at ASC
+    LIMIT 100
+  ) t;
+
+  RETURN v_out;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.conteudo_comentarios(uuid) TO authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 8. COMISSÕES: O VENDEDOR DE LOJA NÃO GANHA COMISSÃO
+-- -----------------------------------------------------------------------------
+-- A venda ao balcão não é uma venda de carteira: o colaborador não trouxe o
+-- cliente nem acompanhou a compra. A taxa efectiva passa a ser 0 para este
+-- papel, o que faz o gatilho `fill_commission` gravar uma comissão de 0 em vez
+-- de 10% da empresa. `seller_profiles` continua a ser só de quem vende por
+-- carteira — o vendedor de loja não tem linha lá.
+CREATE OR REPLACE FUNCTION public.taxa_comissao_efetiva(p_seller uuid DEFAULT auth.uid())
+RETURNS numeric
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+  SELECT CASE
+    WHEN (SELECT p.role::text FROM public.profiles p WHERE p.id = p_seller) = 'store_seller'
+      THEN 0::numeric
+    ELSE COALESCE(
+      (SELECT sp.commission_rate FROM public.seller_profiles sp WHERE sp.id = p_seller),
+      public.taxa_comissao_global()
+    )
+  END;
+$$;
+
+-- A interface mostra a taxa; para a loja a resposta tem de dizer 0 e porquê.
+CREATE OR REPLACE FUNCTION public.taxa_comissao_de(p_seller uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_global  numeric := public.taxa_comissao_global();
+  v_pessoal numeric;
+  v_efetiva numeric;
+  v_papel   text;
+BEGIN
+  IF NOT public.is_manager() AND p_seller IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'Sem permissão para ver a taxa de outra pessoa' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT p.role::text INTO v_papel FROM public.profiles p WHERE p.id = p_seller;
+
+  IF v_papel = 'store_seller' THEN
+    RETURN jsonb_build_object(
+      'global',  v_global,
+      'pessoal', NULL,
+      'efetiva', 0,
+      'origem',  'loja'
+    );
+  END IF;
+
+  SELECT sp.commission_rate INTO v_pessoal
+  FROM public.seller_profiles sp WHERE sp.id = p_seller;
+
+  v_efetiva := COALESCE(v_pessoal, v_global);
+
+  RETURN jsonb_build_object(
+    'global',  v_global,
+    'pessoal', v_pessoal,
+    'efetiva', v_efetiva,
+    'origem',  CASE WHEN v_pessoal IS NULL THEN 'empresa' ELSE 'pessoal' END
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.taxa_comissao_efetiva(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.taxa_comissao_de(uuid)      TO authenticated;
+
+
+-- ###########################################################################
+-- ##  PARTE 14 de 14 — ELIMINAR PRODUTO COM O HISTÓRICO (MODO FORÇADO)
+-- ###########################################################################
+
+-- =============================================================================
+--  0014 — ELIMINAR PRODUTO A SÉRIO (COM O HISTÓRICO)
+-- =============================================================================
+--  O QUE ESTAVA MAL
+--    A 0013 deixou eliminar um produto que já estava em encomendas e vendas: as
+--    linhas ficavam com o nome e o preço e perdiam a ligação ao catálogo. Isso
+--    é o correcto para um produto real que sai de linha — o histórico não pode
+--    desaparecer.
+--
+--    Mas há outro caso: produtos de demonstração, testes e encomendas feitas
+--    para experimentar. Aí o histórico também é fictício e não deve continuar a
+--    contar nos relatórios. O gestor ficava com um produto apagado e linhas
+--    órfãs a somar dinheiro que nunca existiu.
+--
+--  O QUE PASSA A ACONTECER
+--    `eliminar_produto(id, forcar)` ganha um segundo argumento:
+--      · forcar = false (por omissão) → comportamento da 0013. As encomendas e
+--        vendas ficam com o nome e o preço; o produto sai do catálogo.
+--      · forcar = true → apaga também as linhas de encomenda, venda, reserva e
+--        pedido de desconto desse produto. Os registos que ficarem SEM linhas
+--        (encomenda/venda/reserva feita só com este produto) são apagados, e os
+--        totais dos que sobrevivem são recalculados a partir das linhas que
+--        restam. Nada fica a somar dinheiro que não existe.
+--
+--    `impacto_eliminar_produto` passa a dizer quantos registos inteiros
+--    desapareceriam no modo forçado, para o aviso ser honesto.
+--
+--    Continua a ser só da gerência, e cada eliminação fica em `audit_logs` com
+--    a contagem do que foi apagado.
+--
+--  Idempotente: pode ser executado mais do que uma vez.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- 1. IMPACTO — quantas linhas e quantos registos inteiros
+-- -----------------------------------------------------------------------------
+-- `encomendas_apagadas` / `vendas_apagadas` / `reservas_apagadas` contam os
+-- registos que só existem por causa deste produto. É o que o modo forçado
+-- remove por completo; o resto fica com as linhas todas retiradas.
+CREATE OR REPLACE FUNCTION public.impacto_eliminar_produto(p_product_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_nome text;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Apenas a gerência pode eliminar produtos' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT name INTO v_nome FROM public.products WHERE id = p_product_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Produto inexistente';
+  END IF;
+
+  RETURN jsonb_build_object(
+    'product_id', p_product_id,
+    'name', v_nome,
+    'order_items', (SELECT count(*) FROM public.order_items WHERE product_id = p_product_id),
+    'sale_items', (SELECT count(*) FROM public.sale_items WHERE product_id = p_product_id),
+    'reservation_items', (SELECT count(*) FROM public.reservation_items WHERE product_id = p_product_id),
+    'discount_requests', (SELECT count(*) FROM public.discount_requests WHERE product_id = p_product_id),
+    'images', (SELECT count(*) FROM public.product_images WHERE product_id = p_product_id),
+    'favorites', (SELECT count(*) FROM public.favorites WHERE product_id = p_product_id),
+
+    -- Registos que ficariam vazios (só têm este produto).
+    'orders_emptied', (
+      SELECT count(*) FROM public.orders o
+      WHERE EXISTS (
+        SELECT 1 FROM public.order_items oi
+        WHERE oi.order_id = o.id AND oi.product_id = p_product_id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM public.order_items oi
+        WHERE oi.order_id = o.id AND oi.product_id <> p_product_id
+      )
+    ),
+    'sales_emptied', (
+      SELECT count(*) FROM public.sales s
+      WHERE EXISTS (
+        SELECT 1 FROM public.sale_items si
+        WHERE si.sale_id = s.id AND si.product_id = p_product_id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM public.sale_items si
+        WHERE si.sale_id = s.id AND si.product_id <> p_product_id
+      )
+    ),
+    'reservations_emptied', (
+      SELECT count(*) FROM public.reservations r
+      WHERE EXISTS (
+        SELECT 1 FROM public.reservation_items ri
+        WHERE ri.reservation_id = r.id AND ri.product_id = p_product_id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM public.reservation_items ri
+        WHERE ri.reservation_id = r.id AND ri.product_id <> p_product_id
+      )
+    )
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.impacto_eliminar_produto(uuid) TO authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 2. ELIMINAÇÃO — com ou sem histórico
+-- -----------------------------------------------------------------------------
+-- A assinatura muda (passa a ter dois argumentos), por isso a versão de um só
+-- argumento tem de sair: duas funções com o mesmo nome deixavam o PostgREST a
+-- responder PGRST203 («função ambígua»). O `DEFAULT false` mantém válidas as
+-- chamadas antigas com apenas `p_product_id`.
+DROP FUNCTION IF EXISTS public.eliminar_produto(uuid);
+
+CREATE OR REPLACE FUNCTION public.eliminar_produto(
+  p_product_id uuid,
+  p_forcar boolean DEFAULT false
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, pg_temp
+AS $$
+DECLARE
+  v_prod public.products;
+  v_impacto jsonb;
+  v_encomendas uuid[];
+  v_vendas uuid[];
+  v_reservas uuid[];
+  v_n_encomendas int := 0;
+  v_n_vendas int := 0;
+  v_n_reservas int := 0;
+  v_n_descontos int := 0;
+  v_apagados jsonb;
+BEGIN
+  IF NOT public.is_manager() THEN
+    RAISE EXCEPTION 'Apenas a gerência pode eliminar produtos' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT * INTO v_prod FROM public.products WHERE id = p_product_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Produto inexistente';
+  END IF;
+
+  v_impacto := jsonb_build_object(
+    'order_items', (SELECT count(*) FROM public.order_items WHERE product_id = p_product_id),
+    'sale_items', (SELECT count(*) FROM public.sale_items WHERE product_id = p_product_id),
+    'reservation_items', (SELECT count(*) FROM public.reservation_items WHERE product_id = p_product_id),
+    'discount_requests', (SELECT count(*) FROM public.discount_requests WHERE product_id = p_product_id)
+  );
+
+  -- Nome e preço ficam no registo histórico antes de o produto desaparecer.
+  -- Mesmo em modo forçado: se alguma linha sobreviver (outra transacção, uma
+  -- cópia de segurança), não fica sem saber de que produto se tratava.
+  UPDATE public.order_items
+  SET product_name = COALESCE(NULLIF(product_name, ''), v_prod.name)
+  WHERE product_id = p_product_id;
+
+  UPDATE public.sale_items
+  SET product_snapshot = product_snapshot || jsonb_build_object(
+    'name', v_prod.name,
+    'sku', v_prod.sku,
+    'official_price', v_prod.official_price
+  )
+  WHERE product_id = p_product_id
+    AND NOT (product_snapshot ? 'name');
+
+  UPDATE public.discount_requests
+  SET product_name = COALESCE(NULLIF(product_name, ''), v_prod.name)
+  WHERE product_id = p_product_id;
+
+  -- ------------------------------------------------------------------ forçar
+  IF p_forcar THEN
+    -- Guardar os registos tocados antes de apagar as linhas.
+    SELECT array_agg(DISTINCT order_id) INTO v_encomendas
+    FROM public.order_items WHERE product_id = p_product_id;
+
+    SELECT array_agg(DISTINCT sale_id) INTO v_vendas
+    FROM public.sale_items WHERE product_id = p_product_id;
+
+    SELECT array_agg(DISTINCT reservation_id) INTO v_reservas
+    FROM public.reservation_items WHERE product_id = p_product_id;
+
+    DELETE FROM public.order_items WHERE product_id = p_product_id;
+    DELETE FROM public.sale_items WHERE product_id = p_product_id;
+    DELETE FROM public.reservation_items WHERE product_id = p_product_id;
+
+    DELETE FROM public.discount_requests WHERE product_id = p_product_id;
+    GET DIAGNOSTICS v_n_descontos = ROW_COUNT;
+
+    -- Encomendas que ficaram sem nenhuma linha: eram só deste produto.
+    WITH apagadas AS (
+      DELETE FROM public.orders o
+      WHERE o.id = ANY (COALESCE(v_encomendas, ARRAY[]::uuid[]))
+        AND NOT EXISTS (SELECT 1 FROM public.order_items oi WHERE oi.order_id = o.id)
+      RETURNING 1
+    )
+    SELECT count(*) INTO v_n_encomendas FROM apagadas;
+
+    -- As que sobrevivem ficam com o total certo (sem o produto que saiu).
+    UPDATE public.orders o
+    SET total_amount = COALESCE(
+      (SELECT sum(oi.total_price) FROM public.order_items oi WHERE oi.order_id = o.id),
+      0
+    )
+    WHERE o.id = ANY (COALESCE(v_encomendas, ARRAY[]::uuid[]));
+
+    WITH apagadas AS (
+      DELETE FROM public.sales s
+      WHERE s.id = ANY (COALESCE(v_vendas, ARRAY[]::uuid[]))
+        AND NOT EXISTS (SELECT 1 FROM public.sale_items si WHERE si.sale_id = s.id)
+      RETURNING 1
+    )
+    SELECT count(*) INTO v_n_vendas FROM apagadas;
+
+    UPDATE public.sales s
+    SET total_amount = COALESCE(
+      (SELECT sum(si.total_price) FROM public.sale_items si WHERE si.sale_id = s.id),
+      0
+    )
+    WHERE s.id = ANY (COALESCE(v_vendas, ARRAY[]::uuid[]));
+
+    WITH apagadas AS (
+      DELETE FROM public.reservations r
+      WHERE r.id = ANY (COALESCE(v_reservas, ARRAY[]::uuid[]))
+        AND NOT EXISTS (SELECT 1 FROM public.reservation_items ri WHERE ri.reservation_id = r.id)
+      RETURNING 1
+    )
+    SELECT count(*) INTO v_n_reservas FROM apagadas;
+  END IF;
+
+  v_apagados := jsonb_build_object(
+    'encomendas', v_n_encomendas,
+    'vendas', v_n_vendas,
+    'reservas', v_n_reservas,
+    'pedidos_desconto', v_n_descontos,
+    'linhas_encomenda', COALESCE((v_impacto ->> 'order_items')::int, 0),
+    'linhas_venda', COALESCE((v_impacto ->> 'sale_items')::int, 0),
+    'linhas_reserva', COALESCE((v_impacto ->> 'reservation_items')::int, 0)
+  );
+
+  INSERT INTO public.audit_logs (user_id, action, entity, entity_id, old_data)
+  VALUES (
+    auth.uid(),
+    CASE WHEN p_forcar THEN 'eliminar_produto_forcado' ELSE 'eliminar_produto' END,
+    'products',
+    p_product_id,
+    jsonb_build_object(
+      'name', v_prod.name,
+      'sku', v_prod.sku,
+      'official_price', v_prod.official_price,
+      'forcado', p_forcar,
+      'impacto', v_impacto,
+      'apagados', v_apagados
+    )
+  );
+
+  -- As imagens, o stock, os movimentos, os favoritos, o carrinho e as
+  -- associações a conteúdos caem por ON DELETE CASCADE.
+  DELETE FROM public.products WHERE id = p_product_id;
+
+  RETURN jsonb_build_object(
+    'product_id', p_product_id,
+    'name', v_prod.name,
+    'forcado', p_forcar,
+    'impacto', v_impacto,
+    'apagados', v_apagados
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.eliminar_produto(uuid, boolean) TO authenticated;

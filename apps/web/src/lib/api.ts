@@ -20,6 +20,8 @@ export interface PlaceOrderResult {
   order_id: string;
   reference: string;
   total: number;
+  /** Taxa de entrega já incluída em `total`. Ausente antes da migração 0010. */
+  delivery_fee?: number;
   duplicated: boolean;
 }
 
