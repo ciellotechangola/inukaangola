@@ -139,6 +139,27 @@ class _RegistarVendaPageState extends State<RegistarVendaPage> {
     });
   }
 
+  /// Chama a RPC da venda. O `client_ref` é o mesmo nas duas tentativas, por
+  /// isso uma repetição nunca regista a venda duas vezes.
+  Future<Map<String, dynamic>> _enviarVenda(String clientRef, String? nome) async {
+    final params = <String, dynamic>{
+      'p_items': [
+        for (final e in _carrinho.entries)
+          {'product_id': e.key, 'quantity': e.value}
+      ],
+      'p_customer_phone': _telefone.text.trim(),
+      'p_payment_method': _pagamento,
+      'p_payment_status': _estadoPagamento,
+      'p_notes': _notas.text.trim().isEmpty ? null : _notas.text.trim(),
+      'p_client_ref': clientRef,
+    };
+    if (nome != null) params['p_customer_name'] = nome;
+
+    final resposta =
+        await Supabase.instance.client.rpc('register_sale_by_phone', params: params);
+    return Map<String, dynamic>.from(resposta as Map);
+  }
+
   Future<void> _registar() async {
     if (_carrinho.isEmpty) {
       avisar(context, 'Escolha pelo menos um produto.', erro: true);
@@ -154,23 +175,25 @@ class _RegistarVendaPageState extends State<RegistarVendaPage> {
       _erro = null;
     });
 
-    try {
-      final resposta = await Supabase.instance.client.rpc('register_sale_by_phone', params: {
-        'p_items': [
-          for (final e in _carrinho.entries)
-            {'product_id': e.key, 'quantity': e.value}
-        ],
-        'p_customer_phone': _telefone.text.trim(),
-        'p_payment_method': _pagamento,
-        'p_payment_status': _estadoPagamento,
-        'p_notes': _notas.text.trim().isEmpty ? null : _notas.text.trim(),
-        'p_client_ref': const Uuid().v4(),
-        'p_customer_name': _nome.text.trim().isEmpty ? null : _nome.text.trim(),
-      });
+    final nome = _nome.text.trim();
+    final clientRef = const Uuid().v4();
 
-      final mapa = Map<String, dynamic>.from(resposta as Map);
+    try {
+      Map<String, dynamic> mapa;
+      try {
+        mapa = await _enviarVenda(clientRef, nome.isEmpty ? null : nome);
+      } on PostgrestException catch (e) {
+        // PGRST202 = a função ainda não conhece `p_customer_name` (base sem o
+        // patch 0017). Uma venda não pode ficar por registar por causa do nome
+        // de um campo opcional: repete-se sem ele. Depois do patch, o nome
+        // entra sempre.
+        final semONome = e.code == 'PGRST202' ||
+            e.message.contains('Could not find the function');
+        if (nome.isEmpty || !semONome) rethrow;
+        mapa = await _enviarVenda(clientRef, null);
+      }
+
       final conquistado = mapa['conquistado'] == true;
-      final nome = _nome.text.trim();
 
       setState(() {
         _recibo = mapa['reference'] as String? ?? '—';

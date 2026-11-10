@@ -42,9 +42,9 @@ export const DEFINICOES_PADRAO: DefinicoesLoja = {
   telefones: [...TELEFONES_INUKA],
   androidUrl: null,
   iosUrl: null,
-  versao: "1.2.2",
+  versao: "1.2.3",
   novidades:
-    "Uma só Área de Colaborador: dados pessoais, carteira, comissões e levantamentos no mesmo sítio. A app abre logo na sua área. A referência aparece uma vez só. «Ser revendedor» passou a «Ser colaborador».",
+    "Registar venda passou a ser o cadastro do cliente: com o telefone, quem comprou entra logo nos seus clientes conquistados — associado à carteira se já tiver conta, ou por activar com o nome e a compra se ainda não tiver. Novo campo «Nome do cliente».",
   actualizadoEm: null,
 };
 
