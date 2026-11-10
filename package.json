@@ -14,6 +14,7 @@
     "seed:provincias:limpar": "node supabase/seed-provincias.mjs --limpar",
     "setup:sql": "node supabase/build-setup.mjs",
     "estado": "node scripts/estado-migracoes.mjs",
+    "contas": "node scripts/corrigir-emails-auth.mjs",
     "test": "npm --prefix supabase/tests run check",
     "test:sql": "npm --prefix supabase/tests run check",
     "test:live": "node scripts/com-servidor.mjs supabase/tests/live.test.mjs",
