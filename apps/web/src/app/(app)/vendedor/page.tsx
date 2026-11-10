@@ -280,11 +280,18 @@ export default async function SellerDashboardPage() {
         <Acao href="/cliente/conversas" titulo="Mensagens" descricao="Falar com clientes" />
         <Acao href="/vendedor/comunicados" titulo="Comunicados" descricao="Avisos da gestão" />
         <Acao href="/vendedor/formacao" titulo="Formação INUKA" descricao="Cursos e progresso" />
+        {/* O menu do topo é desenhado no browser (só sabe o papel depois de
+            hidratar); este cartão garante que «Perfil» está à vista mal a
+            página abre — e leva à secção dos dados, mais abaixo. */}
+        <Acao href="/vendedor#perfil" titulo="Perfil" descricao="Dados pessoais e profissionais" />
       </div>
 
       {/* ---------- Dados pessoais e profissionais (o antigo «perfil») ---------- */}
       {ficha && (
-        <div className="mt-8 grid gap-4 lg:grid-cols-2">
+        // `id="perfil"` é o destino do botão «Perfil» do menu: como a tela do
+        // perfil foi fundida nesta, o menu leva à secção em vez de abrir outra
+        // página. `scroll-mt` compensa o cabeçalho fixo.
+        <div id="perfil" className="mt-8 grid scroll-mt-24 gap-4 lg:grid-cols-2">
           <section className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-6">
             <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="text-sm font-medium text-[#F5F5F5]">Dados pessoais</h2>

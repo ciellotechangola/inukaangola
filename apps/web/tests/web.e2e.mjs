@@ -1704,6 +1704,17 @@ await check("a Área de colaborador traz os dados do antigo perfil", async () =>
   return "200 · dados + 1 referência";
 });
 
+await check("o menu do colaborador tem um botão «Perfil» que leva aos dados", async () => {
+  const r = await pagina("/vendedor", cVendedor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+
+  // O botão está no menu (por isso `href`), e aponta para a secção dos dados
+  // dentro da própria Área de Colaborador — a tela separada já não existe.
+  assert(r.html.includes('href="/vendedor#perfil"'), "o menu não tem «Perfil»");
+  assert(/<div[^>]*id="perfil"/.test(r.html), "a secção dos dados não tem âncora");
+  return "menu → #perfil";
+});
+
 await check("colaborador não abre a ficha de outro colaborador", async () => {
   const r = await pagina(`/gerente/colaboradores/${sVendedor.user.id}`, cVendedor);
   assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);

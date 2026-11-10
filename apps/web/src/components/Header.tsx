@@ -89,6 +89,11 @@ export default function Header() {
       : []),
     ...(profile?.role === "seller"
       ? [
+          // «Perfil» abre a Área de Colaborador já na secção dos dados. A tela
+          // separada deixou de existir (era a mesma identidade, os mesmos
+          // indicadores e a mesma referência), mas o colaborador continua a
+          // precisar de chegar lá num clique.
+          { href: "/vendedor#perfil", label: "Perfil" },
           { href: "/vendedor/comunicados", label: "Comunicados" },
           { href: "/vendedor/formacao", label: "Formação" },
         ]
