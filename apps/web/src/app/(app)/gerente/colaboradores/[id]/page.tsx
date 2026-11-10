@@ -6,6 +6,7 @@ import { formatCurrency } from "@/lib/utils";
 import {
   numero,
   dataCurta,
+  normalizarImpacto,
   type FichaColaborador,
   type PainelColaborador,
 } from "@/lib/colaborador";
@@ -15,6 +16,7 @@ import ColaboradorIdentidade from "@/components/ColaboradorIdentidade";
 import CopiarReferencia from "@/components/CopiarReferencia";
 import { GraficoEvolucao, ProgressoMeta } from "@/components/Graficos";
 import GestaoColaborador from "./GestaoColaborador";
+import EliminarColaborador from "./EliminarColaborador";
 import {
   COR_ESTADO,
   ROTULO_ESTADO,
@@ -38,7 +40,7 @@ export default async function ColaboradorDetalhePage({
 
   const supabase = await createClientServer();
 
-  const [fichaRes, painelRes, metaRes, provincias, taxaRes, levantamentosRes, pagamentoRes] =
+  const [fichaRes, painelRes, metaRes, provincias, taxaRes, levantamentosRes, pagamentoRes, impactoRes] =
     await Promise.all([
       supabase.rpc("colaborador_ficha", { p_id: id }),
       supabase.rpc("colaborador_painel", { p_id: id }),
@@ -73,6 +75,9 @@ export default async function ColaboradorDetalhePage({
         .select("xpress_dados, banco_dados")
         .eq("id", id)
         .maybeSingle(),
+      // O que desaparece se a gestão eliminar esta pessoa. Só lê — a decisão
+      // de apagar é que passa pela RPC `eliminar_colaborador`.
+      supabase.rpc("impacto_eliminar_colaborador", { p_id: id }),
     ]);
 
   // A RPC recusa com 42501 quem não pode ver; o RLS esconde o resto. Em ambos
@@ -84,6 +89,7 @@ export default async function ColaboradorDetalhePage({
   const taxa = normalizarTaxa(taxaRes.data);
   const painel = (painelRes.data ?? null) as PainelColaborador | null;
   const cartoes = painel?.cartoes;
+  const impacto = normalizarImpacto(impactoRes.data);
   const metaIndividual = metaRes.data as
     | { target_amount: number; target_sales: number }
     | null;
@@ -410,6 +416,15 @@ export default async function ColaboradorDetalhePage({
           </div>
         </>
       )}
+
+      {/* Apagar é o último recurso da ficha: fica no fundo, depois de tudo o
+          que a gestão precisa de ver antes de decidir. */}
+      <EliminarColaborador
+        id={ficha.id}
+        nome={ficha.full_name}
+        referencia={ficha.referencia}
+        impacto={impacto}
+      />
     </main>
   );
 }

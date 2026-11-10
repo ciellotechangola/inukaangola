@@ -91,7 +91,6 @@ export default function Header() {
       ? [
           { href: "/vendedor/comunicados", label: "Comunicados" },
           { href: "/vendedor/formacao", label: "Formação" },
-          { href: "/vendedor/perfil", label: "Perfil" },
         ]
       : []),
     // A loja tem o seu próprio menu: stock e balcão são o dia-a-dia.
@@ -103,12 +102,17 @@ export default function Header() {
           { href: "/loja/encomendas", label: "Encomendas" },
         ]
       : []),
-    ...(profile ? [{ href: "/referencia", label: "Referência" }] : []),
+    // O colaborador vê a referência no cartão de identidade da Área de
+    // Colaborador — uma vez, e com o botão de copiar. A aba «Referência» fica
+    // para clientes e gestão, que não têm esse cartão.
+    ...(profile && profile.role !== "seller" ? [{ href: "/referencia", label: "Referência" }] : []),
     ...(profile ? [{ href: "/conversas", label: "Mensagens" }] : []),
     { href: "/sobre", label: "Sobre", desde: "lg" },
-    // "Ser revendedor" fica visível a partir de md: é a única página da loja
-    // que serve quem não é cliente e não quer comprar.
-    { href: "/revendedor", label: "Ser revendedor", desde: "md" },
+    // «Ser colaborador» é a porta de quem ainda não trabalha na INUKA. Quem já
+    // é colaborador, loja ou gestão não precisa dela — e não a vê.
+    ...(profile?.role === "seller" || profile?.role === "store_seller" || profile?.role === "manager"
+      ? []
+      : [{ href: "/revendedor", label: "Ser colaborador", desde: "md" as const }]),
     { href: "/contactos", label: "Contactos", desde: "lg" },
   ];
 
@@ -228,11 +232,9 @@ export default function Header() {
             </span>
             <span className="hidden text-[#333] sm:inline">·</span>
             <span className="hidden text-[#8A8A8A] sm:inline">{profile.full_name}</span>
-            {profile.referencia && (
-              <span className="ml-auto font-mono text-[10px] normal-case tracking-normal text-[#525252]">
-                {profile.referencia}
-              </span>
-            )}
+            {/* A referência não se repete aqui: o colaborador vê-a no cartão da
+                Área de Colaborador e os restantes na aba «Referência». Um
+                código em cada canto deixava de ser um código de referência. */}
           </div>
         </div>
       )}

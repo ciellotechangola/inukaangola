@@ -114,6 +114,8 @@ const funcoes = [
   "actualizar_promocao",
   "eliminar_promocao",
   "minha_entrega",
+  "impacto_eliminar_colaborador",
+  "eliminar_colaborador",
 ];
 
 let especificacao = null;

@@ -27,7 +27,7 @@ const COR: Record<string, string> = {
 };
 
 /**
- * Candidaturas a revendedor.
+ * Candidaturas a colaborador.
  *
  * Chegam do formulário público `/revendedor`. A gestão vê, contacta e marca o
  * estado — e o estado diz às outras pessoas da equipa quem já falou com a
@@ -60,7 +60,7 @@ export default async function RevendedoresPage() {
         ← Painel de gestão
       </Link>
 
-      <h1 className="text-3xl font-light text-[#F5F5F5]">Candidaturas a revendedor</h1>
+      <h1 className="text-3xl font-light text-[#F5F5F5]">Candidaturas a colaborador</h1>
       <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[#A3A3A3]">
         Pedidos enviados pelo formulário público. Contacte a pessoa pelo telefone e marque o
         estado — a equipa inteira vê quem já tratou do assunto.

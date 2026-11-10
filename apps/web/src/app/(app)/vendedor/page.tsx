@@ -7,31 +7,46 @@ import {
   numero,
   dataCurta,
   mensagemErro,
+  type FichaColaborador,
   type PainelColaborador,
 } from "@/lib/colaborador";
 import ColaboradorIdentidade from "@/components/ColaboradorIdentidade";
 import TaxaAoVivo from "@/components/comissoes/TaxaAoVivo";
-import { normalizarTaxa } from "@/lib/comissoes";
+import { formatarTaxa, normalizarTaxa } from "@/lib/comissoes";
 import { normalizarResumo, progressoVendas } from "@/lib/levantamentos";
 import { GraficoEvolucao, ProgressoMeta } from "@/components/Graficos";
+import DadosPessoais from "./DadosPessoais";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Área de colaborador — a única página do colaborador.
+ *
+ * Antes havia duas: esta e `/vendedor/perfil`, que repetia a identidade, os
+ * indicadores e a referência. Ficou uma só, com os dados pessoais e
+ * profissionais no fim. O código de referência aparece **uma vez**, no cartão
+ * de identidade — é o que o colaborador mostra ao cliente e à INUKA.
+ */
 export default async function SellerDashboardPage() {
   const profile = await getProfile();
   if (!profile || (profile.role !== "seller" && profile.role !== "manager")) redirect("/");
 
   const supabase = await createClientServer();
-  const [{ data, error }, { data: taxaBruta }, { data: resumoBruto }] = await Promise.all([
-    supabase.rpc("colaborador_painel"),
-    supabase.rpc("taxa_comissao"),
-    supabase.rpc("levantamento_resumo", { p_seller: profile.id }),
-  ]);
+  const [{ data, error }, { data: taxaBruta }, { data: resumoBruto }, fichaRes] =
+    await Promise.all([
+      supabase.rpc("colaborador_painel"),
+      supabase.rpc("taxa_comissao"),
+      supabase.rpc("levantamento_resumo", { p_seller: profile.id }),
+      // A ficha traz o BI, a morada e a função — o que antes só se via no
+      // perfil. Se falhar, a área abre na mesma: os dados são o menos urgente.
+      supabase.rpc("colaborador_ficha", { p_id: profile.id }),
+    ]);
 
   const taxa = normalizarTaxa(taxaBruta);
   // Se a migração dos levantamentos ainda não estiver aplicada, a RPC devolve
   // erro e o resumo fica a zeros — o painel continua a abrir.
   const resumo = normalizarResumo(resumoBruto);
+  const ficha = (fichaRes.data ?? null) as FichaColaborador | null;
 
   if (error) {
     return (
@@ -79,20 +94,12 @@ export default async function SellerDashboardPage() {
         userId={identidade.id}
         podeEditarFoto
         acoes={
-          <>
-            <Link
-              href="/vendedor/vendas/registar"
-              className="rounded-lg bg-[#C9A962] px-3 py-1.5 text-xs font-medium text-[#0A0A0A] transition hover:bg-[#E3D5A7]"
-            >
-              Registar venda
-            </Link>
-            <Link
-              href="/vendedor/perfil"
-              className="rounded-lg border border-[#333] px-3 py-1.5 text-xs text-[#A3A3A3] transition hover:border-[#C9A962]/50 hover:text-[#C9A962]"
-            >
-              O meu perfil
-            </Link>
-          </>
+          <Link
+            href="/vendedor/vendas/registar"
+            className="rounded-lg bg-[#C9A962] px-3 py-1.5 text-xs font-medium text-[#0A0A0A] transition hover:bg-[#E3D5A7]"
+          >
+            Registar venda
+          </Link>
         }
         nota={
           cartoes.posicao && cartoes.equipa
@@ -249,7 +256,7 @@ export default async function SellerDashboardPage() {
         />
         <Lista
           titulo="Pagamentos de comissões"
-          href="/vendedor/perfil"
+          href="/vendedor/levantamentos"
           vazio="Ainda não recebeu comissões."
           itens={historico.pagamentos.map((p) => ({
             chave: p.id,
@@ -274,6 +281,66 @@ export default async function SellerDashboardPage() {
         <Acao href="/vendedor/comunicados" titulo="Comunicados" descricao="Avisos da gestão" />
         <Acao href="/vendedor/formacao" titulo="Formação INUKA" descricao="Cursos e progresso" />
       </div>
+
+      {/* ---------- Dados pessoais e profissionais (o antigo «perfil») ---------- */}
+      {ficha && (
+        <div className="mt-8 grid gap-4 lg:grid-cols-2">
+          <section className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-6">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-sm font-medium text-[#F5F5F5]">Dados pessoais</h2>
+              <DadosPessoais
+                id={ficha.id}
+                whatsapp={ficha.whatsapp}
+                address={ficha.address}
+                municipio={ficha.municipio}
+              />
+            </div>
+
+            <dl className="space-y-3 text-sm">
+              <Linha rotulo="Nome completo" valor={ficha.full_name} />
+              <Linha rotulo="Nº do Bilhete de Identidade" valor={ficha.bi_number} mono />
+              <Linha
+                rotulo="Data de nascimento"
+                valor={ficha.birth_date ? dataCurta(ficha.birth_date) : null}
+              />
+              <Linha rotulo="Telefone" valor={ficha.phone} />
+              <Linha rotulo="WhatsApp" valor={ficha.whatsapp} />
+              <Linha rotulo="Endereço" valor={ficha.address} />
+              <Linha rotulo="Município" valor={ficha.municipio} />
+              <Linha rotulo="Província" valor={ficha.provincia_nome} />
+              <Linha rotulo="Email" valor={ficha.email} />
+            </dl>
+
+            <p className="mt-4 text-[11px] leading-relaxed text-[#525252]">
+              O BI e a morada só são visíveis para si e para a gestão da sua província.
+              Para corrigir o BI, fale com o seu gestor.
+            </p>
+          </section>
+
+          <section className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-6">
+            <h2 className="mb-4 text-sm font-medium text-[#F5F5F5]">Dados profissionais</h2>
+            <dl className="space-y-3 text-sm">
+              <Linha
+                rotulo="Data de entrada"
+                valor={ficha.hired_at ? dataCurta(ficha.hired_at) : null}
+              />
+              <Linha rotulo="Função" valor={ficha.job_title} />
+              <Linha rotulo="Categoria" valor={ficha.category} />
+              <Linha rotulo="Estado" valor={ficha.is_active ? "Ativo" : "Inativo"} />
+              <Linha rotulo="Gestor responsável" valor={ficha.manager_name} />
+              <Linha rotulo="Província de atuação" valor={ficha.provincia_nome} />
+              <Linha rotulo="Delegação" valor={ficha.delegacao_nome} />
+              <Linha
+                rotulo="Taxa de comissão"
+                valor={`${formatarTaxa(taxa.efetiva)} ${
+                  taxa.origem === "pessoal" ? "(pessoal)" : "(da empresa)"
+                }`}
+              />
+              <Linha rotulo="Conta criada em" valor={dataCurta(ficha.created_at)} />
+            </dl>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
@@ -352,5 +419,20 @@ function Acao({ href, titulo, descricao }: { href: string; titulo: string; descr
       <h3 className="mb-1 text-sm font-medium text-[#C9A962]">{titulo}</h3>
       <p className="text-xs text-[#A3A3A3]">{descricao}</p>
     </Link>
+  );
+}
+
+function Linha({ rotulo, valor, mono }: { rotulo: string; valor: string | null; mono?: boolean }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-[#1F1F1F] pb-2 last:border-0">
+      <dt className="text-[#6F6F6F]">{rotulo}</dt>
+      <dd
+        className={`text-right ${valor ? "text-[#E5E5E5]" : "text-[#3F3F3F]"} ${
+          mono ? "font-mono text-xs" : ""
+        }`}
+      >
+        {valor || "—"}
+      </dd>
+    </div>
   );
 }

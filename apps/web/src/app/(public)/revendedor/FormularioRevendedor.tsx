@@ -92,7 +92,7 @@ export default function FormularioRevendedor({ provincias }: { provincias: Provi
       onSubmit={enviar}
       className="rounded-2xl border border-[#262626] bg-[#141414] p-6 sm:p-8"
     >
-      <h2 className="text-lg font-medium text-[#F5F5F5]">Quero ser revendedor INUKA</h2>
+      <h2 className="text-lg font-medium text-[#F5F5F5]">Quero ser colaborador INUKA</h2>
       <p className="mt-1 text-xs text-[#6F6F6F]">
         Deixe o seu contacto. A gestão recebe a candidatura e responde.
       </p>

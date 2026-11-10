@@ -64,6 +64,7 @@ for (const rel of [
   "migrations/0013_perfis_loja.sql",
   "migrations/0014_eliminar_forcado.sql",
   "migrations/0015_promocoes_levantamentos.sql",
+  "migrations/0016_eliminar_colaborador.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -2856,6 +2857,110 @@ const resumoLoja = await asUser(LOJA, async () => {
 });
 check("vendedor de loja não pode levantar comissões", /colaboradores/i.test(resumoLoja ?? ""),
   resumoLoja ?? "não deu erro");
+
+// ===========================================================================
+console.log("\n--- 18. ELIMINAR COLABORADOR E AS SUAS VENDAS ---");
+
+// O colaborador VEND2 tem 2 registos de venda, 4 produtos e 2 comissões —
+// é o caso que o requisito descreve.
+const impactoElim = await asUser(MANAGER, async () =>
+  q(`SELECT public.impacto_eliminar_colaborador('${VEND2}') AS r`));
+const impElim = impactoElim[0].r;
+check("gestão vê o que vai desaparecer",
+  Number(impElim.vendas) === 2 && Number(impElim.unidades) === 4 && Number(impElim.comissoes) === 2,
+  JSON.stringify({ vendas: impElim.vendas, unidades: impElim.unidades, comissoes: impElim.comissoes }));
+check("o volume e as comissões batem com as vendas",
+  Number(impElim.volume) === 38000 && Number(impElim.comissoes_valor) === 3800,
+  JSON.stringify({ volume: impElim.volume, comissoes: impElim.comissoes_valor }));
+
+// O próprio colaborador não vê nem apaga.
+const veProprio = await asUser(VEND2, async () => {
+  try {
+    await q(`SELECT public.impacto_eliminar_colaborador('${VEND2}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("colaborador não vê o impacto da eliminação", /gestão/i.test(veProprio ?? ""),
+  veProprio ?? "não deu erro");
+
+// Um gestor não se apaga a si próprio.
+const autoApagar = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.eliminar_colaborador('${MANAGER}', 'teste')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("gestão não apaga a própria conta", /própria conta/i.test(autoApagar ?? ""),
+  autoApagar ?? "não deu erro");
+
+// Nem outro gestor.
+const MGR_LDA = "99999999-9999-4999-8999-999999999999";
+await q(`INSERT INTO auth.users (id, email, raw_user_meta_data)
+         VALUES ('${MGR_LDA}', 'mlda@inuka.ao', '{"full_name":"Gestor Luanda","phone":"923000111"}')`);
+await q(`UPDATE public.profiles SET role = 'manager', provincia_id = '${LDA}' WHERE id = '${MGR_LDA}'`);
+
+const outroGestor = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.eliminar_colaborador('${MGR_LDA}', 'teste')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("um gestor não apaga outro gestor por aqui", /mude primeiro o papel/i.test(outroGestor ?? ""),
+  outroGestor ?? "não deu erro");
+
+// Gestor provincial só dentro da sua província.
+const foraDaProvinciaElim = await asUser(MGR_LDA, async () => {
+  try {
+    await q(`SELECT public.eliminar_colaborador('${VEND2}', 'teste')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("gestor provincial não apaga colaborador de outra província",
+  /outra província/i.test(foraDaProvinciaElim ?? ""), foraDaProvinciaElim ?? "não deu erro");
+
+// A eliminação a sério.
+const resultadoElim = await asUser(MANAGER, async () =>
+  q(`SELECT public.eliminar_colaborador('${VEND2}', 'Pediu demissão') AS r`));
+check("gestão elimina o colaborador", Number(resultadoElim[0].r.vendas) === 2,
+  JSON.stringify(resultadoElim[0].r));
+
+const restosElim = await q(`
+  SELECT
+    (SELECT count(*)::int FROM public.profiles        WHERE id = '${VEND2}')  AS perfil,
+    (SELECT count(*)::int FROM public.sales           WHERE seller_id = '${VEND2}') AS vendas,
+    (SELECT count(*)::int FROM public.sale_items si
+       JOIN public.sales s ON s.id = si.sale_id
+      WHERE s.seller_id = '${VEND2}') AS items,
+    (SELECT count(*)::int FROM public.sale_commissions WHERE seller_id = '${VEND2}') AS comissoes,
+    (SELECT count(*)::int FROM public.seller_profiles  WHERE id = '${VEND2}') AS perfil_vendedor,
+    (SELECT count(*)::int FROM public.user_roles       WHERE user_id = '${VEND2}') AS papeis,
+    (SELECT count(*)::int FROM auth.users              WHERE id = '${VEND2}') AS conta`);
+const restosR = restosElim[0];
+check("o perfil, as vendas, as comissões e a conta desapareceram",
+  restosR.perfil === 0 && restosR.vendas === 0 && restosR.items === 0 && restosR.comissoes === 0
+  && restosR.perfil_vendedor === 0 && restosR.papeis === 0 && restosR.conta === 0,
+  JSON.stringify(restosR));
+
+const auditadoDelete = await q(`SELECT action, new_data FROM public.audit_logs
+  WHERE entity = 'colaboradores' AND entity_id = '${VEND2}'`);
+check("a eliminação fica auditada com o motivo",
+  auditadoDelete.length === 1 && auditadoDelete[0].new_data?.motivo === "Pediu demissão",
+  JSON.stringify(auditadoDelete));
+
+// As vendas de outro colaborador não foram tocadas.
+const sobrevivente = await q(`SELECT count(*)::int n FROM public.sales WHERE seller_id = '${VEND}'`);
+check("as vendas dos outros colaboradores ficam intactas", sobrevivente[0].n === 7,
+  String(sobrevivente[0].n));
+
+// Eliminar de novo não rebenta o ecrã: a função diz que já não existe.
+const repetidoElim = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.eliminar_colaborador('${VEND2}', 'repetidoElim')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("eliminar duas vezes diz que já não existe", /não encontrado/i.test(repetidoElim ?? ""),
+  repetidoElim ?? "não deu erro");
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

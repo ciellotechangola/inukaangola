@@ -1676,15 +1676,28 @@ await check("aba de referência mostra o código e os contactos da INUKA", async
   return "200 · INK + 2 números";
 });
 
-await check("colaborador abre o próprio perfil", async () => {
+// A tela «Perfil» foi fundida na Área de Colaborador: o endereço antigo
+// responde com um redireccionamento permanente e os dados aparecem em /vendedor.
+await check("o perfil antigo redirecciona para a Área de colaborador", async () => {
   const r = await pagina("/vendedor/perfil", cVendedor);
+  assert(r.status === 308 || r.status === 307 || r.status === 301, `HTTP ${r.status}`);
+  assert(String(r.location ?? "").endsWith("/vendedor"), `Location ${r.location}`);
+  return `${r.status} -> /vendedor`;
+});
+
+await check("a Área de colaborador traz os dados do antigo perfil", async () => {
+  const r = await pagina("/vendedor", cVendedor);
   assert(r.status === 200, `HTTP ${r.status}`);
   const t = texto(r.html);
   assert(
-    t.includes("Dados pessoais") || t.includes("PATCH_COLABORADORES"),
-    "sem perfil nem aviso de migração"
+    (t.includes("Dados pessoais") && t.includes("Dados profissionais")) ||
+      t.includes("PATCH_COLABORADORES"),
+    "sem os dados pessoais nem aviso de migração"
   );
-  return "200";
+  // A referência aparece uma só vez: no cartão de identidade.
+  const codigos = t.match(/INK-[A-Z]{3}-\d{5}/g) ?? [];
+  assert(codigos.length === 1, `referência repetida ${codigos.length}×`);
+  return "200 · dados + 1 referência";
 });
 
 await check("colaborador não abre a ficha de outro colaborador", async () => {
@@ -2945,7 +2958,7 @@ await check("a página de revendedor mostra o formulário", async () => {
   const r = await pagina("/revendedor");
   assert(r.status === 200, `status ${r.status}`);
   const t = texto(r.html);
-  assert(/Quero ser revendedor INUKA/.test(t), "sem título do formulário");
+  assert(/Quero ser colaborador INUKA/.test(t), "sem título do formulário");
   assert(/Telefone/.test(t), "sem campo de telefone");
   return "formulário servido a visitantes";
 });
@@ -2953,7 +2966,7 @@ await check("a página de revendedor mostra o formulário", async () => {
 await check("a página inicial tem o botão de revendedor", async () => {
   const r = await pagina("/");
   assert(r.status === 200, `status ${r.status}`);
-  assert(/Quero ser revendedor/.test(texto(r.html)), "sem botão na página inicial");
+  assert(/Quero ser colaborador/.test(texto(r.html)), "sem botão na página inicial");
   assert(/href="\/revendedor"/.test(r.html), "sem ligação para /revendedor");
   return "botão presente na entrada da loja";
 });
@@ -3043,7 +3056,7 @@ if (TEM_REVENDEDOR) {
 await check("a gestão abre a página de candidaturas", async () => {
   const r = await pagina("/gerente/revendedores", cookieSessao(sGestor));
   assert(r.status === 200, `status ${r.status}`);
-  assert(/Candidaturas a revendedor/.test(texto(r.html)), "sem título da página");
+  assert(/Candidaturas a colaborador/.test(texto(r.html)), "sem título da página");
   return "página servida à gestão";
 });
 

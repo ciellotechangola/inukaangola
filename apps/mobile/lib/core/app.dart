@@ -151,6 +151,9 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   int _indice = 0;
+  /// Já se decidiu onde a app abre nesta sessão? Sem isto, cada refrescamento
+  /// do perfil puxava o colaborador de volta para a Área a meio de uma tarefa.
+  bool _arranqueFeito = false;
 
   @override
   void initState() {
@@ -158,6 +161,9 @@ class _MainShellState extends State<MainShell> {
     // O carrinho é local: carrega antes de o utilizador chegar ao separador.
     CartStore.instance.carregar();
     Sessao.instance.addListener(_aoMudarSessao);
+    // A sessão pode já estar carregada quando a moldura nasce (login feito
+    // noutra visita): decide-se no primeiro frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _aoMudarSessao());
   }
 
   @override
@@ -167,7 +173,19 @@ class _MainShellState extends State<MainShell> {
   }
 
   void _aoMudarSessao() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {
+      // Quem trabalha na empresa entra na Área, não na montra: é lá que estão
+      // as vendas, a carteira e o dinheiro. Cliente e visitante continuam a
+      // abrir no catálogo, que é o que vêm ver.
+      if (!_arranqueFeito && Sessao.instance.autenticado) {
+        _arranqueFeito = true;
+        if (Sessao.instance.papel.eEquipa) {
+          final i = _separadores().indexWhere((s) => s.chave == 'area');
+          if (i >= 0) _indice = i;
+        }
+      }
+    });
   }
 
   void _irPara(String chave) {

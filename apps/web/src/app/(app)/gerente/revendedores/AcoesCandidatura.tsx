@@ -12,7 +12,7 @@ const ESTADOS = [
 ] as const;
 
 /**
- * Estado de uma candidatura a revendedor.
+ * Estado de uma candidatura a colaborador.
  *
  * Ao sair de "novo" grava-se quem tratou e quando — sem isso não se sabe se
  * alguém já falou com a pessoa, e duas pessoas da gestão ligam duas vezes.

@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import Link from "next/link";
 import { BadgeCheck, MapPin, Phone } from "lucide-react";
 import CopiarReferencia from "./CopiarReferencia";
 import FotoPerfil from "./FotoPerfil";
@@ -135,12 +134,6 @@ export default function ColaboradorIdentidade({
           {nota}
         </div>
       )}
-
-      <div className="border-t border-[#262626] px-6 py-2">
-        <Link href="/referencia" className="text-[11px] text-[#6F6F6F] transition hover:text-[#C9A962]">
-          Ver a minha aba de referência →
-        </Link>
-      </div>
     </section>
   );
 }

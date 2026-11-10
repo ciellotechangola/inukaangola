@@ -63,7 +63,7 @@ class _PainelColaboradorPageState extends State<PainelColaboradorPage> {
 
     if (_erro != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('O meu painel')),
+        appBar: AppBar(title: const Text('Área de colaborador')),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -97,7 +97,7 @@ class _PainelColaboradorPageState extends State<PainelColaboradorPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('O meu painel'),
+        title: const Text('Área de colaborador'),
         actions: [
           IconButton(onPressed: _carregar, icon: const Icon(Icons.refresh)),
         ],

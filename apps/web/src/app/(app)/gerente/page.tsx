@@ -120,7 +120,7 @@ export default async function ManagerDashboardPage() {
           <Action href="/gerente/descontos" title="Descontos" />
           <Action href="/gerente/clientes" title="Clientes" />
           <Action href="/gerente/colaboradores" title="Colaboradores" />
-          <Action href="/gerente/revendedores" title="Candidaturas a revendedor" />
+          <Action href="/gerente/revendedores" title="Candidaturas a colaborador" />
           <Action href="/gerente/conversas" title="Mensagens" />
           <Action href="/gerente/relatorios" title="Relatórios" />
           <Action href="/gerente/conteudos" title="Conteúdos publicados" />

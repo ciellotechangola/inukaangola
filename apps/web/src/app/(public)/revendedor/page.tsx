@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { BadgePercent, HandCoins, PackageCheck, Users } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
+import { getProfile } from "@/lib/auth";
 import { listarProvincias } from "@/lib/provincias";
 import { TELEFONES_INUKA, telHref } from "@/lib/contactos";
 import FormularioRevendedor from "./FormularioRevendedor";
@@ -8,18 +10,26 @@ import FormularioRevendedor from "./FormularioRevendedor";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Quero ser revendedor · INUKA Angola",
+  title: "Quero ser colaborador · INUKA Angola",
   description:
-    "Candidate-se a revendedor INUKA: perfumes e produtos de beleza com comissão por venda e acompanhamento da equipa.",
+    "Candidate-se a colaborador INUKA: perfumes e produtos de beleza com comissão por produto vendido e acompanhamento da equipa.",
 };
 
 /**
- * Candidatura a revendedor.
+ * Candidatura a colaborador.
  *
  * Página pública: quem chega aqui pode nem ter conta. O pedido cai em
  * `reseller_applications` e aparece ao gestor em `/gerente/revendedores`.
+ *
+ * Quem já é da equipa não vê esta página: manda-se para a área dele. Um
+ * colaborador não se candidata ao que já é.
  */
 export default async function RevendedorPage() {
+  const perfil = await getProfile();
+  if (perfil?.role === "seller") redirect("/vendedor");
+  if (perfil?.role === "store_seller") redirect("/loja");
+  if (perfil?.role === "manager") redirect("/gerente");
+
   const supabase = await createClientServer();
   const provincias = await listarProvincias(supabase);
 
@@ -37,15 +47,15 @@ export default async function RevendedorPage() {
           </h1>
 
           <p className="mt-5 max-w-lg text-sm leading-relaxed text-[#A3A3A3] sm:text-base">
-            Perfumes e produtos de beleza com comissão por venda, carteira de clientes própria e
-            apoio da equipa. Deixe o seu contacto — a gestão fala consigo.
+            Perfumes e produtos de beleza com comissão por produto vendido, carteira de clientes
+            própria e apoio da equipa. Deixe o seu contacto — a gestão fala consigo.
           </p>
 
           <ul className="mt-8 space-y-4">
             <Vantagem
               icone={<HandCoins className="h-4 w-4" />}
-              titulo="Comissão por venda"
-              texto="Uma percentagem definida pela empresa, igual para toda a equipa, paga sobre o valor vendido."
+              titulo="Comissão por produto"
+              texto="Uma percentagem definida pela empresa, igual para toda a equipa, paga sobre cada produto vendido."
             />
             <Vantagem
               icone={<Users className="h-4 w-4" />}

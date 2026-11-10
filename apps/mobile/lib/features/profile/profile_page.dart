@@ -154,7 +154,10 @@ class _ProfilePageState extends State<ProfilePage> {
                 alignment: WrapAlignment.center,
                 children: [
                   Etiqueta(texto: papel.rotulo, cor: AppConfig.gold),
-                  if ((p['referencia'] as String?)?.isNotEmpty == true)
+                  // A equipa vê o código no cartão da Área de colaborador. Aqui
+                  // só se mostra a quem não tem esse cartão — um código em dois
+                  // sítios deixa de ser «o» código.
+                  if (!papel.eEquipa && (p['referencia'] as String?)?.isNotEmpty == true)
                     Etiqueta(texto: p['referencia'] as String),
                   if ((p['provincia_nome'] as String?)?.isNotEmpty == true)
                     Etiqueta(texto: p['provincia_nome'] as String),

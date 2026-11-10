@@ -58,6 +58,80 @@ export interface ClienteHistorico {
   assigned_at: string;
 }
 
+/**
+ * O que `impacto_eliminar_colaborador()` devolve: o retrato do que desaparece
+ * quando a gestão apaga um colaborador. Mostra-se antes de perguntar «tem a
+ * certeza?» — apagar não tem volta.
+ */
+export interface ImpactoEliminar {
+  id: string;
+  nome: string;
+  referencia: string | null;
+  papel: string;
+  provincia_id: string | null;
+  /** Registos de venda que vão ser apagados. */
+  vendas: number;
+  /** Unidades de produto nesses registos — a leitura «venda = produto». */
+  unidades: number;
+  volume: number;
+  comissoes: number;
+  comissoes_valor: number;
+  total_pago: number;
+  levantamentos: number;
+  clientes: number;
+  reservas: number;
+  encomendas: number;
+  mensagens: number;
+}
+
+/** Valores a zero, para quando a migração ainda não estiver aplicada. */
+export const IMPACTO_VAZIO: ImpactoEliminar = {
+  id: "",
+  nome: "",
+  referencia: null,
+  papel: "seller",
+  provincia_id: null,
+  vendas: 0,
+  unidades: 0,
+  volume: 0,
+  comissoes: 0,
+  comissoes_valor: 0,
+  total_pago: 0,
+  levantamentos: 0,
+  clientes: 0,
+  reservas: 0,
+  encomendas: 0,
+  mensagens: 0,
+};
+
+/** Normaliza a resposta da RPC — nunca lança, a ficha continua a abrir. */
+export function normalizarImpacto(bruto: unknown): ImpactoEliminar {
+  if (!bruto || typeof bruto !== "object") return { ...IMPACTO_VAZIO };
+  const r = bruto as Record<string, unknown>;
+  const n = (v: unknown) => {
+    const x = Number(v);
+    return Number.isFinite(x) ? x : 0;
+  };
+  return {
+    id: String(r.id ?? ""),
+    nome: String(r.nome ?? ""),
+    referencia: (r.referencia as string | null) ?? null,
+    papel: String(r.papel ?? "seller"),
+    provincia_id: (r.provincia_id as string | null) ?? null,
+    vendas: n(r.vendas),
+    unidades: n(r.unidades),
+    volume: n(r.volume),
+    comissoes: n(r.comissoes),
+    comissoes_valor: n(r.comissoes_valor),
+    total_pago: n(r.total_pago),
+    levantamentos: n(r.levantamentos),
+    clientes: n(r.clientes),
+    reservas: n(r.reservas),
+    encomendas: n(r.encomendas),
+    mensagens: n(r.mensagens),
+  };
+}
+
 export interface PagamentoHistorico {
   id: string;
   amount: number;

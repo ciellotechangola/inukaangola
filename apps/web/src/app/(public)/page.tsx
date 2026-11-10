@@ -148,7 +148,7 @@ export default async function HomePage() {
                 className="inline-flex items-center gap-2 rounded-lg border border-[#C9A962]/50 bg-[#C9A962]/5 px-6 py-3 text-sm font-medium text-[#C9A962] transition hover:bg-[#C9A962] hover:text-[#0A0A0A]"
               >
                 <Users className="h-4 w-4" />
-                Quero ser revendedor
+                Quero ser colaborador
               </Link>
             </div>
 

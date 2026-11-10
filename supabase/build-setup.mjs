@@ -30,6 +30,7 @@ const PARTES = [
   { ficheiro: "migrations/0013_perfis_loja.sql", titulo: "PERFIS: VENDEDOR DE LOJA, ELIMINAÇÃO DE PRODUTOS E FEED" },
   { ficheiro: "migrations/0014_eliminar_forcado.sql", titulo: "ELIMINAR PRODUTO COM O HISTÓRICO (MODO FORÇADO)" },
   { ficheiro: "migrations/0015_promocoes_levantamentos.sql", titulo: "PROMOÇÕES POR PROVÍNCIA, COMISSÕES E LEVANTAMENTOS" },
+  { ficheiro: "migrations/0016_eliminar_colaborador.sql", titulo: "ELIMINAR COLABORADOR E AS SUAS VENDAS" },
 ];
 
 const cabecalho = `-- =============================================================================
