@@ -11,9 +11,11 @@ export default async function ConversasPage() {
   const voltar =
     profile.role === "manager"
       ? { href: "/gerente", label: "Painel de gestão" }
-      : profile.role === "seller"
-        ? { href: "/vendedor", label: "Área de colaborador" }
-        : { href: "/cliente", label: "Área de cliente" };
+      : profile.role === "store_seller"
+        ? { href: "/loja", label: "Loja" }
+        : profile.role === "seller"
+          ? { href: "/vendedor", label: "Área de colaborador" }
+          : { href: "/cliente", label: "Área de cliente" };
 
   return <Chat voltarHref={voltar.href} voltarLabel={voltar.label} />;
 }

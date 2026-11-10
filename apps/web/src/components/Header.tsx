@@ -198,10 +198,10 @@ export default function Header() {
           ) : (
             <Link
               href="/login"
-              className="inline-flex items-center gap-2 rounded-lg border border-[#404040] px-4 py-2 text-sm font-medium text-[#F5F5F5] transition hover:border-[#C9A962] hover:text-[#C9A962]"
+              className="inline-flex items-center gap-2 rounded-lg bg-[#C9A962] px-4 py-2 text-sm font-semibold text-[#0A0A0A] transition hover:bg-[#D8BC7A]"
             >
               <User className="h-4 w-4" />
-              {loading ? "..." : "Entrar"}
+              {loading ? "..." : "Iniciar sessão"}
             </Link>
           )}
         </div>
@@ -277,11 +277,11 @@ export default function Header() {
             </Link>
             <Link
               href={dashboardLink}
-              className="inline-flex items-center gap-2 text-[#C9A962]"
+              className="inline-flex items-center gap-2 rounded-lg bg-[#C9A962] px-4 py-2.5 font-semibold text-[#0A0A0A]"
               onClick={() => setMobileOpen(false)}
             >
               <User className="h-4 w-4" />
-              {profile ? "A minha conta" : "Entrar"}
+              {profile ? "A minha conta" : "Iniciar sessão"}
             </Link>
             {profile && (
               <button onClick={handleSignOut} className="text-left text-[#DC2626]">

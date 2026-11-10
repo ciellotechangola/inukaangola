@@ -1,6 +1,16 @@
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowRight, BadgeCheck, CreditCard, Download, Headphones, Sparkles, Truck, Users } from "lucide-react";
+import {
+  ArrowRight,
+  BadgeCheck,
+  CreditCard,
+  Download,
+  Headphones,
+  LogIn,
+  Sparkles,
+  Truck,
+  Users,
+} from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
 import { TELEFONES_INUKA, telHref } from "@/lib/contactos";
 import { lerEntrega, nomesProvinciasGratis } from "@/lib/entrega-server";
@@ -17,7 +27,7 @@ type ProdutoComEstoque = Product;
 async function getDados() {
   const supabase = await createClientServer();
 
-  const [produtosRes, categoriasRes] = await Promise.all([
+  const [produtosRes, categoriasRes, sessaoRes] = await Promise.all([
     supabase
       .from("products")
       .select("*, category:categories(*), images:product_images(*)")
@@ -25,7 +35,25 @@ async function getDados() {
       .order("created_at", { ascending: false })
       .limit(24),
     supabase.from("categories").select("*").eq("is_active", true).order("sort_order"),
+    // Quem já entrou não precisa de ver «Iniciar sessão»: o botão passa a
+    // levar à sua área. O perfil é lido aqui, no servidor, para a página não
+    // piscar de «Iniciar sessão» para «A minha área» depois de hidratar.
+    supabase.auth.getUser(),
   ]);
+
+  const utilizador = sessaoRes.data?.user ?? null;
+  let conta: { nome: string; papel: string } | null = null;
+  if (utilizador) {
+    const { data: perfil } = await supabase
+      .from("profiles")
+      .select("full_name, role")
+      .eq("id", utilizador.id)
+      .maybeSingle();
+    conta = {
+      nome: (perfil?.full_name as string | undefined)?.trim() || "",
+      papel: (perfil?.role as string | undefined) ?? "customer",
+    };
+  }
 
   const produtos = (produtosRes.data ?? []) as ProdutoComEstoque[];
 
@@ -49,7 +77,16 @@ async function getDados() {
     stock,
     precos,
     categorias: (categoriasRes.data ?? []) as Category[],
+    conta,
   };
+}
+
+/** A casa de cada papel. Sem conta, é o ecrã de entrada. */
+function areaDaConta(papel: string): string {
+  if (papel === "manager") return "/gerente";
+  if (papel === "store_seller") return "/loja";
+  if (papel === "seller") return "/vendedor";
+  return "/cliente";
 }
 
 /** Unidades compráveis; `null` quando a base não tem registo de stock. */
@@ -58,7 +95,9 @@ function disponibilidade(stock: Map<string, number>, id: string): number | null 
 }
 
 export default async function HomePage() {
-  const { produtos, stock, precos, categorias } = await getDados();
+  const { produtos, stock, precos, categorias, conta } = await getDados();
+  const destinoConta = conta ? areaDaConta(conta.papel) : "/login";
+  const rotuloConta = conta ? "A minha área" : "Iniciar sessão";
 
   // A regra de entrega é configurável: não se escreve «grátis em Luanda,
   // Uíge e Huambo» à mão, senão o site promete o que a caixa não cobra.
@@ -128,20 +167,23 @@ export default async function HomePage() {
               momento do teu dia. Reserve online e receba em casa.
             </p>
 
+            {/* O botão de entrada fica em primeiro lugar e para todos: cliente,
+                colaborador, loja ou gestão. Quem já tem sessão vê «A minha
+                área» a apontar para a sua casa, em vez de um «Entrar» inútil. */}
             <div className="mt-9 flex flex-wrap items-center gap-3">
               <Link
-                href="/catalogo"
+                href={destinoConta}
                 className="inline-flex items-center gap-2 rounded-lg bg-[#C9A962] px-6 py-3 text-sm font-semibold text-[#0A0A0A] transition hover:bg-[#D8BC7A]"
+              >
+                <LogIn className="h-4 w-4" />
+                {rotuloConta}
+              </Link>
+              <Link
+                href="/catalogo"
+                className="inline-flex items-center gap-2 rounded-lg border border-[#3A3A3A] px-6 py-3 text-sm font-medium text-[#E5E5E5] transition hover:border-[#C9A962] hover:text-[#C9A962]"
               >
                 Ver catálogo
                 <ArrowRight className="h-4 w-4" />
-              </Link>
-              <Link
-                href="/download"
-                className="inline-flex items-center gap-2 rounded-lg border border-[#3A3A3A] px-6 py-3 text-sm font-medium text-[#E5E5E5] transition hover:border-[#C9A962] hover:text-[#C9A962]"
-              >
-                <Download className="h-4 w-4" />
-                Descarregar a app
               </Link>
               <Link
                 href="/revendedor"
@@ -150,9 +192,35 @@ export default async function HomePage() {
                 <Users className="h-4 w-4" />
                 Quero ser colaborador
               </Link>
+              <Link
+                href="/download"
+                className="inline-flex items-center gap-2 rounded-lg px-2 py-3 text-sm font-medium text-[#A3A3A3] transition hover:text-[#C9A962]"
+              >
+                <Download className="h-4 w-4" />
+                Descarregar a app
+              </Link>
             </div>
 
-            <p className="mt-8 text-xs text-[#6F6F6F]">
+            <p className="mt-6 text-xs leading-relaxed text-[#6F6F6F]">
+              {conta ? (
+                <>
+                  {`Sessão iniciada${conta.nome ? ` como ${conta.nome.split(" ")[0]}` : ""}. `}
+                  <Link href={destinoConta} className="text-[#C9A962] underline-offset-4 hover:underline">
+                    Ver a minha área
+                  </Link>
+                </>
+              ) : (
+                <>
+                  Ainda não tem conta?{" "}
+                  <Link href="/registo" className="text-[#C9A962] underline-offset-4 hover:underline">
+                    Criar conta de cliente
+                  </Link>{" "}
+                  — leva um minuto.
+                </>
+              )}
+            </p>
+
+            <p className="mt-3 text-xs text-[#6F6F6F]">
               {produtos.length > 0
                 ? `${produtos.length} produtos disponíveis · ${entregaCurta.toLowerCase()}`
                 : "Catálogo em actualização · fale connosco para encomendar"}

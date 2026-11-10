@@ -484,6 +484,16 @@ await check("home é a loja e não o modelo do create-next-app", async () => {
   return "home real";
 });
 
+await check("a tela inicial mostra «Iniciar sessão» a quem ainda não entrou", async () => {
+  const r = await pagina("/");
+  assert(r.status === 200, `HTTP ${r.status}`);
+  // O botão estava só no cabeçalho, e o cabeçalho é um componente de cliente:
+  // no HTML do servidor não havia nenhum caminho visível para entrar.
+  assert(/Iniciar sessão/.test(texto(r.html)), "sem botão «Iniciar sessão» na home");
+  assert(/href="\/login"/.test(r.html), "o botão não leva a /login");
+  return "botão à vista";
+});
+
 await check("páginas públicas têm um só cabeçalho e um só rodapé", async () => {
   // Os layouts de grupo já os renderizam; as páginas voltaram a renderizá-los
   // e o resultado foram dois de cada.
