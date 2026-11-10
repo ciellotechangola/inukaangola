@@ -1721,6 +1721,287 @@ await check("colaborador não abre a ficha de outro colaborador", async () => {
   return `${r.status}`;
 });
 
+// --- Ficha do colaborador: tarefas, gestor responsável e correcção de vendas --
+// A tabela é nova (0018): sem o patch, estes testes não correm e dizem porquê.
+const sondaTarefas = await sb("/rest/v1/colaborador_tarefas?select=id&limit=1", {
+  key: SR,
+  jwt: SR,
+});
+const TEM_TAREFAS = sondaTarefas.status !== 404;
+
+if (!TEM_TAREFAS) {
+  console.log(`
+  ATENÇÃO — a base de dados ainda não tem a migração 0018 (tarefas, gestor
+  responsável e correcção de vendas).
+  Abra o Supabase -> SQL Editor e cole:
+      supabase/PATCH_TAREFAS_GESTOR.sql
+  Os testes desta secção ficam por correr — não são dados como aprovados.
+`);
+}
+
+if (TEM_TAREFAS) {
+  const SUF_T = Date.now().toString().slice(-6);
+  const TAREFA_TITULO = `[E2E] Entregar o BI ${SUF_T}`;
+  const PRAZO = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+
+  const criadaT = await sb("/rest/v1/colaborador_tarefas", {
+    method: "POST",
+    jwt: sGestor.access_token,
+    prefer: "return=representation",
+    body: {
+      seller_id: sVendedor.user.id,
+      titulo: TAREFA_TITULO,
+      descricao: "Cópia do BI e comprovativo de morada.",
+      prazo: PRAZO,
+      prioridade: "alta",
+      criado_por: sGestor.user.id,
+    },
+  });
+  assert(criadaT.ok, `criar tarefa: ${JSON.stringify(criadaT.data).slice(0, 160)}`);
+  const TAREFA_ID = criadaT.data[0].id;
+
+  await check("a gestão atribui uma tarefa ao colaborador", async () => {
+    const lida = await sb(
+      `/rest/v1/colaborador_tarefas?select=titulo,estado,prazo,prioridade&id=eq.${TAREFA_ID}`,
+      { key: SR, jwt: SR }
+    );
+    assert(lida.data[0].estado === "pendente", lida.data[0].estado);
+    assert(lida.data[0].prioridade === "alta", lida.data[0].prioridade);
+    return `pendente · alta · ${lida.data[0].prazo}`;
+  });
+
+  await check("a ficha do gestor mostra as tarefas e o gestor responsável", async () => {
+    const r = await pagina(`/gerente/colaboradores/${sVendedor.user.id}`, cGestor);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+    assert(t.includes("Tarefas do colaborador"), "sem a secção de tarefas");
+    assert(t.includes(TAREFA_TITULO), "a tarefa não aparece na ficha");
+    assert(t.includes("Gestor responsável"), "sem a secção do gestor");
+    assert(t.includes("Corrigir vendas"), "sem a secção de correcção de vendas");
+    return "tarefas + gestor + vendas";
+  });
+
+  await check("o colaborador vê a tarefa na área dele", async () => {
+    const r = await pagina("/vendedor", cVendedor);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+    assert(t.includes("As minhas tarefas"), "sem a secção «As minhas tarefas»");
+    assert(t.includes(TAREFA_TITULO), "a tarefa não chegou ao colaborador");
+    assert(t.includes("Alta"), "sem a prioridade");
+    return "tarefa visível";
+  });
+
+  await check("o colaborador marca a tarefa como concluída", async () => {
+    const r = await sb(`/rest/v1/colaborador_tarefas?id=eq.${TAREFA_ID}`, {
+      method: "PATCH",
+      jwt: sVendedor.access_token,
+      prefer: "return=representation",
+      body: { estado: "concluida" },
+    });
+    assert(r.ok, JSON.stringify(r.data).slice(0, 160));
+    assert(r.data[0].estado === "concluida", r.data[0].estado);
+    // A data de conclusão é escrita pelo trigger, não pelo cliente.
+    assert(!!r.data[0].concluida_em, "sem data de conclusão");
+    return `concluída em ${String(r.data[0].concluida_em).slice(0, 10)}`;
+  });
+
+  await check("o colaborador não reescreve o que a gestão escreveu", async () => {
+    const r = await sb(`/rest/v1/colaborador_tarefas?id=eq.${TAREFA_ID}`, {
+      method: "PATCH",
+      jwt: sVendedor.access_token,
+      body: { titulo: "outra coisa" },
+    });
+    assert(!r.ok, `devia recusar, devolveu ${r.status}`);
+    assert(
+      String(JSON.stringify(r.data)).includes("só pode marcar"),
+      String(JSON.stringify(r.data)).slice(0, 160)
+    );
+    return `${r.status} recusado`;
+  });
+
+  await check("a lista de gestores traz o gestor da província", async () => {
+    const r = await sb("/rest/v1/rpc/gestores_para_colaborador", {
+      method: "POST",
+      jwt: sGestor.access_token,
+      body: { p_seller: sVendedor.user.id },
+    });
+    assert(r.ok, JSON.stringify(r.data).slice(0, 160));
+    const lista = Array.isArray(r.data) ? r.data : [];
+    assert(lista.some((g) => g.id === sGestor.user.id), "o gestor não está na lista");
+    assert(lista.every((g) => g.id !== sVendedor.user.id), "o colaborador aparece como gestor");
+    return `${lista.length} candidato(s)`;
+  });
+
+  await check("a gestão define o gestor responsável", async () => {
+    const r = await sb("/rest/v1/rpc/definir_gestor_colaborador", {
+      method: "POST",
+      jwt: sGestor.access_token,
+      body: { p_seller: sVendedor.user.id, p_manager: sGestor.user.id },
+    });
+    assert(r.ok, JSON.stringify(r.data).slice(0, 160));
+    assert(r.data.gestor_id === sGestor.user.id, JSON.stringify(r.data));
+
+    const lido = await sb(
+      `/rest/v1/seller_profiles?select=manager_id&id=eq.${sVendedor.user.id}`,
+      { key: SR, jwt: SR }
+    );
+    assert(lido.data[0].manager_id === sGestor.user.id, String(lido.data[0].manager_id));
+    return "gestor gravado na ficha";
+  });
+
+  await check("o colaborador não muda o gestor dele", async () => {
+    const r = await sb("/rest/v1/rpc/definir_gestor_colaborador", {
+      method: "POST",
+      jwt: sVendedor.access_token,
+      body: { p_seller: sVendedor.user.id, p_manager: null },
+    });
+    assert(!r.ok, `devia recusar, devolveu ${r.status}`);
+    return `${r.status} recusado`;
+  });
+
+  // --- correcção de uma venda ------------------------------------------------
+  const perfilVend = await sb(
+    `/rest/v1/profiles?select=provincia_id&id=eq.${sVendedor.user.id}`,
+    { key: SR, jwt: SR }
+  );
+  const PROV_VEND = perfilVend.data?.[0]?.provincia_id ?? null;
+  const prodQ = await sb("/rest/v1/products?select=id&is_active=eq.true&limit=1", {
+    key: SR,
+    jwt: SR,
+  });
+  const PROD_ID = prodQ.data?.[0]?.id ?? null;
+
+  const REF_VENDA = `VND-E2E-${SUF_T}`;
+  const vendaCriada = await sb("/rest/v1/sales", {
+    method: "POST",
+    key: SR,
+    jwt: SR,
+    prefer: "return=representation",
+    body: {
+      reference: REF_VENDA,
+      seller_id: sVendedor.user.id,
+      total_amount: 0,
+      payment_status: "paid",
+      status: "completed",
+      provincia_id: PROV_VEND,
+    },
+  });
+  assert(vendaCriada.ok, `criar venda: ${JSON.stringify(vendaCriada.data).slice(0, 160)}`);
+  const VENDA_ID = vendaCriada.data[0].id;
+
+  const linhaCriada = await sb("/rest/v1/sale_items", {
+    method: "POST",
+    key: SR,
+    jwt: SR,
+    prefer: "return=representation",
+    body: {
+      sale_id: VENDA_ID,
+      product_id: PROD_ID,
+      quantity: 2,
+      unit_price: 10000,
+      total_price: 20000,
+    },
+  });
+  assert(linhaCriada.ok, `criar linha: ${JSON.stringify(linhaCriada.data).slice(0, 160)}`);
+  const LINHA_ID = linhaCriada.data[0].id;
+
+  await check("a venda nasce com o total das linhas e a comissão", async () => {
+    const r = await sb(
+      `/rest/v1/sales?select=total_amount,sale_commissions(amount)&id=eq.${VENDA_ID}`,
+      { key: SR, jwt: SR }
+    );
+    const total = Number(r.data[0].total_amount);
+    const comissao = Number(r.data[0].sale_commissions?.[0]?.amount ?? -1);
+    assert(total === 20000, `total ${total}`);
+    assert(comissao >= 0, `comissão ${comissao}`);
+    return `total ${total} · comissão ${comissao}`;
+  });
+
+  await check("a gestão corrige a quantidade e o total acompanha", async () => {
+    const r = await sb(`/rest/v1/sale_items?id=eq.${LINHA_ID}`, {
+      method: "PATCH",
+      jwt: sGestor.access_token,
+      prefer: "return=representation",
+      body: { quantity: 3, total_price: 30000 },
+    });
+    assert(r.ok, JSON.stringify(r.data).slice(0, 160));
+
+    const lida = await sb(
+      `/rest/v1/sales?select=total_amount,sale_commissions(amount)&id=eq.${VENDA_ID}`,
+      { key: SR, jwt: SR }
+    );
+    assert(Number(lida.data[0].total_amount) === 30000, `total ${lida.data[0].total_amount}`);
+    return `20000 -> ${Number(lida.data[0].total_amount)}`;
+  });
+
+  await check("o colaborador não corrige vendas pela gestão", async () => {
+    const r = await sb(`/rest/v1/sale_items?id=eq.${LINHA_ID}`, {
+      method: "PATCH",
+      jwt: sVendedor.access_token,
+      body: { quantity: 9, total_price: 90000 },
+    });
+    // Sem política de UPDATE para o colaborador: o PostgREST devolve 200 com
+    // zero linhas. O que interessa é o valor não ter mudado.
+    const lida = await sb(`/rest/v1/sales?select=total_amount&id=eq.${VENDA_ID}`, {
+      key: SR,
+      jwt: SR,
+    });
+    assert(Number(lida.data[0].total_amount) === 30000, `total ${lida.data[0].total_amount}`);
+    return `${r.status} · total intacto`;
+  });
+
+  await check("venda com comissão paga não se corrige", async () => {
+    await sb(`/rest/v1/sale_commissions?sale_id=eq.${VENDA_ID}`, {
+      method: "PATCH",
+      key: SR,
+      jwt: SR,
+      body: { status: "paid", paid_at: new Date().toISOString() },
+    });
+
+    const r = await sb(`/rest/v1/sale_items?id=eq.${LINHA_ID}`, {
+      method: "PATCH",
+      jwt: sGestor.access_token,
+      body: { quantity: 5, total_price: 50000 },
+    });
+    assert(!r.ok, `devia recusar, devolveu ${r.status}`);
+    assert(
+      String(JSON.stringify(r.data)).includes("comissão paga"),
+      String(JSON.stringify(r.data)).slice(0, 160)
+    );
+    return `${r.status} recusado`;
+  });
+
+  await check("limpar tarefa, gestor e venda do teste", async () => {
+    await sb(`/rest/v1/colaborador_tarefas?id=eq.${TAREFA_ID}`, {
+      method: "DELETE",
+      key: SR,
+      jwt: SR,
+      prefer: "return=minimal",
+    });
+    await sb(`/rest/v1/seller_profiles?id=eq.${sVendedor.user.id}`, {
+      method: "PATCH",
+      key: SR,
+      jwt: SR,
+      prefer: "return=minimal",
+      body: { manager_id: null },
+    });
+    await sb(`/rest/v1/sale_items?id=eq.${LINHA_ID}`, {
+      method: "DELETE",
+      key: SR,
+      jwt: SR,
+      prefer: "return=minimal",
+    });
+    await sb(`/rest/v1/sales?id=eq.${VENDA_ID}`, {
+      method: "DELETE",
+      key: SR,
+      jwt: SR,
+      prefer: "return=minimal",
+    });
+    return "tarefa, gestor e venda removidos";
+  });
+}
+
+
 await check("painel do gestor mostra a rede de colaboradores", async () => {
   const r = await pagina("/gerente", cGestor);
   assert(r.status === 200, `HTTP ${r.status}`);

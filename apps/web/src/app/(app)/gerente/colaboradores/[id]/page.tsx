@@ -15,8 +15,13 @@ import { formatarTaxa, normalizarTaxa } from "@/lib/comissoes";
 import ColaboradorIdentidade from "@/components/ColaboradorIdentidade";
 import CopiarReferencia from "@/components/CopiarReferencia";
 import { GraficoEvolucao, ProgressoMeta } from "@/components/Graficos";
+import { mensagemDeErro } from "@/lib/erros";
+import { ordenarTarefas, type Tarefa } from "@/lib/tarefas";
 import GestaoColaborador from "./GestaoColaborador";
 import EliminarColaborador from "./EliminarColaborador";
+import { TarefasColaborador } from "./TarefasColaborador";
+import { GestorResponsavel, type CandidatoGestor } from "./GestorResponsavel";
+import { CorrigirVendas, type VendaCorrigivel } from "./CorrigirVendas";
 import {
   COR_ESTADO,
   ROTULO_ESTADO,
@@ -40,7 +45,7 @@ export default async function ColaboradorDetalhePage({
 
   const supabase = await createClientServer();
 
-  const [fichaRes, painelRes, metaRes, provincias, taxaRes, levantamentosRes, pagamentoRes, impactoRes] =
+  const [fichaRes, painelRes, metaRes, provincias, taxaRes, levantamentosRes, pagamentoRes, impactoRes, tarefasRes, gestoresRes, vendasRes] =
     await Promise.all([
       supabase.rpc("colaborador_ficha", { p_id: id }),
       supabase.rpc("colaborador_painel", { p_id: id }),
@@ -78,6 +83,30 @@ export default async function ColaboradorDetalhePage({
       // O que desaparece se a gestão eliminar esta pessoa. Só lê — a decisão
       // de apagar é que passa pela RPC `eliminar_colaborador`.
       supabase.rpc("impacto_eliminar_colaborador", { p_id: id }),
+      // Tarefas atribuídas pela gestão. O embed precisa do nome da coluna
+      // (`!criado_por`): há duas chaves estrangeiras para `profiles` nesta
+      // tabela — a do colaborador e a de quem escreveu — e sem a dica o
+      // PostgREST recusa com PGRST201.
+      supabase
+        .from("colaborador_tarefas")
+        .select(
+          "id, seller_id, titulo, descricao, prazo, prioridade, estado, criado_por, criado_em, concluida_em, autor:profiles!criado_por(full_name)"
+        )
+        .eq("seller_id", id)
+        .limit(100),
+      // Candidatos a gestor responsável: o gestor máximo e os da província
+      // desta pessoa. A RPC também valida a escolha — a lista não é a regra.
+      supabase.rpc("gestores_para_colaborador", { p_seller: id }),
+      // Vendas com as linhas, para a correcção. O total da venda é a soma
+      // delas; é por isso que se corrige a linha e não o cabeçalho.
+      supabase
+        .from("sales")
+        .select(
+          "id, reference, total_amount, status, payment_status, created_at, sale_items(id, quantity, unit_price, total_price, product_snapshot)"
+        )
+        .eq("seller_id", id)
+        .order("created_at", { ascending: false })
+        .limit(15),
     ]);
 
   // A RPC recusa com 42501 quem não pode ver; o RLS esconde o resto. Em ambos
@@ -111,6 +140,52 @@ export default async function ColaboradorDetalhePage({
     xpress_dados: Record<string, string> | null;
     banco_dados: Record<string, string> | null;
   } | null;
+
+  const tarefas = ordenarTarefas((tarefasRes.data ?? []) as unknown as Tarefa[]);
+  const falhaTarefas = tarefasRes.error
+    ? mensagemDeErro(tarefasRes.error, "supabase/PATCH_TAREFAS_GESTOR.sql")
+    : null;
+
+  const gestores = (gestoresRes.data ?? []) as CandidatoGestor[];
+  const falhaGestores = gestoresRes.error
+    ? mensagemDeErro(gestoresRes.error, "supabase/PATCH_TAREFAS_GESTOR.sql")
+    : null;
+
+  const vendas = (
+    (vendasRes.data ?? []) as unknown as {
+      id: string;
+      reference: string;
+      total_amount: number;
+      status: string;
+      payment_status: string;
+      created_at: string;
+      sale_items: {
+        id: string;
+        quantity: number;
+        unit_price: number;
+        total_price: number;
+        product_snapshot: Record<string, unknown> | null;
+      }[] | null;
+    }[]
+  ).map<VendaCorrigivel>((v) => ({
+    id: v.id,
+    reference: v.reference,
+    total_amount: Number(v.total_amount),
+    status: v.status,
+    payment_status: v.payment_status,
+    created_at: v.created_at,
+    linhas: (v.sale_items ?? []).map((l) => ({
+      id: l.id,
+      quantity: Number(l.quantity),
+      unit_price: Number(l.unit_price),
+      total_price: Number(l.total_price),
+      produto:
+        typeof l.product_snapshot?.name === "string" ? l.product_snapshot.name : null,
+    })),
+  }));
+  const falhaVendas = vendasRes.error
+    ? mensagemDeErro(vendasRes.error, "supabase/PATCH_TAREFAS_GESTOR.sql")
+    : null;
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-10">
@@ -226,6 +301,52 @@ export default async function ColaboradorDetalhePage({
           />
         </div>
       )}
+
+      {/* ---------------------------------------------------------------
+          Tarefas, gestor e correcção de vendas
+          O que a gestão pede à pessoa e o que ela fez. Fica a seguir aos
+          números porque é aqui que se age sobre eles.
+          --------------------------------------------------------------- */}
+      <TarefasColaborador sellerId={ficha.id} tarefas={tarefas} falhaLeitura={falhaTarefas} />
+
+      <div className="mb-6 grid gap-4 lg:grid-cols-2">
+        <GestorResponsavel
+          sellerId={ficha.id}
+          gestorId={ficha.manager_id}
+          gestorNome={ficha.manager_name}
+          candidatos={gestores}
+          falhaLista={falhaGestores}
+        />
+
+        <section className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-6">
+          <h2 className="mb-1 text-sm font-medium text-[#F5F5F5]">Resumo das tarefas</h2>
+          <p className="mb-4 text-[11px] text-[#6F6F6F]">
+            O que está por fazer, o que já foi feito e o que foi cancelado.
+          </p>
+          <dl className="grid grid-cols-3 gap-3 text-center">
+            <div className="rounded-lg border border-[#2A2A2A] bg-[#141414] py-3">
+              <dt className="text-[10px] uppercase tracking-wide text-[#525252]">Por fazer</dt>
+              <dd className="mt-1 text-lg font-medium text-[#C9A962]">
+                {tarefas.filter((t) => t.estado === "pendente").length}
+              </dd>
+            </div>
+            <div className="rounded-lg border border-[#2A2A2A] bg-[#141414] py-3">
+              <dt className="text-[10px] uppercase tracking-wide text-[#525252]">Feitas</dt>
+              <dd className="mt-1 text-lg font-medium text-[#4ADE80]">
+                {tarefas.filter((t) => t.estado === "concluida").length}
+              </dd>
+            </div>
+            <div className="rounded-lg border border-[#2A2A2A] bg-[#141414] py-3">
+              <dt className="text-[10px] uppercase tracking-wide text-[#525252]">Canceladas</dt>
+              <dd className="mt-1 text-lg font-medium text-[#6F6F6F]">
+                {tarefas.filter((t) => t.estado === "cancelada").length}
+              </dd>
+            </div>
+          </dl>
+        </section>
+      </div>
+
+      <CorrigirVendas vendas={vendas} falhaLeitura={falhaVendas} />
 
       <div className="mb-6 grid gap-4 lg:grid-cols-2">
         <section className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-6">

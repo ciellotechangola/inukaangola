@@ -57,6 +57,7 @@ const tabelas = [
   "conversations",
   "promocoes",
   "levantamentos",
+  "colaborador_tarefas",
 ];
 
 // Colunas acrescentadas por migrações tardias.
@@ -117,6 +118,9 @@ const funcoes = [
   "minha_entrega",
   "impacto_eliminar_colaborador",
   "eliminar_colaborador",
+  "pode_gerir_colaborador",
+  "gestores_para_colaborador",
+  "definir_gestor_colaborador",
 ];
 
 let especificacao = null;

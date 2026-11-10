@@ -12,6 +12,8 @@ import {
 } from "@/lib/colaborador";
 import ColaboradorIdentidade from "@/components/ColaboradorIdentidade";
 import TaxaAoVivo from "@/components/comissoes/TaxaAoVivo";
+import { MinhasTarefas } from "@/components/tarefas/MinhasTarefas";
+import { ordenarTarefas, type Tarefa } from "@/lib/tarefas";
 import { formatarTaxa, normalizarTaxa } from "@/lib/comissoes";
 import { normalizarResumo, progressoVendas } from "@/lib/levantamentos";
 import { GraficoEvolucao, ProgressoMeta } from "@/components/Graficos";
@@ -32,7 +34,7 @@ export default async function SellerDashboardPage() {
   if (!profile || (profile.role !== "seller" && profile.role !== "manager")) redirect("/");
 
   const supabase = await createClientServer();
-  const [{ data, error }, { data: taxaBruta }, { data: resumoBruto }, fichaRes] =
+  const [{ data, error }, { data: taxaBruta }, { data: resumoBruto }, fichaRes, tarefasRes] =
     await Promise.all([
       supabase.rpc("colaborador_painel"),
       supabase.rpc("taxa_comissao"),
@@ -40,6 +42,16 @@ export default async function SellerDashboardPage() {
       // A ficha traz o BI, a morada e a função — o que antes só se via no
       // perfil. Se falhar, a área abre na mesma: os dados são o menos urgente.
       supabase.rpc("colaborador_ficha", { p_id: profile.id }),
+      // Tarefas atribuídas pela gestão. Se a migração 0018 ainda não estiver
+      // aplicada a consulta falha e a secção desaparece — o painel abre na mesma.
+      supabase
+        .from("colaborador_tarefas")
+        .select(
+          "id, seller_id, titulo, descricao, prazo, prioridade, estado, criado_por, criado_em, concluida_em, autor:profiles!criado_por(full_name)"
+        )
+        .eq("seller_id", profile.id)
+        .order("prazo", { ascending: true, nullsFirst: false })
+        .limit(50),
     ]);
 
   const taxa = normalizarTaxa(taxaBruta);
@@ -73,6 +85,8 @@ export default async function SellerDashboardPage() {
     .eq("status", "reservado");
 
   const totalClientes = numero(cartoes.clientes_total) + (porActivar ?? 0);
+
+  const tarefas = ordenarTarefas((tarefasRes.data ?? []) as unknown as Tarefa[]);
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-10">
@@ -111,6 +125,10 @@ export default async function SellerDashboardPage() {
       <div className="mb-4">
         <TaxaAoVivo inicial={taxa} />
       </div>
+
+      {/* O que a gestão pediu. Fica acima do dinheiro: uma tarefa com prazo é
+          para hoje, o saldo já esperou até aqui. */}
+      <MinhasTarefas tarefas={tarefas} />
 
       {/* Retirar dinheiro: o saldo é a primeira coisa que o colaborador quer ver. */}
       <div className="mb-6 rounded-xl border border-[#C9A962]/40 bg-[#1A1A1A] p-5">

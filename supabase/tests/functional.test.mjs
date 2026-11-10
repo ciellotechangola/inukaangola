@@ -66,6 +66,7 @@ for (const rel of [
   "migrations/0015_promocoes_levantamentos.sql",
   "migrations/0016_eliminar_colaborador.sql",
   "migrations/0017_cliente_da_venda_na_carteira.sql",
+  "migrations/0018_tarefas_e_gestor.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -3010,6 +3011,182 @@ const repetidoElim = await asUser(MANAGER, async () => {
 });
 check("eliminar duas vezes diz que já não existe", /não encontrado/i.test(repetidoElim ?? ""),
   repetidoElim ?? "não deu erro");
+
+// ===========================================================================
+console.log("\n--- 19. TAREFAS, GESTOR RESPONSÁVEL E CORRECÇÃO DE VENDAS ---");
+// ===========================================================================
+
+// --- 19.1 Tarefas ---------------------------------------------------------
+const OUTRO = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+await q(`INSERT INTO auth.users (id, email, raw_user_meta_data)
+         VALUES ('${OUTRO}', 'outro@inuka.ao', '{"full_name":"Outro Colaborador","phone":"923000099"}')`);
+await q(`UPDATE public.profiles SET role = 'seller', provincia_id = '${UIG}' WHERE id = '${OUTRO}'`);
+
+const tarefaCriada = await asUser(MANAGER, async () =>
+  q(`INSERT INTO public.colaborador_tarefas (seller_id, titulo, descricao, prazo, prioridade, criado_por)
+     VALUES ('${VEND}', 'Entregar o BI atualizado', 'Falta a cópia do BI.', current_date + 3, 'alta', '${MANAGER}')
+     RETURNING id, estado, concluida_em`));
+const TAREFA = tarefaCriada[0].id;
+check("gestão cria uma tarefa para o colaborador",
+  tarefaCriada[0].estado === "pendente" && tarefaCriada[0].concluida_em === null,
+  JSON.stringify(tarefaCriada[0]));
+
+const minhasTarefas = await asUser(VEND, async () =>
+  q(`SELECT id, titulo, estado FROM public.colaborador_tarefas WHERE seller_id = '${VEND}'`));
+check("o colaborador vê a tarefa no perfil dele", minhasTarefas.length === 1
+  && minhasTarefas[0].id === TAREFA, JSON.stringify(minhasTarefas));
+
+const tarefasDeOutro = await asUser(OUTRO, async () =>
+  q(`SELECT count(*)::int n FROM public.colaborador_tarefas`));
+check("outro colaborador não vê a tarefa", tarefasDeOutro[0].n === 0, String(tarefasDeOutro[0].n));
+
+const concluida = await asUser(VEND, async () =>
+  q(`UPDATE public.colaborador_tarefas SET estado = 'concluida' WHERE id = '${TAREFA}'
+     RETURNING estado, concluida_em`));
+check("o colaborador marca a tarefa como concluída",
+  concluida[0].estado === "concluida" && concluida[0].concluida_em !== null,
+  JSON.stringify(concluida[0]));
+
+const reescreverTitulo = await asUser(VEND, async () => {
+  try {
+    await q(`UPDATE public.colaborador_tarefas SET titulo = 'outra coisa' WHERE id = '${TAREFA}'`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("o colaborador não reescreve o que a gestão escreveu",
+  /só pode marcar/i.test(reescreverTitulo ?? ""), reescreverTitulo ?? "não deu erro");
+
+const apagarTarefaColab = await asUser(VEND, async () =>
+  q(`DELETE FROM public.colaborador_tarefas WHERE id = '${TAREFA}' RETURNING id`));
+check("o colaborador não apaga a tarefa", apagarTarefaColab.length === 0, "apagou");
+
+const criarParaOutraProvincia = await asUser(MGR_LDA, async () => {
+  try {
+    await q(`INSERT INTO public.colaborador_tarefas (seller_id, titulo, criado_por)
+             VALUES ('${VEND}', 'Tarefa de Luanda', '${MGR_LDA}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("gestor de outra província não cria tarefas",
+  criarParaOutraProvincia !== null, "criou");
+
+// --- 19.2 Gestor responsável ---------------------------------------------
+const candidatos = await asUser(MANAGER, async () =>
+  q(`SELECT id, nome, nacional FROM public.gestores_para_colaborador('${VEND}')`));
+const idsCand = candidatos.map((c) => c.id);
+check("a lista traz o gestor nacional", idsCand.includes(MANAGER), JSON.stringify(idsCand));
+check("a lista traz o gestor da mesma província", idsCand.includes(M_UIGE), JSON.stringify(idsCand));
+check("a lista não traz gestor de outra província", !idsCand.includes(MGR_LDA), JSON.stringify(idsCand));
+
+const semPermissaoLista = await asUser(VEND, async () => {
+  try {
+    await q(`SELECT public.gestores_para_colaborador('${VEND}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("colaborador não vê a lista de gestores",
+  /sem permissão/i.test(semPermissaoLista ?? ""), semPermissaoLista ?? "não deu erro");
+
+const definir = await asUser(MANAGER, async () =>
+  q(`SELECT public.definir_gestor_colaborador('${VEND}', '${M_UIGE}') AS r`));
+check("gestão define o gestor responsável",
+  definir[0].r.gestor_id === M_UIGE, JSON.stringify(definir[0].r));
+
+const fichaComGestor = await q(`SELECT manager_id FROM public.seller_profiles WHERE id = '${VEND}'`);
+check("o gestor fica gravado na ficha", fichaComGestor[0].manager_id === M_UIGE,
+  String(fichaComGestor[0].manager_id));
+
+const gestorDeOutraProvincia = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.definir_gestor_colaborador('${VEND}', '${MGR_LDA}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("não se atribui um gestor de outra província",
+  /outra província/i.test(gestorDeOutraProvincia ?? ""), gestorDeOutraProvincia ?? "não deu erro");
+
+const gestorQueNaoE = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.definir_gestor_colaborador('${VEND}', '${OUTRO}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("só uma conta de gestão pode ser gestora",
+  /não é gestor/i.test(gestorQueNaoE ?? ""), gestorQueNaoE ?? "não deu erro");
+
+const gestorSemPermissao = await asUser(MGR_LDA, async () => {
+  try {
+    await q(`SELECT public.definir_gestor_colaborador('${VEND}', '${MGR_LDA}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("gestor de outra província não muda o gestor",
+  /outra província/i.test(gestorSemPermissao ?? ""), gestorSemPermissao ?? "não deu erro");
+
+const limparGestor = await asUser(MANAGER, async () =>
+  q(`SELECT public.definir_gestor_colaborador('${VEND}', NULL) AS r`));
+check("dá para voltar a «sem gestor»", limparGestor[0].r.gestor_id === null,
+  JSON.stringify(limparGestor[0].r));
+
+// --- 19.3 Corrigir vendas ------------------------------------------------
+// Uma venda com linhas: o total e a comissão vêm delas.
+const PROD = (await q(`SELECT id FROM public.products ORDER BY created_at LIMIT 1`))[0].id;
+const VENDA_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+await q(`INSERT INTO public.sales (id, reference, seller_id, total_amount, payment_status, status, provincia_id)
+         VALUES ('${VENDA_ID}', 'VND-CORRIGIR', '${VEND}', 0, 'paid', 'completed', '${UIG}')`);
+await q(`INSERT INTO public.sale_items (sale_id, product_id, quantity, unit_price, total_price)
+         VALUES ('${VENDA_ID}', '${PROD}', 2, 10000, 20000)`);
+
+const antesCorrecao = await q(`SELECT s.total_amount, c.amount
+  FROM public.sales s JOIN public.sale_commissions c ON c.sale_id = s.id
+  WHERE s.id = '${VENDA_ID}'`);
+check("a venda nasce com o total das linhas e 10 % de comissão",
+  Number(antesCorrecao[0].total_amount) === 20000 && Number(antesCorrecao[0].amount) === 2000,
+  JSON.stringify(antesCorrecao[0]));
+
+const corrigida = await asUser(MANAGER, async () =>
+  q(`UPDATE public.sale_items SET quantity = 3, total_price = 3 * unit_price
+     WHERE sale_id = '${VENDA_ID}' RETURNING quantity`));
+check("a gestão corrige a quantidade de uma linha", Number(corrigida[0].quantity) === 3,
+  String(corrigida[0].quantity));
+
+const depoisCorrecao = await q(`SELECT s.total_amount, c.amount
+  FROM public.sales s JOIN public.sale_commissions c ON c.sale_id = s.id
+  WHERE s.id = '${VENDA_ID}'`);
+check("o total acompanha a correcção", Number(depoisCorrecao[0].total_amount) === 30000,
+  String(depoisCorrecao[0].total_amount));
+check("a comissão acompanha a correcção", Number(depoisCorrecao[0].amount) === 3000,
+  String(depoisCorrecao[0].amount));
+
+const semPermissaoVenda = await asUser(OUTRO, async () =>
+  q(`UPDATE public.sale_items SET quantity = 9 WHERE sale_id = '${VENDA_ID}' RETURNING id`));
+check("outro colaborador não corrige vendas alheias", semPermissaoVenda.length === 0, "corrigiu");
+
+// Comissão paga: a venda deixa de se poder mexer.
+await q(`UPDATE public.sale_commissions SET status = 'paid', paid_at = now()
+         WHERE sale_id = '${VENDA_ID}'`);
+
+const mexerVendaPaga = await asUser(MANAGER, async () => {
+  try {
+    await q(`UPDATE public.sale_items SET quantity = 5, total_price = 5 * unit_price
+             WHERE sale_id = '${VENDA_ID}'`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("venda com comissão paga não se corrige",
+  /comissão paga/i.test(mexerVendaPaga ?? ""), mexerVendaPaga ?? "não deu erro");
+
+// A anulação continua possível antes do pagamento.
+await q(`UPDATE public.sale_commissions SET status = 'pending', paid_at = NULL
+         WHERE sale_id = '${VENDA_ID}'`);
+await asUser(MANAGER, async () =>
+  q(`UPDATE public.sales SET status = 'cancelled' WHERE id = '${VENDA_ID}'`));
+const anulada = await q(`SELECT s.status, c.status AS comissao
+  FROM public.sales s JOIN public.sale_commissions c ON c.sale_id = s.id
+  WHERE s.id = '${VENDA_ID}'`);
+check("anular a venda anula a comissão",
+  anulada[0].status === "cancelled" && anulada[0].comissao === "cancelled",
+  JSON.stringify(anulada[0]));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

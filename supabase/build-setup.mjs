@@ -32,6 +32,7 @@ const PARTES = [
   { ficheiro: "migrations/0015_promocoes_levantamentos.sql", titulo: "PROMOÇÕES POR PROVÍNCIA, COMISSÕES E LEVANTAMENTOS" },
   { ficheiro: "migrations/0016_eliminar_colaborador.sql", titulo: "ELIMINAR COLABORADOR E AS SUAS VENDAS" },
   { ficheiro: "migrations/0017_cliente_da_venda_na_carteira.sql", titulo: "O CLIENTE DA VENDA ENTRA SOZINHO NA CARTEIRA" },
+  { ficheiro: "migrations/0018_tarefas_e_gestor.sql", titulo: "TAREFAS, GESTOR RESPONSÁVEL E CORRECÇÃO DE VENDAS" },
 ];
 
 const cabecalho = `-- =============================================================================
