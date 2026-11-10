@@ -1,22 +1,29 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { MessageSquare, Newspaper } from "lucide-react";
+import { MessageSquare, Sparkles } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
 import type { Conteudo } from "@/lib/conteudos";
-import Feed from "./Feed";
+import { FeedClientes } from "./FeedClientes";
 
 export const dynamic = "force-dynamic";
 
+/** O que o cliente pode ver aqui. A base de dados já o garante; isto é a rede. */
+const DO_CLIENTE = new Set(["promocao", "testemunho"]);
+
 /**
- * Feed de notícias do cliente.
+ * Feed Clientes — o feed do cliente.
+ *
+ * Promoções e testemunhos de quem já usa INUKA. Os comunicados da gestão não
+ * aparecem: são avisos internos, exclusivos da equipa (migração 0019). O que
+ * está aqui é o que a gestão publicou para o cliente ver, com o mesmo cartão
+ * do Feed Inuka.
  *
  * Uma só chamada (`conteudo_feed`) traz tudo o que um cartão precisa: texto,
- * imagem, produtos, contagem de reações e comentários, e a reacção de quem
- * está a ver. É a mesma função que serve as promoções da loja — a diferença
- * está na visibilidade, definida na migração 0013.
+ * imagem, produtos, contagem de reacções e comentários, e a reacção de quem
+ * está a ver. A gestão vê ainda quem reagiu, em cada cartão.
  */
-export default async function ConteudoPage() {
+export default async function FeedClientesPage() {
   const profile = await getProfile();
   if (!profile) redirect("/login");
   if (profile.role !== "customer" && profile.role !== "manager") redirect("/");
@@ -27,19 +34,20 @@ export default async function ConteudoPage() {
     p_limit: 40,
   });
 
-  const conteudos = (data ?? []) as Conteudo[];
+  // A gestão recebe o feed inteiro (é gestora) — aqui só entram os dois tipos
+  // que o cliente vê, para as duas vistas serem o mesmo ecrã.
+  const publicacoes = ((data ?? []) as Conteudo[]).filter((c) => DO_CLIENTE.has(c.kind));
+  const gestor = profile.role === "manager";
 
   return (
-    <main className="mx-auto max-w-2xl px-4 py-10">
-      <header className="mb-6">
-        <h1 className="mb-1 flex items-center gap-2 text-3xl font-light text-[#F5F5F5]">
-          <Newspaper className="h-7 w-7 text-[#C9A962]" />
-          Notícias
-        </h1>
-        <p className="text-[#A3A3A3]">
-          Comunicados, novidades e promoções da INUKA. Reaja e comente — a equipa lê.
-        </p>
-      </header>
+    <main className="mx-auto max-w-4xl px-4 py-10">
+      <p className="mb-3 text-[10px] uppercase tracking-[0.18em] text-[#6F6F6F]">
+        Área de cliente
+      </p>
+      <h1 className="text-3xl font-light text-[#F5F5F5]">Feed Clientes</h1>
+      <p className="mb-6 mt-2 max-w-xl text-sm text-[#A3A3A3]">
+        Promoções em curso e testemunhos de quem já usa INUKA. Reaja e comente — a equipa lê.
+      </p>
 
       {error && (
         <div className="mb-4 rounded-lg bg-[#2A1010] p-3 text-sm text-[#F87171]">
@@ -47,12 +55,16 @@ export default async function ConteudoPage() {
         </div>
       )}
 
-      <Feed conteudos={conteudos} />
+      {!error && (
+        <FeedClientes
+          itens={publicacoes}
+          hrefNovo={gestor ? "/gerente/conteudos/novo?tipo=promocao" : undefined}
+          gerirReacoes={gestor}
+        />
+      )}
 
-      <div className="mt-8 rounded-xl border border-[#262626] bg-[#141414] p-5 text-center">
-        <p className="mb-3 text-sm text-[#A3A3A3]">
-          Tem uma dúvida sobre uma publicação?
-        </p>
+      <div className="mx-auto mt-10 max-w-[560px] rounded-xl border border-[#262626] bg-[#141414] p-5 text-center">
+        <p className="mb-3 text-sm text-[#A3A3A3]">Tem uma dúvida sobre uma publicação?</p>
         <Link
           href="/referencia"
           className="inline-flex items-center gap-2 rounded-lg border border-[#C9A962]/40 px-4 py-2 text-sm text-[#C9A962] transition hover:bg-[#C9A962]/10"
@@ -61,6 +73,10 @@ export default async function ConteudoPage() {
           Falar com a equipa
         </Link>
       </div>
+
+      <p className="mx-auto mt-4 flex max-w-[560px] items-center justify-center gap-1.5 text-[10px] text-[#4F4F4F]">
+        <Sparkles className="h-3 w-3" /> Publicado pela gestão INUKA
+      </p>
     </main>
   );
 }

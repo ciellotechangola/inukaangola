@@ -63,6 +63,7 @@ npm run setup:sql     # concatena migrations/ em SETUP_COMPLETO.sql
 | `PATCH_ELIMINAR_COLABORADOR.sql` | **Obrigatório** para a gestão poder eliminar um colaborador **e as vendas dele**: `impacto_eliminar_colaborador` (só lê) e `eliminar_colaborador` (apaga com auditoria). É a migração 0016 isolada. Depende da 0015. |
 | `PATCH_CLIENTE_DA_VENDA.sql` | **Obrigatório** para o cliente da venda entrar sozinho na carteira: `garantir_cliente_na_carteira` passa a ser a única regra de exclusividade, `register_sale_by_phone` deixa de recusar números com conta e aceita o nome, e `ligar_reserva_ao_cliente` passa a aceitar o colaborador dono da reserva. É a migração 0017 isolada. Depende da 0015. |
 | `PATCH_TAREFAS_GESTOR.sql` | **Obrigatório** para a ficha do colaborador ter tarefas, gestor responsável e correcção de vendas: tabela `colaborador_tarefas` (o colaborador só muda o estado), `gestores_para_colaborador`/`definir_gestor_colaborador` e a política que deixa a gestão corrigir as linhas de uma venda — com guarda para não mexer em vendas com a comissão paga. É a migração 0018 isolada. Depende da 0015. |
+| `PATCH_FEED_CLIENTES.sql` | **Obrigatório** para o feed separado: `comunicado` e `formacao` passam a ser exclusivos da equipa (`kind_so_equipa`/`pode_ver_kind`), o cliente só vê promoções e testemunhos, e a gestão passa a ver **quem** reagiu em cada publicação (`conteudo_reacoes`). É a migração 0019 isolada. Depende da 0013. |
 
 ### Ordem de aplicação numa base já existente
 
@@ -83,6 +84,7 @@ npm run setup:sql     # concatena migrations/ em SETUP_COMPLETO.sql
 14. `PATCH_ELIMINAR_COLABORADOR.sql`
 15. `PATCH_CLIENTE_DA_VENDA.sql`
 16. `PATCH_TAREFAS_GESTOR.sql`
+17. `PATCH_FEED_CLIENTES.sql`
 
 `npm run estado` diz, item a item, o que ainda falta na base alojada.
 

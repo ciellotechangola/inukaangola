@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase-server";
+import { createClientServer, supabaseAdmin } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/conteudos/[id]/download
  *
- * Descarrega o que o colaborador está a ver no feed.
+ * Descarrega o que a pessoa está a ver no feed.
  *
  * A imagem vive num bucket público do Supabase, noutro domínio — o atributo
  * `download` de um `<a>` é ignorado em ligações cross-origin, por isso o
@@ -17,8 +17,10 @@ export const dynamic = "force-dynamic";
  * Sem imagem (um comunicado só de texto), devolve o texto num `.txt`: quem lê
  * um aviso da gestão pode querer guardá-lo ou reenviá-lo tal e qual.
  *
- * Só entra quem tem sessão, e um conteúdo não publicado só sai para a gestão —
- * o mesmo critério do feed, para o download não ser uma porta lateral.
+ * Quem entra: quem tem sessão **e** pode ver o conteúdo. A verificação é feita
+ * com o cliente da sessão (não com a chave de serviço) para passar pelas
+ * políticas — sem ela, o download era uma porta lateral ao RLS: bastava saber
+ * o id de um comunicado para o receber, mesmo sendo cliente.
  */
 export async function GET(
   _request: Request,
@@ -31,6 +33,9 @@ export async function GET(
 
   const { id } = await params;
 
+  // Primeiro procura-se (404 para um id que não existe), depois verifica-se a
+  // visibilidade com a sessão de quem pede (403). Ao contrário, um id inventado
+  // respondia 403 em vez de 404.
   const { data } = await supabaseAdmin
     .from("content_items")
     .select("title, subtitle, body, image_url, status, published_at")
@@ -39,6 +44,12 @@ export async function GET(
 
   if (!data) {
     return NextResponse.json({ error: "Conteúdo não encontrado." }, { status: 404 });
+  }
+
+  const sessao = await createClientServer();
+  const { data: podeVer } = await sessao.rpc("pode_ver_conteudo", { p_id: id });
+  if (podeVer !== true) {
+    return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
   }
 
   const item = data as {

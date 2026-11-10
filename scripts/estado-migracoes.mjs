@@ -121,6 +121,9 @@ const funcoes = [
   "pode_gerir_colaborador",
   "gestores_para_colaborador",
   "definir_gestor_colaborador",
+  "pode_ver_kind",
+  "kind_so_equipa",
+  "conteudo_reacoes",
 ];
 
 let especificacao = null;

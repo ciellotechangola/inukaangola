@@ -4,12 +4,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../config/app_config.dart';
 import '../../core/sessao.dart';
 
-/// Feed de notícias do cliente.
+/// Feed Clientes — o feed do cliente.
 ///
 /// Uma só chamada (`conteudo_feed`) traz o cartão completo: texto, imagem,
 /// produtos, contagem de reacções e comentários, e a reacção de quem está a
-/// ver. A visibilidade é decidida no servidor — o cliente recebe comunicados,
-/// testemunhos e promoções publicadas; a formação continua interna.
+/// ver. A visibilidade é decidida no servidor: o cliente recebe testemunhos e
+/// promoções publicadas. Os comunicados e a formação são da equipa e não saem
+/// para aqui (migração 0019).
 class FeedPage extends StatefulWidget {
   const FeedPage({super.key});
 
@@ -120,7 +121,7 @@ class _FeedPageState extends State<FeedPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Notícias'),
+        title: const Text('Feed Clientes'),
         actions: [
           IconButton(
             tooltip: 'Actualizar',

@@ -118,7 +118,11 @@ export default async function proxy(request: NextRequest) {
       return NextResponse.redirect(new URL(destino, request.url));
     }
     if (pathname.startsWith("/vendedor") && role !== "seller" && role !== "manager") {
-      return NextResponse.redirect(new URL(destino, request.url));
+      // O Feed Inuka é de **toda** a equipa: o vendedor de loja também lê os
+      // comunicados da administração. O resto da área /vendedor (carteira,
+      // comissões, levantamentos) continua a ser só do colaborador de vendas.
+      const soFeed = role === "store_seller" && pathname.startsWith("/vendedor/comunicados");
+      if (!soFeed) return NextResponse.redirect(new URL(destino, request.url));
     }
     // A loja é de quem conta stock e vende ao balcão. O colaborador de vendas
     // tem a área dele (/vendedor) e não entra aqui.

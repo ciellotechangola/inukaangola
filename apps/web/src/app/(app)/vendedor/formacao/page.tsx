@@ -69,7 +69,7 @@ export default async function FormacaoPage() {
             href="/vendedor/comunicados"
             className="rounded-lg border border-[#333] px-3 py-1.5 text-[#A3A3A3] transition hover:border-[#C9A962]/50 hover:text-[#C9A962]"
           >
-            Comunicados
+            Feed Inuka
           </Link>
           <Link
             href="/vendedor/formacao"

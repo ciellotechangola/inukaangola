@@ -296,7 +296,7 @@ export default async function SellerDashboardPage() {
         <Acao href="/vendedor/clientes" titulo="Meus clientes" descricao="Gerir associações" />
         <Acao href="/vendedor/encomendas" titulo="Encomendas" descricao="Pedidos da carteira" />
         <Acao href="/cliente/conversas" titulo="Mensagens" descricao="Falar com clientes" />
-        <Acao href="/vendedor/comunicados" titulo="Comunicados" descricao="Avisos da gestão" />
+        <Acao href="/vendedor/comunicados" titulo="Feed Inuka" descricao="Avisos da gestão" />
         <Acao href="/vendedor/formacao" titulo="Formação INUKA" descricao="Cursos e progresso" />
         {/* O menu do topo é desenhado no browser (só sabe o papel depois de
             hidratar); este cartão garante que «Perfil» está à vista mal a

@@ -59,28 +59,40 @@ export const TIPOS: { key: TipoConteudo; label: string; descricao: string; desti
   {
     key: "comunicado",
     label: "Comunicado da gestão",
-    descricao: "Aparece no feed dos colaboradores e nas notícias dos clientes.",
+    descricao: "Só a equipa vê: colaboradores, vendedor de loja e gestão (Feed Inuka).",
     destino: "/vendedor/comunicados",
   },
   {
     key: "testemunho",
     label: "Testemunho de cliente",
-    descricao: "Aparece na área de testemunhos dos clientes.",
-    destino: "/cliente/testemunhos",
+    descricao: "Aparece no Feed Clientes, à vista de todos os clientes.",
+    destino: "/cliente/conteudo",
   },
   {
     key: "promocao",
     label: "Promoção / anúncio",
-    descricao: "Aparece nas promoções da loja, com as datas que definir.",
+    descricao: "Aparece no Feed Clientes e nas promoções da loja, com as datas que definir.",
     destino: "/promocoes",
   },
   {
     key: "formacao",
     label: "Formação",
-    descricao: "Fica disponível na área de formação dos colaboradores.",
+    descricao: "Só a equipa vê: fica na área de formação dos colaboradores.",
     destino: "/vendedor/formacao",
   },
 ];
+
+/** Rótulo de uma linha, para o cartaz do feed quando não há fotografia. */
+const ROTULO_CURTO: Record<TipoConteudo, string> = {
+  comunicado: "Comunicado",
+  testemunho: "Testemunho",
+  promocao: "Promoção",
+  formacao: "Formação",
+};
+
+export function rotuloCurto(kind: TipoConteudo | string): string {
+  return ROTULO_CURTO[kind as TipoConteudo] ?? "Publicação";
+}
 
 export const ESTADOS: { key: EstadoConteudo; label: string }[] = [
   { key: "rascunho", label: "Rascunho" },
@@ -245,6 +257,56 @@ export async function comentar(itemId: string, body: string): Promise<void> {
     .from("content_comments")
     .insert({ item_id: itemId, user_id: uid, body: texto.slice(0, 2000) });
   if (error) throw new Error(error.message);
+}
+
+// ---------------------------------------------------------------------------
+// Quem reagiu (gestão)
+// ---------------------------------------------------------------------------
+
+/** Uma pessoa que reagiu — o que a gestão precisa para a reconhecer. */
+export interface ReacaoGente {
+  user_id: string;
+  nome: string;
+  telefone: string | null;
+  referencia: string | null;
+  papel: string;
+  provincia: string | null;
+  reacao: string;
+  quando: string;
+}
+
+export interface ReacaoResumo {
+  total: number;
+  gosto: number;
+  adoro: number;
+  util: number;
+  clientes: number;
+  equipa: number;
+  gente: ReacaoGente[];
+}
+
+/**
+ * Lista de quem reagiu a uma publicação.
+ *
+ * Só a gestão pode chamar isto — a função recusa os restantes papéis. É a
+ * única forma de saber **quem** reagiu: `content_reactions.user_id` aponta para
+ * `auth.users`, e o PostgREST não consegue embutir `profiles` a partir daí.
+ */
+export async function reacoesDoConteudo(itemId: string): Promise<ReacaoResumo> {
+  const supabase = createClientBrowser();
+  const { data, error } = await supabase.rpc("conteudo_reacoes", { p_item_id: itemId });
+  if (error) throw new Error(error.message);
+
+  const r = (data ?? {}) as Partial<ReacaoResumo>;
+  return {
+    total: Number(r.total ?? 0),
+    gosto: Number(r.gosto ?? 0),
+    adoro: Number(r.adoro ?? 0),
+    util: Number(r.util ?? 0),
+    clientes: Number(r.clientes ?? 0),
+    equipa: Number(r.equipa ?? 0),
+    gente: (r.gente ?? []) as ReacaoGente[],
+  };
 }
 
 // ---------------------------------------------------------------------------

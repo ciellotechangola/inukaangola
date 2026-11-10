@@ -4,29 +4,45 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { CalendarDays, Download, MapPin, Pin, Plus, X } from "lucide-react";
 import { Interacoes } from "./Interacoes";
-import { dataConteudo, estadoDaPromocao, type Conteudo } from "@/lib/conteudos";
+import { QuemReagiu } from "./QuemReagiu";
+import {
+  dataConteudo,
+  estadoDaPromocao,
+  rotuloCurto,
+  type Conteudo,
+} from "@/lib/conteudos";
 import { formatCurrency } from "@/lib/utils";
 
 /**
- * Feed de comunicados, no formato de uma rede social.
+ * Feed de publicações, no formato de uma rede social.
+ *
+ * Serve os dois feeds da casa: o **Feed Inuka** (comunicados, só para a equipa)
+ * e o **Feed Clientes** (promoções e testemunhos). São o mesmo cartão de
+ * propósito — quem passa de um para o outro não reaprende nada.
  *
  * O cartão antigo mostrava o texto inteiro num bloco de altura fixa: um
  * comunicado de três linhas ficava com metade da área vazia e o título a 48 px
  * empurrava tudo para fora do ecrã. Aqui a hierarquia é a de um feed — quem
  * publicou, a imagem, duas linhas de legenda e as acções — e o texto completo
- * abre por cima, quando o colaborador quer ler.
+ * abre por cima, quando se quer ler.
  *
  * Descarregar está em cada cartão e dentro do leitor: é o que se faz a seguir a
  * ler um aviso que é preciso reenviar ou guardar.
  */
 
-export function FeedComunicados({
+export function FeedConteudos({
   itens,
   hrefNovo,
+  rotuloNovo = "Publicar",
+  gerirReacoes,
 }: {
   itens: Conteudo[];
-  /** Só a gestão recebe isto — o colaborador é leitor. */
+  /** Só a gestão recebe isto — o colaborador e o cliente são leitores. */
   hrefNovo?: string;
+  /** Texto do botão de publicação, quando existe. */
+  rotuloNovo?: string;
+  /** A gestão vê **quem** reagiu, não só quantos. */
+  gerirReacoes?: boolean;
 }) {
   const [aberto, setAberto] = useState<Conteudo | null>(null);
 
@@ -58,14 +74,19 @@ export function FeedComunicados({
             href={hrefNovo}
             className="inline-flex items-center gap-1.5 rounded-lg bg-[#C9A962] px-3 py-2 text-xs font-semibold text-[#0A0A0A] transition hover:bg-[#E3D5A7]"
           >
-            <Plus className="h-3.5 w-3.5" /> Publicar comunicado
+            <Plus className="h-3.5 w-3.5" /> {rotuloNovo}
           </Link>
         </div>
       )}
 
       <div className="mx-auto w-full max-w-[560px] space-y-5">
         {itens.map((c) => (
-          <Cartao key={c.id} conteudo={c} onAbrir={() => setAberto(c)} />
+          <Cartao
+            key={c.id}
+            conteudo={c}
+            gerirReacoes={gerirReacoes}
+            onAbrir={() => setAberto(c)}
+          />
         ))}
       </div>
 
@@ -74,7 +95,15 @@ export function FeedComunicados({
   );
 }
 
-function Cartao({ conteudo, onAbrir }: { conteudo: Conteudo; onAbrir: () => void }) {
+function Cartao({
+  conteudo,
+  gerirReacoes,
+  onAbrir,
+}: {
+  conteudo: Conteudo;
+  gerirReacoes?: boolean;
+  onAbrir: () => void;
+}) {
   const promo = estadoDaPromocao(conteudo);
   const temTexto = Boolean(conteudo.body && conteudo.body.length > 160);
 
@@ -143,7 +172,7 @@ function Cartao({ conteudo, onAbrir }: { conteudo: Conteudo; onAbrir: () => void
         ) : (
           <span className="block bg-gradient-to-br from-[#1B1B1B] via-[#141414] to-[#0C0C0C] px-5 py-9">
             <span className="block text-[10px] uppercase tracking-[0.22em] text-[#C9A962]">
-              {conteudo.kind === "promocao" ? "Promoção" : "Comunicado"}
+              {rotuloCurto(conteudo.kind)}
             </span>
             <span className="mt-2 block line-clamp-4 text-2xl font-light leading-tight text-[#F5F5F5]">
               {conteudo.title}
@@ -239,10 +268,11 @@ function Cartao({ conteudo, onAbrir }: { conteudo: Conteudo; onAbrir: () => void
             compacto
           />
         </div>
+        {gerirReacoes && <QuemReagiu itemId={conteudo.id} total={conteudo.reacoes} />}
         <a
           href={`/api/conteudos/${conteudo.id}/download`}
           className="ml-auto flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] text-[#A3A3A3] transition hover:bg-[#1D1D1D] hover:text-[#C9A962]"
-          title="Descarregar este comunicado"
+          title="Descarregar esta publicação"
         >
           <Download className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">Descarregar</span>

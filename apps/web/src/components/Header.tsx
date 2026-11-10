@@ -73,7 +73,12 @@ export default function Header() {
           // Compras = o que um colaborador registou em nome deste número,
           // incluindo antes de a conta existir.
           { href: "/cliente/compras", label: "Compras" },
-          { href: "/cliente/conteudo", label: "Notícias" },
+          // «Feed Clientes»: promoções e testemunhos. Os comunicados internos
+          // não aparecem ao cliente — são do «Feed Inuka», que é da equipa.
+          { href: "/cliente/conteudo", label: "Feed Clientes" },
+          // «Perfil» é a área de cliente inteira numa tela: identidade,
+          // referência, colaborador e atalhos. O botão com o nome também leva lá.
+          { href: "/cliente", label: "Perfil" },
         ]
       : []),
     // O estúdio de design é ferramenta de gestão: não aparece ao cliente nem
@@ -83,6 +88,10 @@ export default function Header() {
           { href: "/gerente/encomendas", label: "Pedidos" },
           { href: "/designer", label: "Designer" },
           { href: "/gerente/conteudos", label: "Conteúdos" },
+          // O mesmo feed que a equipa lê, com a lista de quem reagiu em cada
+          // publicação. Fica depois de «Conteúdos» (que é o estúdio) e só em
+          // ecrãs largos: o menu da gestão já vai longo.
+          { href: "/vendedor/comunicados", label: "Feed Inuka", desde: "lg" as const },
           { href: "/gerente/formacao", label: "Formação" },
           { href: "/gerente/perfis", label: "Perfis" },
         ]
@@ -94,7 +103,7 @@ export default function Header() {
           // indicadores e a mesma referência), mas o colaborador continua a
           // precisar de chegar lá num clique.
           { href: "/vendedor#perfil", label: "Perfil" },
-          { href: "/vendedor/comunicados", label: "Comunicados" },
+          { href: "/vendedor/comunicados", label: "Feed Inuka" },
           { href: "/vendedor/formacao", label: "Formação" },
         ]
       : []),
@@ -105,6 +114,8 @@ export default function Header() {
           { href: "/loja/stock", label: "Stock" },
           { href: "/loja/vendas", label: "Vendas" },
           { href: "/loja/encomendas", label: "Encomendas" },
+          // O vendedor de loja é equipa: lê os comunicados como os colegas.
+          { href: "/vendedor/comunicados", label: "Feed Inuka" },
         ]
       : []),
     // O colaborador vê a referência no cartão de identidade da Área de

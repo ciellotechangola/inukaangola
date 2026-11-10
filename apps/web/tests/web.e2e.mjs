@@ -1911,7 +1911,11 @@ if (TEM_TAREFAS) {
       { key: SR, jwt: SR }
     );
     const total = Number(r.data[0].total_amount);
-    const comissao = Number(r.data[0].sale_commissions?.[0]?.amount ?? -1);
+    // `sale_commissions.sale_id` é único, por isso o PostgREST devolve um
+    // objecto e não uma lista — `[0]` dava sempre `undefined`.
+    const bruto = r.data[0].sale_commissions;
+    const linha = Array.isArray(bruto) ? bruto[0] : bruto;
+    const comissao = Number(linha?.amount ?? -1);
     assert(total === 20000, `total ${total}`);
     assert(comissao >= 0, `comissão ${comissao}`);
     return `total ${total} · comissão ${comissao}`;
@@ -2880,25 +2884,25 @@ if (TEM_CONTEUDOS) {
     const g = await pagina("/vendedor/comunicados", cGestor);
     assert(g.status === 200, `gestor HTTP ${g.status}`);
     assert(
-      g.html.includes('href="/gerente/conteudos/novo"'),
+      g.html.includes('href="/gerente/conteudos/novo?tipo=comunicado"'),
       "a gestão não tem o atalho de publicar"
     );
 
     const v = await pagina("/vendedor/comunicados", cVendedor);
     assert(v.status === 200, `colaborador HTTP ${v.status}`);
     assert(
-      !v.html.includes('href="/gerente/conteudos/novo"'),
+      !v.html.includes("/gerente/conteudos/novo"),
       "o colaborador vê o atalho de publicar"
     );
     return "gestor edita · colaborador lê";
   });
 
-  await check("a lista de conteúdos tem o atalho «Novo comunicado»", async () => {
+  await check("a lista de conteúdos tem o atalho «Nova publicação»", async () => {
     const r = await pagina("/gerente/conteudos", cGestor);
     assert(r.status === 200, `HTTP ${r.status}`);
-    assert(r.html.includes('href="/gerente/conteudos/novo"'), "sem o atalho na lista");
+    assert(r.html.includes('href="/gerente/conteudos/novo?tipo=comunicado"'), "sem o atalho na lista");
     const t = texto(r.html);
-    assert(t.includes("Novo comunicado"), "sem o rótulo do atalho");
+    assert(t.includes("Nova publicação"), "sem o rótulo do atalho");
     return "atalho presente";
   });
 
@@ -2909,25 +2913,58 @@ if (TEM_CONTEUDOS) {
     return `${r.status} bloqueado`;
   });
 
-  await check("o cliente lê os comunicados no feed dele", async () => {
-    // A 0013 abriu os comunicados ao cliente: são notícia da empresa no feed
-    // dele. A formação continua a ser conteúdo interno da equipa.
-    const r = await sb("/rest/v1/content_items?select=id,title&kind=eq.comunicado", {
-      jwt: sCliente.access_token,
-    });
-    const linhas = Array.isArray(r.data) ? r.data : [];
-    assert(linhas.some((l) => l.id === COM_ID), "o comunicado não chegou ao cliente");
-
-    const formacao = await sb("/rest/v1/content_items?select=id&kind=eq.formacao", {
-      jwt: sCliente.access_token,
-    });
-    assert(
-      (Array.isArray(formacao.data) ? formacao.data : []).length === 0,
-      "o cliente vê formação interna"
-    );
-
-    return `${linhas.length} comunicado(s) · formação escondida`;
+  // A 0019 separa os feeds: comunicados só para a equipa. Sem o patch
+  // aplicado na base, os comunicados continuam a chegar ao cliente e as
+  // verificações abaixo não descrevem o sistema — ficam de fora em vez de
+  // darem um vermelho que não é do código.
+  const probe0019 = await sb("/rest/v1/rpc/pode_ver_kind", {
+    method: "POST",
+    jwt: sGestor.access_token,
+    body: { p_kind: "comunicado" },
   });
+  const TEM_0019 = probe0019.ok;
+
+  if (TEM_0019) {
+    await check("o cliente não descarrega um comunicado que não pode ver", async () => {
+      // A rota de download verifica a visibilidade com a sessão de quem pede;
+      // sem isso, saber o id chegava para receber o aviso interno.
+      const r = await fetch(`${APP}/api/conteudos/${COM_ID}/download`, {
+        headers: { cookie: cCliente },
+      });
+      assert(r.status === 403, `HTTP ${r.status}`);
+      return "403 para o cliente";
+    });
+  }
+
+  if (TEM_0019) {
+    await check("o cliente NÃO lê os comunicados", async () => {
+      // A 0013 tinha aberto os comunicados ao cliente; a 0019 fechou-os: são
+      // avisos internos da equipa. O cliente tem o Feed Clientes — promoções e
+      // testemunhos.
+      const r = await sb("/rest/v1/content_items?select=id,title&kind=eq.comunicado", {
+        jwt: sCliente.access_token,
+      });
+      const linhas = Array.isArray(r.data) ? r.data : [];
+      assert(!linhas.some((l) => l.id === COM_ID), "o comunicado continua a chegar ao cliente");
+
+      const formacao = await sb("/rest/v1/content_items?select=id&kind=eq.formacao", {
+        jwt: sCliente.access_token,
+      });
+      assert(
+        (Array.isArray(formacao.data) ? formacao.data : []).length === 0,
+        "o cliente vê formação interna"
+      );
+
+      const feed = await sb("/rest/v1/rpc/conteudo_feed", {
+        method: "POST",
+        jwt: sCliente.access_token,
+        body: { p_kind: "comunicado", p_limit: 40 },
+      });
+      assert((feed.data ?? []).length === 0, "o feed de comunicados não veio vazio");
+
+      return `${linhas.length} comunicado(s) · feed vazio`;
+    });
+  }
 
   // --- 11.3 Testemunho → área de cliente --------------------------------------
   const TITULO_TEST = `[E2E] Testemunho ${SUF}`;
@@ -2945,9 +2982,12 @@ if (TEM_CONTEUDOS) {
   const TEST_ID = testemunho.data[0].id;
 
   await check("cliente vê o testemunho publicado", async () => {
-    const r = await pagina("/cliente/testemunhos", cCliente);
+    // O testemunho vive agora no Feed Clientes (a grelha antiga redirecciona
+    // para lá): uma só tela para promoções e testemunhos.
+    const r = await pagina("/cliente/conteudo", cCliente);
     assert(r.status === 200, `HTTP ${r.status}`);
     const t = texto(r.html);
+    assert(t.includes("Feed Clientes"), "sem o nome do feed");
     assert(t.includes(TITULO_TEST), "testemunho ausente da área de cliente");
     assert(t.includes("Cliente E2E"), "sem o nome de quem testemunha");
     return "200 com o testemunho";
@@ -2965,7 +3005,7 @@ if (TEM_CONTEUDOS) {
 
   await check("testemunho em rascunho NÃO aparece ao cliente", async () => {
     // Só o que está publicado chega ao cliente: um rascunho é trabalho interno.
-    const p = await pagina("/cliente/testemunhos", cCliente);
+    const p = await pagina("/cliente/conteudo", cCliente);
     assert(!texto(p.html).includes(RASCUNHO_TEST), "rascunho exposto na página");
 
     const api = await sb("/rest/v1/content_items?select=id&id=eq." + rascunho.data[0].id, {
@@ -3068,6 +3108,34 @@ if (TEM_CONTEUDOS) {
     const deviaVer = PROV_CLIENTE === null || PROV_CLIENTE === PROVINCIA.id;
     assert(viu === deviaVer, `viu=${viu}, esperado=${deviaVer} (província ${PROV_CLIENTE})`);
     return deviaVer ? "cliente da província vê" : "cliente de outra província não vê";
+  });
+
+  await check("o Feed Clientes mostra promoções e testemunhos, sem comunicados", async () => {
+    const r = await pagina("/cliente/conteudo", cCliente);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+    assert(t.includes("Feed Clientes"), "sem o nome do feed");
+    assert(t.includes("Promoções"), "sem o filtro de promoções");
+    assert(t.includes("Testemunhos"), "sem o filtro de testemunhos");
+    assert(t.includes(TITULO_PROMO), "a promoção não está no feed do cliente");
+    assert(t.includes(TITULO_TEST), "o testemunho não está no feed do cliente");
+    if (TEM_0019) {
+      assert(!t.includes(TITULO_COM), "o comunicado interno está no feed do cliente");
+    }
+    return "promoções + testemunhos";
+  });
+
+  await check("o Perfil do cliente reúne identidade, referência e atalhos", async () => {
+    const r = await pagina("/cliente", cCliente);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+    assert(t.includes("Olá,"), "sem a saudação");
+    assert(t.includes("Bem-vindo à sua área de cliente INUKA"), "sem as boas-vindas");
+    assert(t.includes("Minha referência"), "sem o bloco da referência");
+    assert(t.includes("Cliente INUKA"), "sem a etiqueta de cliente");
+    assert(t.includes("O seu colaborador"), "sem o bloco do colaborador");
+    assert(t.includes("Feed Clientes"), "sem o atalho do feed");
+    return "perfil completo";
   });
 
   // --- 11.5 Formação INUKA ----------------------------------------------------

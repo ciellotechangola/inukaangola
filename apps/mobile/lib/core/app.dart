@@ -141,7 +141,7 @@ class _RootPageState extends State<RootPage> {
 ///
 /// Visitante e cliente vêem a loja (catálogo, notícias, carrinho, perfil).
 /// Quem trabalha na empresa ganha um separador «Área» com as ferramentas do
-/// seu papel — e perde «Notícias», que é conteúdo para clientes.
+/// seu papel — e perde o «Feed», que é conteúdo para clientes.
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
@@ -210,7 +210,7 @@ class _MainShellState extends State<MainShell> {
       if (!equipa)
         _Separador(
           chave: 'noticias',
-          rotulo: 'Notícias',
+          rotulo: 'Feed',
           icone: Icons.newspaper_outlined,
           iconeActivo: Icons.newspaper,
           pagina: FeedPage(),

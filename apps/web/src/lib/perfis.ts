@@ -40,7 +40,7 @@ export const PERFIS: Perfil[] = [
       "Acesso total a todas as áreas, incluindo definições e designer",
       "Vê todas as províncias e todos os colaboradores",
       "Cria, promove e desactiva contas de colaborador e de vendedor de loja",
-      "Publica conteúdos e comunicados no feed dos clientes",
+      "Publica no Feed Inuka (equipa) e no Feed Clientes (promoções e testemunhos)",
     ],
     limites: [
       "As alterações de preço e de taxa de comissão ficam registadas na auditoria",
@@ -92,7 +92,7 @@ export const PERFIS: Perfil[] = [
     regalias: [
       "Preço de loja e promoções publicadas",
       "Reservas com prazo quando um artigo está esgotado",
-      "Favoritos, histórico de compras e feed de notícias",
+      "Favoritos, histórico de compras e o Feed Clientes (promoções e testemunhos)",
       "Conversa privada com a gestão — nunca num grupo",
     ],
     limites: [
@@ -181,14 +181,15 @@ export const MATRIZ: LinhaMatriz[] = [
   },
   {
     competencia: "feed_ver",
-    rotulo: "Feed de notícias",
-    descricao: "Comunicados, testemunhos e promoções da empresa.",
-    quem: ["manager", "customer"],
+    rotulo: "Feed Inuka e Feed Clientes",
+    descricao:
+      "Comunicados e formação só para a equipa; promoções e testemunhos para os clientes.",
+    quem: ["manager", "seller", "store_seller", "customer"],
   },
   {
     competencia: "feed_publicar",
     rotulo: "Publicar no feed",
-    descricao: "Criar e agendar notícias, promoções e testemunhos.",
+    descricao: "Criar e agendar comunicados, promoções e testemunhos.",
     quem: ["manager"],
   },
   {

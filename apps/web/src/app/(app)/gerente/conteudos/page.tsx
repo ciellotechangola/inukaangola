@@ -155,11 +155,25 @@ export default async function ConteudosPage({
       <div className="mb-2 flex flex-wrap items-end justify-between gap-3">
         <h1 className="text-3xl font-light text-[#F5F5F5]">Conteúdos</h1>
         <div className="flex flex-wrap gap-2">
+          {/* Os dois feeds, à mão: é lá que se vê o que o cliente (e a equipa)
+              recebe, e é lá que está a lista de quem reagiu. */}
           <Link
-            href="/gerente/conteudos/novo"
+            href="/vendedor/comunicados"
+            className="flex items-center gap-1.5 rounded-lg border border-[#404040] px-3 py-2 text-xs font-semibold text-[#F5F5F5] transition hover:border-[#C9A962] hover:text-[#C9A962]"
+          >
+            Ver Feed Inuka
+          </Link>
+          <Link
+            href="/cliente/conteudo"
+            className="flex items-center gap-1.5 rounded-lg border border-[#404040] px-3 py-2 text-xs font-semibold text-[#F5F5F5] transition hover:border-[#C9A962] hover:text-[#C9A962]"
+          >
+            Ver Feed Clientes
+          </Link>
+          <Link
+            href="/gerente/conteudos/novo?tipo=comunicado"
             className="flex items-center gap-1.5 rounded-lg bg-[#C9A962] px-3 py-2 text-xs font-semibold text-[#0A0A0A] transition hover:bg-[#D8BC7A]"
           >
-            <Plus className="h-3.5 w-3.5" /> Novo comunicado
+            <Plus className="h-3.5 w-3.5" /> Nova publicação
           </Link>
           <Link
             href="/designer"

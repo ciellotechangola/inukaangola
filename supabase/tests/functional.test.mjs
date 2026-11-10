@@ -67,6 +67,7 @@ for (const rel of [
   "migrations/0016_eliminar_colaborador.sql",
   "migrations/0017_cliente_da_venda_na_carteira.sql",
   "migrations/0018_tarefas_e_gestor.sql",
+  "migrations/0019_feed_clientes.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -1379,18 +1380,19 @@ check("comunicado aparece no feed do colaborador",
   feedColab[0].r.length === 1 && feedColab[0].r[0].title === "Reunião geral de sexta",
   String(feedColab[0].r.length));
 
-// 16.3 o cliente vê o comunicado: é notícia da empresa no feed dele (0013)
+// 16.3 o cliente NÃO vê o comunicado: desde a 0019 é conteúdo exclusivo da
+//      equipa. O feed do cliente é o «Feed Clientes» (promoções e testemunhos).
 const feedCliente = await asUser(C1, async () =>
   q(`SELECT public.conteudo_feed('comunicado') AS r`)
 );
-check("comunicado chega ao cliente no feed de notícias",
-  feedCliente[0].r.length === 1 && feedCliente[0].r[0].title === "Reunião geral de sexta",
+check("comunicado não chega ao cliente",
+  feedCliente[0].r.length === 0,
   String(feedCliente[0].r.length));
 
 const linhaCliente = await asUser(C1, async () =>
   q(`SELECT count(*)::int n FROM public.content_items WHERE kind = 'comunicado'`)
 );
-check("cliente lê o comunicado publicado na tabela", Number(linhaCliente[0].n) === 1,
+check("cliente não lê o comunicado publicado na tabela", Number(linhaCliente[0].n) === 0,
   String(linhaCliente[0].n));
 
 // 16.4 rascunho nunca sai
@@ -2428,20 +2430,20 @@ check("formação continua fora do feed do cliente",
 
 const feedGeral = await asUser(C1, async () =>
   q(`SELECT public.conteudo_feed(NULL, 30) AS r`));
-check("o feed do cliente traz comunicados e testemunhos",
-  feedGeral[0].r.some((c) => c.kind === "comunicado"),
+check("o feed do cliente não traz comunicados nem formação",
+  feedGeral[0].r.every((c) => c.kind !== "comunicado" && c.kind !== "formacao"),
   feedGeral[0].r.map((c) => c.kind).join(","));
 
-// 19.7 o cliente reage ao comunicado que agora vê
-const reacao = await asUser(C1, async () => {
-  try {
-    await q(`INSERT INTO public.content_reactions (item_id, user_id, reaction)
-             SELECT id, '${C1}', 'gosto' FROM public.content_items
-             WHERE kind = 'comunicado' AND status = 'publicado' LIMIT 1`);
-    return null;
-  } catch (e) { return e.message; }
-});
-check("cliente reage ao comunicado", reacao === null, reacao ?? "");
+// 19.7 o cliente já não reage ao comunicado: deixou de o poder ver (0019).
+//      O INSERT ... SELECT não encontra a linha — a política de leitura de
+//      `content_items` esconde-a — por isso não grava nada e não dá erro.
+const reacao = await asUser(C1, async () =>
+  q(`INSERT INTO public.content_reactions (item_id, user_id, reaction)
+     SELECT id, '${C1}', 'gosto' FROM public.content_items
+     WHERE kind = 'comunicado' AND status = 'publicado' LIMIT 1
+     RETURNING id`));
+check("cliente não reage a um comunicado que não vê", reacao.length === 0,
+  `${reacao.length} reacções gravadas`);
 
 
 // 19.8 a loja prepara encomendas da sua província — e só dessas
@@ -3187,6 +3189,150 @@ const anulada = await q(`SELECT s.status, c.status AS comissao
 check("anular a venda anula a comissão",
   anulada[0].status === "cancelled" && anulada[0].comissao === "cancelled",
   JSON.stringify(anulada[0]));
+
+console.log("\n--- 20. FEED CLIENTES: COMUNICADOS SÓ PARA A EQUIPA (0019) ---");
+// ===========================================================================
+
+// --- 20.1 Que tipos são internos -----------------------------------------
+check("comunicado e formação são tipos internos",
+  (await q(`SELECT public.kind_so_equipa('comunicado') AS a,
+                   public.kind_so_equipa('formacao')   AS b,
+                   public.kind_so_equipa('promocao')   AS c,
+                   public.kind_so_equipa('testemunho') AS d`))[0].a === true
+  && (await q(`SELECT public.kind_so_equipa('formacao') AS b`))[0].b === true
+  && (await q(`SELECT public.kind_so_equipa('promocao') AS c`))[0].c === false
+  && (await q(`SELECT public.kind_so_equipa('testemunho') AS d`))[0].d === false);
+
+const kindCliente = await asUser(C1, async () =>
+  q(`SELECT public.pode_ver_kind('comunicado') AS comunicado,
+            public.pode_ver_kind('promocao')   AS promocao`));
+check("cliente não pode ver comunicados, mas vê promoções",
+  kindCliente[0].comunicado === false && kindCliente[0].promocao === true,
+  JSON.stringify(kindCliente[0]));
+
+const kindColab = await asUser(S_UIGE, async () =>
+  q(`SELECT public.pode_ver_kind('comunicado') AS comunicado,
+            public.pode_ver_kind('formacao')   AS formacao`));
+check("colaborador vê comunicados e formação",
+  kindColab[0].comunicado === true && kindColab[0].formacao === true,
+  JSON.stringify(kindColab[0]));
+
+const kindLoja = await asUser(LOJA, async () =>
+  q(`SELECT public.pode_ver_kind('comunicado') AS comunicado`));
+check("vendedor de loja também vê os comunicados", kindLoja[0].comunicado === true,
+  JSON.stringify(kindLoja[0]));
+
+await exec(`SET ROLE anon;`);
+const kindAnon = await q(`SELECT public.pode_ver_kind('comunicado') AS comunicado`);
+await exec(`RESET ROLE;`);
+check("visitante sem sessão não vê comunicados", kindAnon[0].comunicado === false,
+  JSON.stringify(kindAnon[0]));
+
+// --- 20.2 pode_ver_conteudo concorda com o feed --------------------------
+const verComunicadoC1 = await asUser(C1, async () =>
+  q(`SELECT public.pode_ver_conteudo('${comunicadoId}') AS v`));
+check("pode_ver_conteudo recusa o comunicado ao cliente",
+  verComunicadoC1[0].v === false, JSON.stringify(verComunicadoC1[0]));
+
+const verComunicadoLoja = await asUser(LOJA, async () =>
+  q(`SELECT public.pode_ver_conteudo('${comunicadoId}') AS v`));
+check("pode_ver_conteudo aceita o comunicado ao vendedor de loja",
+  verComunicadoLoja[0].v === true, JSON.stringify(verComunicadoLoja[0]));
+
+const feedLoja = await asUser(LOJA, async () =>
+  q(`SELECT public.conteudo_feed('comunicado') AS r`));
+check("comunicado aparece no feed do vendedor de loja",
+  feedLoja[0].r.some((c) => c.id === comunicadoId),
+  String(feedLoja[0].r.length));
+
+const feedClienteComunicado = await asUser(C1, async () =>
+  q(`SELECT public.conteudo_feed('comunicado') AS r`));
+check("o feed de comunicados vem vazio para o cliente",
+  feedClienteComunicado[0].r.length === 0, String(feedClienteComunicado[0].r.length));
+
+// O cliente continua a ver o que lhe compete: promoções e testemunhos.
+const testemunho = await asUser(MANAGER, async () =>
+  q(`INSERT INTO public.content_items (kind, title, body, status, author_name)
+     VALUES ('testemunho', 'A minha pele mudou', 'Uso há seis meses.', 'publicado', 'Dona Maria')
+     RETURNING id`));
+const feedClientes = await asUser(C1, async () =>
+  q(`SELECT public.conteudo_feed(NULL, 40) AS r`));
+check("o Feed Clientes traz testemunhos e promoções",
+  feedClientes[0].r.some((c) => c.kind === "testemunho")
+  && feedClientes[0].r.some((c) => c.kind === "promocao"),
+  feedClientes[0].r.map((c) => c.kind).join(","));
+check("o Feed Clientes não traz nada da equipa",
+  feedClientes[0].r.every((c) => c.kind !== "comunicado" && c.kind !== "formacao"),
+  feedClientes[0].r.map((c) => c.kind).join(","));
+
+// --- 20.3 Quem reagiu: só a gestão ---------------------------------------
+const promoNacional = await q(`
+  SELECT id FROM public.content_items
+  WHERE kind = 'promocao' AND title = 'Promoção nacional válida' LIMIT 1`);
+const PROMO = promoNacional[0].id;
+
+await asUser(C1, async () =>
+  q(`INSERT INTO public.content_reactions (item_id, user_id, reaction)
+     VALUES ('${PROMO}', '${C1}', 'gosto')`));
+await asUser(C2, async () =>
+  q(`INSERT INTO public.content_reactions (item_id, user_id, reaction)
+     VALUES ('${PROMO}', '${C2}', 'adoro')`));
+await asUser(S_UIGE, async () =>
+  q(`INSERT INTO public.content_reactions (item_id, user_id, reaction)
+     VALUES ('${PROMO}', '${S_UIGE}', 'util')`));
+
+const quemReagiu = await asUser(MANAGER, async () =>
+  q(`SELECT public.conteudo_reacoes('${PROMO}') AS r`));
+const rr = quemReagiu[0].r;
+check("a gestão vê o total e a divisão por tipo de reacção",
+  Number(rr.total) === 3 && Number(rr.gosto) === 1 && Number(rr.adoro) === 1
+  && Number(rr.util) === 1,
+  JSON.stringify({ total: rr.total, gosto: rr.gosto, adoro: rr.adoro, util: rr.util }));
+check("a gestão distingue clientes de equipa",
+  Number(rr.clientes) === 2 && Number(rr.equipa) === 1,
+  JSON.stringify({ clientes: rr.clientes, equipa: rr.equipa }));
+
+const nomes = rr.gente.map((g) => g.nome);
+// Os nomes vêm de `profiles` — e um teste anterior já renomeou o C1, por isso
+// compara-se com a tabela em vez de fixar o texto.
+const nomesEsperados = await q(
+  `SELECT full_name FROM public.profiles WHERE id IN ('${C1}','${C2}','${S_UIGE}')`);
+check("a lista traz o nome de cada pessoa que reagiu",
+  nomes.length === 3 && nomesEsperados.every((p) => nomes.includes(p.full_name)),
+  JSON.stringify(nomes));
+check("a lista traz telefone e província do cliente",
+  rr.gente.every((g) => g.telefone && g.telefone.startsWith("+244")),
+  JSON.stringify(rr.gente.map((g) => g.telefone)));
+check("a lista traz o tipo de reacção de cada pessoa",
+  rr.gente.find((g) => g.nome === "Cliente Dois")?.reacao === "adoro",
+  JSON.stringify(rr.gente.map((g) => `${g.nome}:${g.reacao}`)));
+
+const reagiuColab = await asUser(S_UIGE, async () => {
+  try {
+    await q(`SELECT public.conteudo_reacoes('${PROMO}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("o colaborador não vê quem reagiu",
+  /só a gestão/i.test(reagiuColab ?? ""), reagiuColab ?? "não deu erro");
+
+const reagiuCliente = await asUser(C1, async () => {
+  try {
+    await q(`SELECT public.conteudo_reacoes('${PROMO}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("o cliente não vê quem reagiu",
+  /só a gestão/i.test(reagiuCliente ?? ""), reagiuCliente ?? "não deu erro");
+
+// Sem reacções a resposta é vazia, não nula — a interface não precisa de tratar
+// dois casos.
+const semReacoes = await asUser(MANAGER, async () =>
+  q(`SELECT public.conteudo_reacoes('${testemunho[0].id}') AS r`));
+check("conteúdo sem reacções devolve zero e lista vazia",
+  Number(semReacoes[0].r.total) === 0 && Array.isArray(semReacoes[0].r.gente)
+  && semReacoes[0].r.gente.length === 0,
+  JSON.stringify(semReacoes[0].r));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);
