@@ -2290,6 +2290,8 @@ if (!TEM_CONTEUDOS) {
 const GESTOR_ID = sGestor.user.id;
 const VENDEDOR_ID = sVendedor.user.id;
 const criados = [];
+/** Ficheiro do bucket `content-media` criado no teste do feed (limpo no fim). */
+let FICHEIRO_E2E = "";
 
 if (TEM_CONTEUDOS) {
   const SUF = Date.now().toString().slice(-6);
@@ -2402,12 +2404,20 @@ if (TEM_CONTEUDOS) {
   });
 
   // --- 11.2 Comunicado da gestão → feed do colaborador ------------------------
+  // O corpo é longo de propósito: é o que faz aparecer o «Ver tudo» no cartão.
+  // Com duas linhas de texto o feed mostra tudo e não há nada para abrir.
+  const CORPO_COM =
+    "Reunião geral na delegação na sexta-feira, às 9h, com toda a equipa de vendas. " +
+    "Vamos apresentar a nova tabela de preços, o calendário de campanhas do trimestre " +
+    "e as metas por província. Quem não puder estar presente deve avisar o gestor da " +
+    "sua delegação até quarta-feira, para receber a ligação à sessão.";
+
   const TITULO_COM = `[E2E] Comunicado ${SUF}`;
   const comunicado = await inserir("content_items", {
     kind: "comunicado",
     title: TITULO_COM,
     subtitle: "Aviso interno da gestão",
-    body: "Reunião geral na delegação na sexta-feira, às 9h.",
+    body: CORPO_COM,
     status: "publicado",
     is_pinned: true,
     allow_reactions: true,
@@ -2447,6 +2457,168 @@ if (TEM_CONTEUDOS) {
     assert(meu, "o comunicado não veio no feed do colaborador");
     assert(meu.is_pinned === true, "não veio fixado");
     return `${lista.length} comunicados · fixado em ${lista.findIndex((c) => c.id === COM_ID) + 1}.º`;
+  });
+
+  // --- 11.2b Feed estilo rede social: abrir, descarregar, publicar ------------
+  let IMAGEM_E2E = "";
+  const CAMINHO_IMG = `comunicado/e2e-${SUF}.png`;
+  // PNG de 1×1 — chega para provar que os bytes viajam e que o tipo se preserva.
+  const PNG_1PX =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+
+  await check("o cartão do feed mostra cabeçalho, legenda e «Ver tudo»", async () => {
+    const r = await pagina("/vendedor/comunicados", cVendedor);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+
+    assert(t.includes(TITULO_COM), "sem o título");
+    assert(t.includes("Aviso interno da gestão"), "sem a linha de apoio");
+    // O texto é cortado por CSS (line-clamp), não por corte no servidor: o
+    // cartão mostra três linhas e o resto abre no leitor.
+    assert(t.includes("Ver tudo"), "o texto longo não oferece «Ver tudo»");
+    assert(r.html.includes("line-clamp-3"), "a legenda não está limitada a três linhas");
+    assert(t.includes("Descarregar"), "sem a acção de descarregar");
+
+    // Cabeçalho e mídia são botões: é isso que torna o cartão clicável.
+    const botoes = (r.html.match(/<button[^>]*type="button"/g) ?? []).length;
+    assert(botoes >= 2, `só ${botoes} botão(ões) no cartão`);
+    return `${botoes} botões · texto cortado`;
+  });
+
+  await check("descarregar um comunicado de texto devolve o aviso em .txt", async () => {
+    const r = await fetch(`${APP}/api/conteudos/${COM_ID}/download`, {
+      headers: { cookie: cVendedor },
+    });
+    assert(r.status === 200, `HTTP ${r.status}`);
+
+    const disposicao = r.headers.get("content-disposition") ?? "";
+    assert(disposicao.startsWith("attachment"), `content-disposition: ${disposicao}`);
+    assert(disposicao.includes(".txt"), `sem extensão .txt: ${disposicao}`);
+    assert(/filename="e2e-+comunicado/.test(disposicao), `nome inesperado: ${disposicao}`);
+
+    const corpo = await r.text();
+    assert(corpo.includes(TITULO_COM), "o ficheiro não tem o título");
+    assert(corpo.includes("receber a ligação à sessão"), "o ficheiro não tem o texto todo");
+    return disposicao.replace(/.*filename=/, "");
+  });
+
+  await check("o download exige sessão", async () => {
+    const r = await fetch(`${APP}/api/conteudos/${COM_ID}/download`);
+    assert(r.status === 403, `HTTP ${r.status}`);
+    return "403 sem cookie";
+  });
+
+  await check("descarregar um conteúdo inexistente devolve 404", async () => {
+    const r = await fetch(
+      `${APP}/api/conteudos/00000000-0000-0000-0000-000000000000/download`,
+      { headers: { cookie: cVendedor } }
+    );
+    assert(r.status === 404, `HTTP ${r.status}`);
+    return "404";
+  });
+
+  await check("a gestão publica uma imagem no comunicado", async () => {
+    // Mesma via do formulário (data URL → bucket público), aqui em REST para
+    // não depender de um browser. É o que faz o cartão deixar de ser só texto.
+    const envio = await fetch(`${BASE}/storage/v1/object/content-media/${CAMINHO_IMG}`, {
+      method: "POST",
+      headers: {
+        apikey: SR,
+        Authorization: `Bearer ${SR}`,
+        "Content-Type": "image/png",
+        "x-upsert": "true",
+      },
+      body: Buffer.from(PNG_1PX, "base64"),
+    });
+    assert(envio.ok, `upload ${envio.status}`);
+
+    IMAGEM_E2E = `${BASE}/storage/v1/object/public/content-media/${CAMINHO_IMG}`;
+    const r = await sb(`/rest/v1/content_items?id=eq.${COM_ID}`, {
+      method: "PATCH",
+      key: SR,
+      jwt: SR,
+      prefer: "return=minimal",
+      body: { image_url: IMAGEM_E2E, image_path: CAMINHO_IMG },
+    });
+    assert(r.ok, JSON.stringify(r.data).slice(0, 120));
+    FICHEIRO_E2E = CAMINHO_IMG;
+    return CAMINHO_IMG;
+  });
+
+  await check("a imagem publicada aparece no topo do cartão", async () => {
+    const r = await pagina("/vendedor/comunicados", cVendedor);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    assert(r.html.includes(IMAGEM_E2E), "a imagem não está no cartão");
+    // `object-contain` é o que impede uma foto de telemóvel de ficar cortada.
+    assert(/<img[^>]+object-contain/.test(r.html), "a imagem não está contida no cartão");
+    return "imagem no cartão";
+  });
+
+  await check("descarregar com imagem devolve os bytes em anexo", async () => {
+    const r = await fetch(`${APP}/api/conteudos/${COM_ID}/download`, {
+      headers: { cookie: cVendedor },
+    });
+    assert(r.status === 200, `HTTP ${r.status}`);
+
+    const disposicao = r.headers.get("content-disposition") ?? "";
+    assert(disposicao.startsWith("attachment"), `content-disposition: ${disposicao}`);
+    assert(disposicao.includes(".png"), `sem extensão .png: ${disposicao}`);
+
+    const tipo = r.headers.get("content-type") ?? "";
+    assert(tipo.includes("image/png"), `content-type: ${tipo}`);
+
+    const bytes = Buffer.from(await r.arrayBuffer());
+    // Assinatura PNG: prova que são os bytes da imagem e não o texto de recurso.
+    assert(
+      bytes.subarray(0, 4).toString("hex") === "89504e47",
+      `não são bytes de PNG (${bytes.subarray(0, 4).toString("hex")})`
+    );
+    return `${disposicao.replace(/.*filename=/, "")} · ${bytes.length} bytes`;
+  });
+
+  await check("a gestão abre o formulário de comunicado", async () => {
+    const r = await pagina("/gerente/conteudos/novo", cGestor);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const t = texto(r.html);
+    assert(t.includes("Novo comunicado"), "sem o título da página");
+    assert(t.includes("Escolher uma imagem"), "sem o botão de imagem");
+    assert(t.includes("Publicar agora"), "sem o botão de publicar");
+    assert(t.includes("Guardar rascunho"), "sem o botão de rascunho");
+    assert(t.includes("Fixar no topo"), "sem a opção de destaque");
+    return "formulário completo";
+  });
+
+  await check("o colaborador não abre o formulário — é leitor", async () => {
+    const r = await pagina("/gerente/conteudos/novo", cVendedor);
+    assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+    assert((r.location || "").includes("/vendedor"), `redirect: ${r.location}`);
+    return `${r.status} -> ${r.location}`;
+  });
+
+  await check("só a gestão vê o atalho de publicar no feed", async () => {
+    const g = await pagina("/vendedor/comunicados", cGestor);
+    assert(g.status === 200, `gestor HTTP ${g.status}`);
+    assert(
+      g.html.includes('href="/gerente/conteudos/novo"'),
+      "a gestão não tem o atalho de publicar"
+    );
+
+    const v = await pagina("/vendedor/comunicados", cVendedor);
+    assert(v.status === 200, `colaborador HTTP ${v.status}`);
+    assert(
+      !v.html.includes('href="/gerente/conteudos/novo"'),
+      "o colaborador vê o atalho de publicar"
+    );
+    return "gestor edita · colaborador lê";
+  });
+
+  await check("a lista de conteúdos tem o atalho «Novo comunicado»", async () => {
+    const r = await pagina("/gerente/conteudos", cGestor);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    assert(r.html.includes('href="/gerente/conteudos/novo"'), "sem o atalho na lista");
+    const t = texto(r.html);
+    assert(t.includes("Novo comunicado"), "sem o rótulo do atalho");
+    return "atalho presente";
   });
 
   await check("cliente NÃO abre o feed de comunicados", async () => {
@@ -2931,6 +3103,16 @@ await check("remover conteúdos e formação criados", async () => {
   await del(`/rest/v1/training_enrollments?user_id=eq.${VENDEDOR_ID}`);
   await del(`/rest/v1/training_bookmarks?user_id=eq.${VENDEDOR_ID}`);
   return `${criados.length} conteúdos/cursos`;
+});
+
+await check("remover a imagem do teste do bucket", async () => {
+  if (!FICHEIRO_E2E) return "nada a remover (teste do feed não correu)";
+  const r = await fetch(`${BASE}/storage/v1/object/content-media/${FICHEIRO_E2E}`, {
+    method: "DELETE",
+    headers: { apikey: SR, Authorization: `Bearer ${SR}` },
+  });
+  assert(r.ok, `HTTP ${r.status}`);
+  return FICHEIRO_E2E;
 });
 
 // ---------------------------------------------------------------------------

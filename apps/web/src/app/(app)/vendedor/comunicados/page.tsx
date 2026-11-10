@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Megaphone } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
-import { CartaoConteudo } from "@/components/conteudos/CartaoConteudo";
+import { FeedComunicados } from "@/components/conteudos/FeedComunicados";
 import type { Conteudo } from "@/lib/conteudos";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +14,10 @@ export const dynamic = "force-dynamic";
  * Só colaboradores e gestão entram aqui. O RLS garante que um cliente não vê
  * estas linhas, mas a página também redirecciona — não vale a pena mostrar uma
  * lista vazia a quem não devia estar a ler.
+ *
+ * A gestão é editora (publica), o colaborador é leitor. O feed mostra o cartão
+ * e o texto completo abre por cima, a pedido — é o formato que o colaborador
+ * já conhece do telemóvel.
  */
 export default async function ComunicadosPage() {
   const profile = await getProfile();
@@ -27,6 +31,7 @@ export default async function ComunicadosPage() {
   });
 
   const comunicados = (data ?? []) as Conteudo[];
+  const gestor = profile.role === "manager";
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-10">
@@ -51,7 +56,9 @@ export default async function ComunicadosPage() {
         </nav>
       </div>
       <p className="mb-8 text-sm text-[#A3A3A3]">
-        Avisos oficiais da administração INUKA. Os comunicados importantes ficam no topo.
+        {gestor
+          ? "Avisos oficiais da administração INUKA. Publique uma imagem ou um texto — os colaboradores recebem aqui."
+          : "Avisos oficiais da administração INUKA. Toque num comunicado para ler tudo; pode descarregar o que precisar de guardar."}
       </p>
 
       {error && (
@@ -61,20 +68,23 @@ export default async function ComunicadosPage() {
       )}
 
       {!error && comunicados.length === 0 && (
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-[#2A2A2A] bg-[#111] px-6 py-16 text-center">
+        <div className="mx-auto flex max-w-[560px] flex-col items-center gap-3 rounded-2xl border border-dashed border-[#2A2A2A] bg-[#111] px-6 py-16 text-center">
           <Megaphone className="h-7 w-7 text-[#3F3F3F]" />
           <p className="text-sm text-[#A3A3A3]">Ainda não há comunicados publicados.</p>
           <p className="max-w-sm text-xs text-[#5F5F5F]">
-            Quando a gestão publicar um comunicado no estúdio, ele aparece aqui.
+            {gestor
+              ? "Use «Publicar comunicado» para pôr aqui o primeiro aviso, com imagem se quiser."
+              : "Quando a gestão publicar um comunicado, ele aparece aqui."}
           </p>
         </div>
       )}
 
-      <div className="space-y-4">
-        {comunicados.map((c) => (
-          <CartaoConteudo key={c.id} conteudo={c} variante="feed" />
-        ))}
-      </div>
+      {comunicados.length > 0 && (
+        <FeedComunicados
+          itens={comunicados}
+          hrefNovo={gestor ? "/gerente/conteudos/novo" : undefined}
+        />
+      )}
     </main>
   );
 }

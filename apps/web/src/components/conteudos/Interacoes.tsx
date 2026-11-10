@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Heart, Loader2, MessageCircle, Send, Sparkles, ThumbsUp } from "lucide-react";
 import { comentar, listarComentarios, reagir, type Comentario } from "@/lib/conteudos";
 
@@ -25,6 +25,7 @@ export function Interacoes({
   reacoes,
   minhaReacao,
   comentarios,
+  compacto,
 }: {
   itemId: string;
   permitirReacoes: boolean;
@@ -32,6 +33,8 @@ export function Interacoes({
   reacoes: number | string;
   minhaReacao: string | null;
   comentarios: number | string;
+  /** Já está dentro de uma barra com margem e linha próprias (feed). */
+  compacto?: boolean;
 }) {
   const [reacao, setReacao] = useState<string | null>(minhaReacao);
   const [total, setTotal] = useState(Number(reacoes) || 0);
@@ -53,9 +56,18 @@ export function Interacoes({
     }
   }, [itemId]);
 
-  useEffect(() => {
-    if (aberto && lista === null) void carregarComentarios();
-  }, [aberto, carregarComentarios, lista]);
+  /**
+   * Abrir os comentários carrega-os na primeira vez.
+   *
+   * Estava num `useEffect` que chamava `setState` de forma síncrona — o React
+   * desaconselha (renderiza duas vezes) e o lint recusava. Aqui é o próprio
+   * clique que pede a lista; o efeito deixou de existir.
+   */
+  function alternarComentarios() {
+    const proximo = !aberto;
+    setAberto(proximo);
+    if (proximo && lista === null) void carregarComentarios();
+  }
 
   async function alternar(chave: string) {
     if (aReagir) return;
@@ -103,7 +115,7 @@ export function Interacoes({
   if (!permitirReacoes && !permitirComentarios) return null;
 
   return (
-    <div className="mt-3 border-t border-[#262626] pt-3">
+    <div className={compacto ? "" : "mt-3 border-t border-[#262626] pt-3"}>
       <div className="flex flex-wrap items-center gap-2">
         {permitirReacoes &&
           REACOES.map(({ key, label, Icon }) => {
@@ -136,7 +148,7 @@ export function Interacoes({
         {permitirComentarios && (
           <button
             type="button"
-            onClick={() => setAberto((v) => !v)}
+            onClick={alternarComentarios}
             className="ml-auto flex items-center gap-1.5 rounded-full border border-[#2E2E2E] px-3 py-1.5 text-[11px] text-[#A3A3A3] transition hover:border-[#C9A962]/50 hover:text-[#C9A962]"
             aria-expanded={aberto}
           >

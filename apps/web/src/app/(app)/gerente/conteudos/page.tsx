@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { PenLine } from "lucide-react";
+import { PenLine, Plus } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
 import { listarProvincias, nomeDaProvincia, type Provincia } from "@/lib/provincias";
@@ -154,12 +154,20 @@ export default async function ConteudosPage({
       <p className="mb-3 text-[10px] uppercase tracking-[0.18em] text-[#6F6F6F]">Gestão</p>
       <div className="mb-2 flex flex-wrap items-end justify-between gap-3">
         <h1 className="text-3xl font-light text-[#F5F5F5]">Conteúdos</h1>
-        <Link
-          href="/designer"
-          className="flex items-center gap-1.5 rounded-lg bg-[#C9A962] px-3 py-2 text-xs font-semibold text-[#0A0A0A] transition hover:bg-[#D8BC7A]"
-        >
-          <PenLine className="h-3.5 w-3.5" /> Criar no estúdio
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/gerente/conteudos/novo"
+            className="flex items-center gap-1.5 rounded-lg bg-[#C9A962] px-3 py-2 text-xs font-semibold text-[#0A0A0A] transition hover:bg-[#D8BC7A]"
+          >
+            <Plus className="h-3.5 w-3.5" /> Novo comunicado
+          </Link>
+          <Link
+            href="/designer"
+            className="flex items-center gap-1.5 rounded-lg border border-[#404040] px-3 py-2 text-xs font-semibold text-[#F5F5F5] transition hover:border-[#C9A962] hover:text-[#C9A962]"
+          >
+            <PenLine className="h-3.5 w-3.5" /> Criar no estúdio
+          </Link>
+        </div>
       </div>
       <p className="mb-6 text-sm text-[#A3A3A3]">
         Comunicados, testemunhos, promoções e capas de formação produzidos no estúdio.
