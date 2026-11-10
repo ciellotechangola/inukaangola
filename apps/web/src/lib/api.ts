@@ -157,16 +157,18 @@ export async function registerSale(
 }
 
 /**
- * Regista uma venda para um telefone que ainda não tem conta.
+ * Regista uma venda pelo telefone do cliente — o telefone é o cadastro.
  *
- * O `register_sale` normal exige um `customer_id`, que só existe depois do
- * registo. Esta variante grava o telefone na própria venda e reserva o cliente
- * para este colaborador — quando a pessoa se registar, a compra passa a ser
- * dela (ver `ligar_reserva_ao_cliente`).
+ * Serve os dois casos, e é a base de dados que decide qual é:
  *
- * O nome é anotado numa segunda chamada, e falha em silêncio: a reserva já foi
- * criada pela venda, por isso um nome que não se grave deixa a carteira como
- * estava (linha «por activar», sem nome) em vez de perder a venda.
+ *  - **o número já tem conta** — o cliente entra na carteira do colaborador e a
+ *    venda fica com o `customer_id` dele (`conquistado`);
+ *  - **ainda não tem conta** — a venda fica com o telefone e nasce uma reserva
+ *    com o nome, à espera do registo (`reservado`).
+ *
+ * Antes isto era um erro no primeiro caso («Este telefone já tem conta»), o que
+ * obrigava a interface a associar o cliente primeiro e a registar a venda
+ * depois. Duas chamadas para uma coisa só, e o telemóvel nem tinha esse passo.
  */
 export async function registerSaleByPhone(
   items: CartLine[],
@@ -178,7 +180,17 @@ export async function registerSaleByPhone(
     notes?: string;
     clientRef?: string;
   } = {}
-): Promise<SaleResult & { customer_phone: string; reservado: boolean }> {
+): Promise<
+  SaleResult & {
+    customer_phone: string;
+    customer_id: string | null;
+    customer_name: string | null;
+    /** O número já tinha conta: o cliente ficou na carteira de quem vendeu. */
+    conquistado: boolean;
+    /** O número não tinha conta: ficou reservado para quem vendeu. */
+    reservado: boolean;
+  }
+> {
   const supabase = createClientBrowser();
   const { data, error } = await supabase.rpc("register_sale_by_phone", {
     p_items: items,
@@ -187,22 +199,17 @@ export async function registerSaleByPhone(
     p_payment_status: options.paymentStatus ?? "pending",
     p_notes: options.notes ?? null,
     p_client_ref: options.clientRef ?? crypto.randomUUID(),
+    p_customer_name: options.customerName?.trim() || null,
   });
   rpcError(error);
 
-  const nome = options.customerName?.trim();
-  if (nome && nome.length >= 3) {
-    // Best-effort: a venda e a reserva já estão gravadas. Se isto falhar, a
-    // linha fica sem nome — nunca se perde a venda. Ver
-    // `POST /api/vendedor/clientes/nome`.
-    await fetch("/api/vendedor/clientes/nome", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone, full_name: nome }),
-    }).catch(() => undefined);
-  }
-
-  return data as SaleResult & { customer_phone: string; reservado: boolean };
+  return data as SaleResult & {
+    customer_phone: string;
+    customer_id: string | null;
+    customer_name: string | null;
+    conquistado: boolean;
+    reservado: boolean;
+  };
 }
 
 export interface CompraDoCliente {

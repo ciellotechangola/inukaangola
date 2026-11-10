@@ -65,6 +65,7 @@ for (const rel of [
   "migrations/0014_eliminar_forcado.sql",
   "migrations/0015_promocoes_levantamentos.sql",
   "migrations/0016_eliminar_colaborador.sql",
+  "migrations/0017_cliente_da_venda_na_carteira.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -1946,19 +1947,67 @@ check("vender a um desconhecido reserva-o para o colaborador",
   JSON.stringify(reservaAuto));
 
 // 18.3 a mesma venda, mas a um número que já tem conta
+//     A venda é o cadastro: o cliente entra na carteira sem passo nenhum.
 const telefoneComConta = (await q(`
   SELECT phone FROM public.profiles WHERE id = '${C_UIGE}'`))[0].phone;
-const recusaComConta = await asUser(S_UIGE, async () => {
-  try {
-    await q(`SELECT public.register_sale_by_phone(
-      '[{"product_id":"${pRes}","quantity":1}]'::jsonb, '${telefoneComConta}', 'cash', 'paid', NULL, 'venda-tel-002')`);
-    return null;
-  } catch (e) {
-    return e.message;
-  }
-});
-check("telefone com conta é recusado no registo de venda",
-  /já tem conta/i.test(recusaComConta ?? ""), recusaComConta ?? "não deu erro");
+const vendaComConta = (await asUser(S_UIGE, async () =>
+  q(`SELECT public.register_sale_by_phone(
+      '[{"product_id":"${pRes}","quantity":1}]'::jsonb, '${telefoneComConta}', 'cash', 'paid', NULL, 'venda-tel-002') AS r`)))[0].r;
+
+check("venda a um número com conta é aceite e marca o cliente como conquistado",
+  vendaComConta.conquistado === true && vendaComConta.customer_id === C_UIGE,
+  JSON.stringify(vendaComConta));
+
+const vendaComDono = await q(`
+  SELECT customer_id, customer_phone FROM public.sales WHERE id = '${vendaComConta.sale_id}'`);
+check("a venda fica com o dono e com o telefone",
+  vendaComDono[0].customer_id === C_UIGE && vendaComDono[0].customer_phone === telefoneComConta,
+  JSON.stringify(vendaComDono[0]));
+
+const carteiraConta = await q(`
+  SELECT seller_id FROM public.seller_customers
+  WHERE customer_id = '${C_UIGE}' AND is_active = true`);
+check("o cliente entra sozinho na carteira de quem vendeu",
+  carteiraConta.length === 1 && carteiraConta[0].seller_id === S_UIGE,
+  JSON.stringify(carteiraConta));
+
+// 18.3.1 um cliente já conquistado por outro colaborador não se rouba
+const donoDeOutro = (await asUser(M_UIGE, async () =>
+  q(`SELECT public.garantir_cliente_na_carteira('${C_UIGE}', '${M_UIGE}') AS r`)))[0].r;
+check("um cliente só pertence a um colaborador",
+  donoDeOutro.ok === false && donoDeOutro.reason === "outro_colaborador" &&
+    donoDeOutro.dono === S_UIGE,
+  JSON.stringify(donoDeOutro));
+
+// 18.3.2 a mesma regra usada pela carteira não duplica nem reescreve
+const carteiraOutraVez = (await asUser(S_UIGE, async () =>
+  q(`SELECT public.garantir_cliente_na_carteira('${C_UIGE}') AS r`)))[0].r;
+const vinculosConta = await q(`
+  SELECT count(*)::int n FROM public.seller_customers WHERE customer_id = '${C_UIGE}'`);
+check("voltar a garantir o mesmo cliente não cria um segundo vínculo",
+  carteiraOutraVez.ok === true && carteiraOutraVez.novo === false && vinculosConta[0].n === 1,
+  JSON.stringify(carteiraOutraVez));
+
+// `novo` tem de distinguir o primeiro vínculo de um reencontro: é o que a
+// interface usa para dizer «entrou nos seus clientes» só quando é verdade.
+const primeiraVez = (await asUser(S_UIGE, async () =>
+  q(`SELECT public.garantir_cliente_na_carteira('${C_LDA}') AS r`)))[0].r;
+check("um cliente que ainda não era do colaborador vem marcado como novo",
+  primeiraVez.ok === true && primeiraVez.novo === true,
+  JSON.stringify(primeiraVez));
+
+// 18.3.3 o nome escrito no formulário fica na reserva, na mesma chamada
+const telComNome = "+244927000009";
+const vendaComNome = (await asUser(S_UIGE, async () =>
+  q(`SELECT public.register_sale_by_phone('[{"product_id":"${pRes}","quantity":1}]'::jsonb,
+      '${telComNome}', 'cash', 'paid', NULL, 'venda-tel-004', 'Joana Kiala') AS r`)))[0].r;
+const reservaComNome = await q(`
+  SELECT full_name, status FROM public.reserved_customers WHERE phone = '${telComNome}'`);
+check("a reserva nasce já com o nome escrito na venda",
+  vendaComNome.reservado === true &&
+    reservaComNome[0]?.full_name === "Joana Kiala" &&
+    reservaComNome[0].status === "reservado",
+  JSON.stringify(reservaComNome));
 
 // 18.4 uma compra feita antes do registo
 const vendaReserva = (await asUser(S_UIGE, async () =>

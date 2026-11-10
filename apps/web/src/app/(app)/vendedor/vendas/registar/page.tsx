@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Plus, Trash2, Check } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
-import { registerSale, registerSaleByPhone, linkCustomerByPhone, type PaymentStatus } from "@/lib/api";
+import { registerSale, registerSaleByPhone, type PaymentStatus } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 
 interface ProductOption {
@@ -80,43 +80,41 @@ export default function RegisterSalePage() {
 
     setSaving(true);
     try {
-      let customerId: string | null = null;
-      let semConta = false;
       const telefone = customerPhone.trim();
-
-      if (telefone) {
-        const link = await linkCustomerByPhone(telefone);
-        if (!link.found) {
-          // Ainda não tem conta: a venda não se perde nem se inventa uma conta.
-          // Grava-se com o telefone e o cliente fica reservado.
-          semConta = true;
-        } else if (link.linked === false) {
-          setError(link.message ?? "Cliente associado a outro colaborador.");
-          setSaving(false);
-          return;
-        } else {
-          customerId = link.customer_id ?? null;
-        }
-      }
-
       const detalhes = { paymentMethod, paymentStatus, notes: notes || undefined };
 
-      const sale = semConta
-        ? await registerSaleByPhone(lines, telefone, { ...detalhes, customerName })
-        : await registerSale(lines, { ...detalhes, customerId });
+      // O telefone é o cadastro: a base de dados decide sozinha se o cliente já
+      // tem conta (entra na carteira) ou não (fica reservado). Não há aqui
+      // passo nenhum de «associar primeiro».
+      if (telefone) {
+        const sale = await registerSaleByPhone(lines, telefone, {
+          ...detalhes,
+          customerName,
+        });
+        const nome = customerName.trim() || "O cliente";
 
-      setResult({ reference: sale.reference, total: Number(sale.total) });
+        setResult({ reference: sale.reference, total: Number(sale.total) });
+        setInfo(
+          sale.duplicated
+            ? "Operação já registada anteriormente."
+            : sale.conquistado
+              ? `Venda registada. ${nome} entrou nos seus clientes conquistados.`
+              : `Venda registada. ${nome} ficou na sua carteira por activar — recebe esta compra quando abrir conta com o número ${telefone}.`
+        );
+      } else {
+        const sale = await registerSale(lines, detalhes);
+        setResult({ reference: sale.reference, total: Number(sale.total) });
+        setInfo(
+          sale.duplicated
+            ? "Operação já registada anteriormente."
+            : "Venda registada com sucesso."
+        );
+      }
+
       setLines([]);
       setNotes("");
       setCustomerName("");
       setCustomerPhone("");
-      setInfo(
-        sale.duplicated
-          ? "Operação já registada anteriormente."
-          : semConta
-            ? `Venda registada. ${customerName.trim() || "O cliente"} ficou na sua carteira, por activar — recebe esta compra quando abrir conta com o número ${telefone}.`
-            : "Venda registada com sucesso."
-      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Não foi possível registar a venda.");
     } finally {
@@ -216,14 +214,16 @@ export default function RegisterSalePage() {
           <p className="mt-2 text-[11px] leading-relaxed text-[#6F6F6F]">
             {customerPhone.trim() ? (
               <>
-                Com o telefone, o cliente entra automaticamente na sua carteira como{" "}
-                <span className="text-[#C9A962]">por activar</span> — com o nome, a compra e o
-                valor. A conta abre-a ele, quando quiser.
+                Com o telefone, o cliente entra sozinho nos seus{" "}
+                <span className="text-[#C9A962]">clientes conquistados</span>: se já tiver
+                conta fica logo associado a si; se ainda não tiver, fica na carteira como{" "}
+                <span className="text-[#C9A962]">por activar</span>, com o nome, a compra e
+                o valor — a conta abre-a ele quando quiser.
               </>
             ) : (
               <>
                 O telefone é o que liga a compra a uma pessoa. Sem ele a venda fica registada à
-                mesma, mas ninguém fica na sua carteira.
+                mesma, mas ninguém entra nos seus clientes conquistados.
               </>
             )}
           </p>
@@ -273,9 +273,9 @@ export default function RegisterSalePage() {
 
         <p className="mt-3 text-xs text-[#525252]">
           O stock e os preços são validados no servidor. Vendas repetidas com a mesma referência
-          não são duplicadas. Se o cliente ainda não tiver conta, a venda fica registada com o
-          telefone, o nome e os produtos, e ele passa a estar na sua carteira por activar —
-          recebe tudo no dia em que se registar.
+          não são duplicadas. O telefone é o cadastro do cliente: com ele, quem comprou passa a
+          ser seu cliente conquistado — associado à sua carteira se já tiver conta, reservado com
+          o nome e a compra se ainda não tiver.
         </p>
       </div>
     </main>

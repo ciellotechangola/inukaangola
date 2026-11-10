@@ -59,6 +59,9 @@ npm run setup:sql     # concatena migrations/ em SETUP_COMPLETO.sql
 | `PATCH_STOCK_PUBLICO.sql` | **Obrigatório** para «Esgotado» aparecer a quem não tem conta (`stock_produtos`). É a migração 0012 isolada. |
 | `PATCH_PERFIS_LOJA.sql` | **Obrigatório** para o perfil «vendedor de loja», a separação de competências, a eliminação de produtos com histórico e os comunicados no feed do cliente. É a migração 0013 isolada. |
 | `PATCH_ELIMINAR_FORCADO.sql` | Elimina um produto **e o histórico dele** (linhas de encomenda, venda e reserva, e os registos que ficam vazios). Para produtos fictícios, de demonstração ou de teste. É a migração 0014 isolada. Depende da 0013. |
+| `PATCH_PROMOCOES_LEVANTAMENTOS.sql` | **Obrigatório** para promoções por província, comissões por produto vendido e pedidos de levantamento. É a migração 0015 isolada: `preco_efetivo` como única regra de preço, `taxa_entrega`, `solicitar_levantamento`/`decidir_levantamento` e `levantamento_resumo`. Depende da 0013. |
+| `PATCH_ELIMINAR_COLABORADOR.sql` | **Obrigatório** para a gestão poder eliminar um colaborador **e as vendas dele**: `impacto_eliminar_colaborador` (só lê) e `eliminar_colaborador` (apaga com auditoria). É a migração 0016 isolada. Depende da 0015. |
+| `PATCH_CLIENTE_DA_VENDA.sql` | **Obrigatório** para o cliente da venda entrar sozinho na carteira: `garantir_cliente_na_carteira` passa a ser a única regra de exclusividade, `register_sale_by_phone` deixa de recusar números com conta e aceita o nome, e `ligar_reserva_ao_cliente` passa a aceitar o colaborador dono da reserva. É a migração 0017 isolada. Depende da 0015. |
 
 ### Ordem de aplicação numa base já existente
 
@@ -75,6 +78,9 @@ npm run setup:sql     # concatena migrations/ em SETUP_COMPLETO.sql
 10. `PATCH_STOCK_PUBLICO.sql`
 11. `PATCH_PERFIS_LOJA.sql`
 12. `PATCH_ELIMINAR_FORCADO.sql`
+13. `PATCH_PROMOCOES_LEVANTAMENTOS.sql`
+14. `PATCH_ELIMINAR_COLABORADOR.sql`
+15. `PATCH_CLIENTE_DA_VENDA.sql`
 
 `npm run estado` diz, item a item, o que ainda falta na base alojada.
 

@@ -780,6 +780,10 @@ await check("vendedor entra em /vendedor", async () => {
 await check("vendedor abre registar venda", async () => {
   const r = await pagina("/vendedor/vendas/registar", cVendedor);
   assert(r.status === 200, `HTTP ${r.status}`);
+  // O telefone é o cadastro do cliente: a página tem de o dizer, para o
+  // colaborador não pensar que ainda há um passo de «associar» à parte.
+  const t = texto(r.html);
+  assert(/clientes conquistados/i.test(t), "a página não fala em clientes conquistados");
   return "200";
 });
 
@@ -2023,6 +2027,7 @@ await check("venda a um telefone sem conta reserva o cliente sozinha", async () 
       p_customer_phone: VENDA_TEL,
       p_payment_method: "cash",
       p_payment_status: "paid",
+      p_customer_name: "Comprador Venda Web",
     },
   });
   assert(status === 200, `status ${status}: ${JSON.stringify(data).slice(0, 200)}`);
@@ -2035,41 +2040,37 @@ await check("venda a um telefone sem conta reserva o cliente sozinha", async () 
   assert(reserva?.length === 1, "reserva não criada pela venda");
   assert(reserva[0].status === "reservado", `estado ${reserva[0].status}`);
   assert(reserva[0].seller_id === sVendedor.user.id, "reserva sem colaborador");
-  assert(reserva[0].full_name === null, "a reserva devia nascer sem nome");
+  // O nome vai na própria venda: já não há uma segunda chamada para o anotar.
+  assert(
+    reserva[0].full_name === "Comprador Venda Web",
+    `nome da reserva: ${reserva[0].full_name}`
+  );
   return `${PRODUTO_VENDA.name} · reserva automática`;
 });
 
-await check("o nome do comprador fica na reserva", async () => {
-  const r = await fetch(`${APP}/api/vendedor/clientes/nome`, {
+await check("repetir a venda com outro nome não reescreve a reserva", async () => {
+  // Mesmo `client_ref` = a mesma operação, por isso não há venda nova nem
+  // stock gasto. O nome que já está na reserva é que não pode mudar.
+  const { status, data } = await sb("/rest/v1/rpc/register_sale_by_phone", {
     method: "POST",
-    headers: { "Content-Type": "application/json", cookie: cVendedor },
-    body: JSON.stringify({ phone: VENDA_TEL, full_name: "Comprador Venda Web" }),
+    jwt: sVendedor.access_token,
+    body: {
+      p_items: [{ product_id: PRODUTO_VENDA.id, quantity: 2 }],
+      p_customer_phone: VENDA_TEL,
+      p_customer_name: "Nome Trocado",
+      p_payment_method: "cash",
+      p_payment_status: "paid",
+      p_client_ref: "web-venda-nome-fixo",
+    },
   });
-  const dados = await r.json().catch(() => ({}));
-  assert(r.ok, `HTTP ${r.status} ${dados.error ?? ""}`);
-  assert(dados.anotado === true, `não anotou: ${JSON.stringify(dados)}`);
+  assert(status === 200, `status ${status}: ${JSON.stringify(data).slice(0, 200)}`);
 
   const { data: reserva } = await sb(
     `/rest/v1/reserved_customers?select=full_name&phone=eq.${encodeURIComponent(VENDA_TEL)}`,
     { key: SR, jwt: SR }
   );
   assert(reserva[0].full_name === "Comprador Venda Web", `nome ${reserva[0].full_name}`);
-
-  // Um nome já posto não é substituído por outro qualquer.
-  const outra = await fetch(`${APP}/api/vendedor/clientes/nome`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", cookie: cVendedor },
-    body: JSON.stringify({ phone: VENDA_TEL, full_name: "Nome Trocado" }),
-  });
-  const res2 = await outra.json().catch(() => ({}));
-  assert(res2.anotado === false, "substituiu um nome já confirmado");
-
-  const { data: depois } = await sb(
-    `/rest/v1/reserved_customers?select=full_name&phone=eq.${encodeURIComponent(VENDA_TEL)}`,
-    { key: SR, jwt: SR }
-  );
-  assert(depois[0].full_name === "Comprador Venda Web", "o nome mudou");
-  return "nome anotado · imutável depois";
+  return "nome mantido";
 });
 
 await check("a carteira mostra o nome, os produtos e o valor da venda", async () => {

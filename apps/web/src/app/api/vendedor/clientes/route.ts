@@ -97,6 +97,10 @@ export async function POST(request: Request) {
       );
     }
 
+    // Esta rota faz o seu próprio teste de exclusividade em vez de chamar
+    // `garantir_cliente_na_carteira` (0017) de propósito: é o caminho manual da
+    // carteira e tem de continuar a funcionar numa base que ainda não recebeu
+    // esse patch. A regra é a mesma; quando as duas divergirem, manda a da base.
     const { data: outro } = await supabaseAdmin
       .from("seller_customers")
       .select("seller_id")

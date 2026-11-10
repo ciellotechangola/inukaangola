@@ -10,10 +10,11 @@ import '../../widgets/produto_cartao.dart';
 
 /// Registo de venda de um colaborador, no telemóvel.
 ///
-/// Usa `register_sale_by_phone`: o cliente pode nem ter conta — fica o
-/// telefone, e quando ele se registar a compra aparece na conta dele. O preço
-/// vem sempre da base e o stock é verificado no servidor; aqui só se escolhe
-/// o quê e quanto.
+/// Usa `register_sale_by_phone`: o telefone é o cadastro do cliente. Se o
+/// número já tiver conta, a pessoa entra na carteira do colaborador como
+/// cliente conquistado e a venda fica com o `customer_id` dela; se ainda não
+/// tiver, fica uma reserva com o nome escrito aqui. O preço vem sempre da base
+/// e o stock é verificado no servidor; aqui só se escolhe o quê e quanto.
 class RegistarVendaPage extends StatefulWidget {
   const RegistarVendaPage({super.key});
 
@@ -23,6 +24,7 @@ class RegistarVendaPage extends StatefulWidget {
 
 class _RegistarVendaPageState extends State<RegistarVendaPage> {
   final _pesquisa = TextEditingController();
+  final _nome = TextEditingController();
   final _telefone = TextEditingController();
   final _notas = TextEditingController();
 
@@ -38,6 +40,7 @@ class _RegistarVendaPageState extends State<RegistarVendaPage> {
   bool _aEnviar = false;
   String? _erro;
   String? _recibo;
+  String? _destino;
 
   @override
   void initState() {
@@ -48,6 +51,7 @@ class _RegistarVendaPageState extends State<RegistarVendaPage> {
   @override
   void dispose() {
     _pesquisa.dispose();
+    _nome.dispose();
     _telefone.dispose();
     _notas.dispose();
     super.dispose();
@@ -161,12 +165,21 @@ class _RegistarVendaPageState extends State<RegistarVendaPage> {
         'p_payment_status': _estadoPagamento,
         'p_notes': _notas.text.trim().isEmpty ? null : _notas.text.trim(),
         'p_client_ref': const Uuid().v4(),
+        'p_customer_name': _nome.text.trim().isEmpty ? null : _nome.text.trim(),
       });
 
       final mapa = Map<String, dynamic>.from(resposta as Map);
+      final conquistado = mapa['conquistado'] == true;
+      final nome = _nome.text.trim();
+
       setState(() {
         _recibo = mapa['reference'] as String? ?? '—';
+        _destino = conquistado
+            ? '${nome.isEmpty ? 'O cliente' : nome} entrou nos seus clientes conquistados.'
+            : '${nome.isEmpty ? 'O cliente' : nome} ficou na sua carteira por activar — '
+                'recebe esta compra quando abrir conta com este número.';
         _carrinho.clear();
+        _nome.clear();
         _telefone.clear();
         _notas.clear();
       });
@@ -199,15 +212,19 @@ class _RegistarVendaPageState extends State<RegistarVendaPage> {
                 Text('Recibo $_recibo',
                     style: const TextStyle(color: AppConfig.gold, fontSize: 14)),
                 const SizedBox(height: 8),
-                const Text(
-                  'A comissão entra no seu painel e o cliente vê a compra na '
-                  'conta dele assim que se registar com este telefone.',
+                Text(
+                  _destino ??
+                      'A comissão entra no seu painel e o cliente vê a compra na '
+                          'conta dele assim que se registar com este telefone.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: AppConfig.muted, fontSize: 12, height: 1.5),
+                  style: const TextStyle(color: AppConfig.muted, fontSize: 12, height: 1.5),
                 ),
                 const SizedBox(height: 22),
                 ElevatedButton(
-                  onPressed: () => setState(() => _recibo = null),
+                  onPressed: () => setState(() {
+                    _recibo = null;
+                    _destino = null;
+                  }),
                   child: const Text('Registar outra venda'),
                 ),
               ],
@@ -339,6 +356,18 @@ class _RegistarVendaPageState extends State<RegistarVendaPage> {
                         ],
                       ),
                       const SizedBox(height: 10),
+                      TextField(
+                        controller: _nome,
+                        style: const TextStyle(color: AppConfig.text, fontSize: 13),
+                        decoration: const InputDecoration(
+                          labelText: 'Nome do cliente (opcional)',
+                          hintText: 'Como está na carteira',
+                          isDense: true,
+                          contentPadding:
+                              EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                       TextField(
                         controller: _telefone,
                         keyboardType: TextInputType.phone,

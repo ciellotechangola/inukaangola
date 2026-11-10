@@ -83,6 +83,7 @@ const funcoes = [
   "adicionar_membro_grupo",
   "remover_membro_grupo",
   "link_customer_by_phone",
+  "garantir_cliente_na_carteira",
   "taxa_comissao",
   "taxa_comissao_de",
   "definir_taxa_comissao",
