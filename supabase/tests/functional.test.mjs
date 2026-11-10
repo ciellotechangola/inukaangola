@@ -2786,13 +2786,66 @@ check("gestão vê o pedido com nome e referência do colaborador",
 // Histórico de comissões por venda.
 // 5 vendas pagas + 1 por pagar + 1 cancelada = 7 linhas, uma por venda.
 const comissoes = await asUser(VEND, async () => q(`SELECT * FROM public.minhas_comissoes()`));
-check("histórico mostra uma linha por venda", comissoes.length === 7, `${comissoes.length}`);
+check("venda sem linhas de detalhe conta como uma só", comissoes.length === 7, `${comissoes.length}`);
 check("comissão de 10 % sobre 20 000 = 2 000",
   comissoes.filter((c) => Number(c.comissao) === 2000).length === 5,
   JSON.stringify(comissoes.map((c) => Number(c.comissao))));
 check("venda cancelada aparece como cancelada",
   comissoes.some((c) => c.estado === "cancelada"),
   JSON.stringify(comissoes.map((c) => c.estado)));
+
+// 17.1 VENDA = PRODUTO — a contagem é por unidade de produto, não por registo.
+const VEND2 = "88888888-8888-4888-8888-888888888888";
+await q(`INSERT INTO auth.users (id, email, raw_user_meta_data)
+         VALUES ('${VEND2}', 'vend2@inuka.ao', '{"full_name":"Vendedor Duplo","phone":"923000099"}')`);
+await q(`SELECT public.promote_to_seller('+244923000099', 'Uíge')`);
+await q(`UPDATE public.profiles SET provincia_id = '${UIG}' WHERE id = '${VEND2}'`);
+await q(`UPDATE public.seller_profiles SET commission_rate = 0.10 WHERE id = '${VEND2}'`);
+
+const pA = await q(`INSERT INTO public.products (name, sku, official_price, is_active)
+  VALUES ('[TESTE] Perfume A', 'PERF-A', 10000, true) RETURNING id`);
+const pB = await q(`INSERT INTO public.products (name, sku, official_price, is_active)
+  VALUES ('[TESTE] Creme B', 'CREM-B', 8000, true) RETURNING id`);
+
+// Uma operação com dois produtos diferentes → duas vendas.
+const vendaDupla = await q(`INSERT INTO public.sales
+  (reference, seller_id, total_amount, payment_status, status, provincia_id)
+  VALUES ('VND-DUPLA', '${VEND2}', 18000, 'paid', 'completed', '${UIG}') RETURNING id`);
+await exec(`INSERT INTO public.sale_items (sale_id, product_id, quantity, unit_price, total_price)
+  VALUES ('${vendaDupla[0].id}', '${pA[0].id}', 1, 10000, 10000),
+         ('${vendaDupla[0].id}', '${pB[0].id}', 1,  8000,  8000)`);
+
+// Uma operação com duas unidades do mesmo produto → também duas vendas.
+const vendaQtd = await q(`INSERT INTO public.sales
+  (reference, seller_id, total_amount, payment_status, status, provincia_id)
+  VALUES ('VND-QTD', '${VEND2}', 20000, 'paid', 'completed', '${UIG}') RETURNING id`);
+await exec(`INSERT INTO public.sale_items (sale_id, product_id, quantity, unit_price, total_price)
+  VALUES ('${vendaQtd[0].id}', '${pA[0].id}', 2, 10000, 20000)`);
+
+const duplo = await asUser(VEND2, async () => q(`SELECT public.levantamento_resumo() AS r`));
+const duploR = duplo[0].r;
+check("duas operações com quatro produtos contam como 4 vendas",
+  Number(duploR.vendas_pagas) === 4, String(duploR.vendas_pagas));
+check("o número de operações registadas continua visível",
+  Number(duploR.vendas_registadas) === 2, String(duploR.vendas_registadas));
+check("com 4 vendas de produto ainda falta 1", Number(duploR.vendas_faltam) === 1,
+  String(duploR.vendas_faltam));
+
+const linhasDuplo = await asUser(VEND2, async () => q(`SELECT * FROM public.minhas_comissoes()`));
+check("o histórico mostra uma linha por produto", linhasDuplo.length === 3,
+  JSON.stringify(linhasDuplo.map((l) => l.produto)));
+check("cada produto rende 10 % do seu próprio valor",
+  linhasDuplo.some((l) => l.produto === "[TESTE] Perfume A" && Number(l.comissao) === 1000)
+  && linhasDuplo.some((l) => l.produto === "[TESTE] Creme B" && Number(l.comissao) === 800)
+  && linhasDuplo.some((l) => l.produto === "[TESTE] Perfume A" && Number(l.comissao) === 2000),
+  JSON.stringify(linhasDuplo.map((l) => [l.produto, Number(l.comissao)])));
+check("a soma das linhas é a comissão da venda (1 800)",
+  linhasDuplo.filter((l) => l.referencia === "VND-DUPLA")
+    .reduce((s, l) => s + Number(l.comissao), 0) === 1800,
+  JSON.stringify(linhasDuplo.map((l) => [l.referencia, Number(l.comissao)])));
+check("a quantidade comprada aparece na linha",
+  linhasDuplo.some((l) => l.referencia === "VND-QTD" && Number(l.quantidade) === 2),
+  JSON.stringify(linhasDuplo.map((l) => [l.referencia, l.quantidade])));
 
 // Vendedor de loja não recebe comissão (taxa 0) e não levanta.
 const resumoLoja = await asUser(LOJA, async () => {

@@ -48,8 +48,14 @@ export const ROTULO_METODO: Record<MetodoRecebimento, string> = {
 /** O que `levantamento_resumo()` devolve, já em números. */
 export interface ResumoLevantamento {
   seller_id: string;
-  /** Vendas concluídas e pagas — as únicas que contam para desbloquear. */
+  /**
+   * Vendas concluídas e pagas — as únicas que contam para desbloquear.
+   * **Uma venda = um produto vendido**, não um registo de venda: quem leva um
+   * perfume e um creme na mesma operação conta duas.
+   */
   vendas_pagas: number;
+  /** Quantas operações (registos de venda) deram origem a essas vendas. */
+  vendas_registadas: number;
   vendas_minimas: number;
   vendas_faltam: number;
   habilitado: boolean;
@@ -67,6 +73,7 @@ export interface ResumoLevantamento {
 const ZERO_RESUMO: ResumoLevantamento = {
   seller_id: "",
   vendas_pagas: 0,
+  vendas_registadas: 0,
   vendas_minimas: 5,
   vendas_faltam: 5,
   habilitado: false,
@@ -93,6 +100,9 @@ export function normalizarResumo(bruto: unknown): ResumoLevantamento {
   return {
     seller_id: String(r.seller_id ?? ""),
     vendas_pagas: pagas,
+    // Uma base antiga (0015 antes desta regra) não devolve o campo: nesse caso
+    // uma venda é uma operação, e não vale a pena inventar outra leitura.
+    vendas_registadas: num(r.vendas_registadas, pagas),
     vendas_minimas: minimas,
     vendas_faltam: Math.max(num(r.vendas_faltam, minimas - pagas), 0),
     habilitado: r.habilitado === true,
@@ -127,11 +137,19 @@ export const COR_COMISSAO: Record<EstadoComissao, string> = {
   disponivel: "text-[#C9A962]",
 };
 
-/** Uma linha de `minhas_comissoes()`: a comissão de uma venda. */
+/**
+ * Uma linha de `minhas_comissoes()`: a comissão de **um produto** vendido.
+ * A mesma referência pode aparecer várias vezes — é uma linha por produto.
+ */
 export interface ComissaoLinha {
   sale_id: string;
   referencia: string;
   criada_em: string;
+  /** Nome do produto no momento da venda (instantâneo, não o nome actual). */
+  produto: string;
+  /** Unidades compradas dessa linha — cada unidade é uma venda. */
+  quantidade: number;
+  /** Valor da linha (preço × quantidade). */
   total: number;
   taxa: number;
   comissao: number;
@@ -154,6 +172,8 @@ export function normalizarComissoes(bruto: unknown): ComissaoLinha[] {
       sale_id: String(c.sale_id ?? ""),
       referencia: String(c.referencia ?? "—"),
       criada_em: String(c.criada_em ?? ""),
+      produto: String(c.produto ?? "Produto"),
+      quantidade: Math.max(num(c.quantidade, 1), 1),
       total: num(c.total),
       taxa: num(c.taxa),
       comissao: num(c.comissao),
@@ -162,6 +182,25 @@ export function normalizarComissoes(bruto: unknown): ComissaoLinha[] {
       metodo: (c.metodo as string | null) ?? null,
     };
   });
+}
+
+/** Soma das comissões de uma lista de linhas — o total que o colaborador vê. */
+export function totalComissoes(linhas: ComissaoLinha[]): number {
+  return linhas.reduce((soma, l) => soma + l.comissao, 0);
+}
+
+/** Agrupa por referência de venda para mostrar «1 operação · 2 produtos». */
+export function agruparPorVenda(
+  linhas: ComissaoLinha[]
+): { referencia: string; linhas: ComissaoLinha[] }[] {
+  const mapa = new Map<string, ComissaoLinha[]>();
+  for (const l of linhas) {
+    const chave = l.referencia || l.sale_id;
+    const actual = mapa.get(chave);
+    if (actual) actual.push(l);
+    else mapa.set(chave, [l]);
+  }
+  return [...mapa.entries()].map(([referencia, lista]) => ({ referencia, linhas: lista }));
 }
 
 /** Um pedido de levantamento. */

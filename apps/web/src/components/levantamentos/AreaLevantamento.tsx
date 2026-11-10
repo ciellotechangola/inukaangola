@@ -291,10 +291,18 @@ export default function AreaLevantamento() {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <p className="text-sm text-[#F5F5F5]">
-                {resumo.vendas_pagas} venda{resumo.vendas_pagas === 1 ? "" : "s"} confirmada
-                {resumo.vendas_pagas === 1 ? "" : "s"} e paga
+                {resumo.vendas_pagas} produto{resumo.vendas_pagas === 1 ? "" : "s"} vendido
+                {resumo.vendas_pagas === 1 ? "" : "s"} e pago
                 {resumo.vendas_pagas === 1 ? "" : "s"} · levantamento desbloqueado
               </p>
+              {resumo.vendas_registadas !== resumo.vendas_pagas && (
+                <p className="mt-1 text-xs text-[#C9A962]">
+                  {resumo.vendas_registadas} operaç
+                  {resumo.vendas_registadas === 1 ? "ão" : "ões"} registada
+                  {resumo.vendas_registadas === 1 ? "" : "s"} · cada produto conta como uma
+                  venda
+                </p>
+              )}
               <p className="mt-1 text-xs text-[#8A8A8A]">
                 {pedidoAberto
                   ? `Tem o pedido ${pedidoAberto.referencia ?? ""} em curso (${ROTULO_ESTADO[pedidoAberto.estado].toLowerCase()}). O saldo fica reservado até à decisão.`
@@ -321,13 +329,17 @@ export default function AreaLevantamento() {
         ) : (
           <div>
             <p className="text-sm text-[#E3D5A7]">
-              Faltam {resumo.vendas_faltam} venda{resumo.vendas_faltam === 1 ? "" : "s"}{" "}
-              confirmada{resumo.vendas_faltam === 1 ? "" : "s"} e paga
+              Faltam {resumo.vendas_faltam} produto{resumo.vendas_faltam === 1 ? "" : "s"}{" "}
+              vendido{resumo.vendas_faltam === 1 ? "" : "s"} e pago
               {resumo.vendas_faltam === 1 ? "" : "s"} para poder levantar.
             </p>
             <p className="mt-1 text-xs text-[#8A8A8A]">
-              O primeiro levantamento abre às {resumo.vendas_minimas} vendas. Já tem{" "}
-              {resumo.vendas_pagas}.
+              O primeiro levantamento abre aos {resumo.vendas_minimas} produtos vendidos. Já
+              tem {resumo.vendas_pagas}
+              {resumo.vendas_registadas !== resumo.vendas_pagas
+                ? ` (em ${resumo.vendas_registadas} operações)`
+                : ""}
+              .
             </p>
             <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-[#262626]">
               <div
@@ -589,12 +601,12 @@ export default function AreaLevantamento() {
         )}
       </section>
 
-      {/* ---------- Comissões por venda ---------- */}
+      {/* ---------- Comissões por produto ---------- */}
       <section>
         <div className="mb-3 flex items-baseline justify-between">
-          <h2 className="text-sm font-medium text-[#F5F5F5]">Comissões venda a venda</h2>
+          <h2 className="text-sm font-medium text-[#F5F5F5]">Comissões produto a produto</h2>
           <span className="text-[11px] text-[#6F6F6F]">
-            {comissoes.length} venda{comissoes.length === 1 ? "" : "s"}
+            {comissoes.length} produto{comissoes.length === 1 ? "" : "s"}
           </span>
         </div>
         {comissoes.length === 0 ? (
@@ -604,12 +616,22 @@ export default function AreaLevantamento() {
         ) : (
           <div className="overflow-hidden rounded-xl border border-[#262626] bg-[#1A1A1A]">
             <div className="divide-y divide-[#262626]">
-              {comissoes.map((c) => (
-                <div key={c.sale_id} className="flex flex-wrap items-center gap-3 p-3 text-sm">
+              {comissoes.map((c, i) => (
+                <div
+                  key={`${c.sale_id}-${i}`}
+                  className="flex flex-wrap items-center gap-3 p-3 text-sm"
+                >
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[#F5F5F5]">{c.referencia}</p>
+                    <p className="truncate text-[#F5F5F5]">
+                      {c.produto}
+                      {c.quantidade > 1 && (
+                        <span className="ml-2 rounded bg-[#241E0E] px-1.5 py-0.5 text-[10px] text-[#C9A962]">
+                          × {c.quantidade}
+                        </span>
+                      )}
+                    </p>
                     <p className="text-[11px] text-[#6F6F6F]">
-                      {quando(c.criada_em)}
+                      {c.referencia} · {quando(c.criada_em)}
                       {c.provincia ? ` · ${c.provincia}` : ""} · {formatarTaxa(c.taxa)}
                     </p>
                   </div>
@@ -626,8 +648,9 @@ export default function AreaLevantamento() {
           </div>
         )}
         <p className="mt-3 text-[11px] text-[#525252]">
-          Uma venda cancelada não gera comissão. Uma venda por confirmar fica «por pagar» até a
-          gestão a marcar como paga.
+          Cada produto vendido é uma venda: leva 10 % do valor de cada um, mesmo quando saem
+          vários na mesma operação. Uma venda cancelada não gera comissão; uma venda por
+          confirmar fica «por pagar» até a gestão a marcar como paga.
         </p>
       </section>
     </div>

@@ -226,8 +226,8 @@ class _LevantamentosPageState extends State<LevantamentosPage> {
                       _habilitado
                           ? (aberto != null
                               ? '${kz(_num(_resumo['reservado']))} reservado num pedido em curso'
-                              : '$vendasPagas venda(s) confirmada(s) e paga(s)')
-                          : 'Faltam $faltam venda(s) confirmada(s) e paga(s) para desbloquear',
+                              : '$vendasPagas produto(s) vendido(s) e pago(s)')
+                          : 'Faltam $faltam produto(s) vendido(s) e pago(s) para desbloquear',
                       style: const TextStyle(
                           color: AppConfig.muted, fontSize: 11),
                     ),
@@ -329,7 +329,7 @@ class _LevantamentosPageState extends State<LevantamentosPage> {
 
             // ------------------------------------------------ comissões
             const SizedBox(height: 24),
-            Text('Comissões venda a venda (${_comissoes.length})',
+            Text('Comissões produto a produto (${_comissoes.length})',
                 style: const TextStyle(
                     color: AppConfig.text,
                     fontSize: 13,
@@ -348,8 +348,10 @@ class _LevantamentosPageState extends State<LevantamentosPage> {
               for (final c in _comissoes) _LinhaComissao(comissao: c),
             const SizedBox(height: 12),
             const Text(
-              'Uma venda cancelada não gera comissão. Uma venda por confirmar '
-              'fica «por pagar» até a gestão a marcar como paga.',
+              'Cada produto vendido é uma venda: leva 10 % do valor de cada um, '
+              'mesmo quando saem vários na mesma operação. Uma venda cancelada '
+              'não gera comissão; uma venda por confirmar fica «por pagar» até a '
+              'gestão a marcar como paga.',
               style: TextStyle(color: Color(0xFF525252), fontSize: 10),
             ),
           ],
@@ -998,6 +1000,8 @@ class _LinhaComissao extends StatelessWidget {
     final total = (comissao['total'] as num?)?.toDouble() ?? 0;
     final valor = (comissao['comissao'] as num?)?.toDouble() ?? 0;
     final taxa = (comissao['taxa'] as num?)?.toDouble() ?? 0;
+    final produto = comissao['produto']?.toString() ?? 'Produto';
+    final quantidade = (comissao['quantidade'] as num?)?.toInt() ?? 1;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 6),
@@ -1009,15 +1013,20 @@ class _LinhaComissao extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // O produto é o que se vendeu; a referência fica em baixo.
                   Text(
-                    comissao['referencia']?.toString() ?? '—',
+                    quantidade > 1 ? '$produto × $quantidade' : produto,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                         color: AppConfig.text, fontSize: 11),
                   ),
                   Text(
+                    '${comissao['referencia'] ?? '—'} · '
                     '${dataCurta(comissao['criada_em'])} · '
-                    '${comissao['provincia'] ?? '—'} · '
                     '${(taxa * 100).toStringAsFixed(0)} %',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                         color: Color(0xFF6F6F6F), fontSize: 9),
                   ),

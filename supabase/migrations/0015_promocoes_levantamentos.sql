@@ -576,6 +576,11 @@ ALTER TABLE public.seller_profiles
 --   pago      = soma dos pagamentos já feitos (`commission_payouts`)
 --   reservado = pedidos em curso (pendente/aprovado/em_processamento)
 --   disponível = ganho − pago − reservado
+--
+-- VENDA = PRODUTO. Uma operação com três produtos são **três** vendas: o
+-- colaborador recebe 10 % de cada produto, e o desbloqueio conta produtos e
+-- não registos. `vendas_registadas` devolve o número de operações, para quem
+-- quiser ver as duas leituras.
 CREATE OR REPLACE FUNCTION public.levantamento_resumo(p_seller uuid DEFAULT auth.uid())
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -584,14 +589,15 @@ SECURITY DEFINER
 SET search_path = public, auth, pg_temp
 AS $$
 DECLARE
-  v_minimo    int := 5;
-  v_vendas    int;
-  v_ganho     numeric(12,2);
-  v_pendente  numeric(12,2);
-  v_pago      numeric(12,2);
-  v_reservado numeric(12,2);
+  v_minimo     int := 5;
+  v_vendas     int;
+  v_operacoes  int;
+  v_ganho      numeric(12,2);
+  v_pendente   numeric(12,2);
+  v_pago       numeric(12,2);
+  v_reservado  numeric(12,2);
   v_disponivel numeric(12,2);
-  v_cfg       jsonb;
+  v_cfg        jsonb;
 BEGIN
   IF p_seller IS DISTINCT FROM auth.uid() AND NOT public.is_manager() THEN
     RAISE EXCEPTION 'Sem permissão para ver o saldo de outra pessoa' USING ERRCODE = '42501';
@@ -603,7 +609,21 @@ BEGIN
   END IF;
 
   -- Vendas confirmadas e pagas: é o que conta para o desbloqueio.
-  SELECT COUNT(*)::int INTO v_vendas
+  -- Cada unidade de produto é uma venda. Uma venda antiga, registada sem linhas
+  -- de detalhe, continua a valer 1 — os dados existentes não mudam de leitura.
+  SELECT COALESCE(SUM(GREATEST(COALESCE(it.unidades, 0), 1)), 0)::int INTO v_vendas
+  FROM public.sales s
+  LEFT JOIN LATERAL (
+    SELECT SUM(si.quantity)::int AS unidades
+    FROM public.sale_items si
+    WHERE si.sale_id = s.id
+  ) it ON TRUE
+  WHERE s.seller_id = p_seller
+    AND s.status = 'completed'
+    AND s.payment_status = 'paid';
+
+  -- Quantas operações (registos de venda) deram origem a essas vendas.
+  SELECT COUNT(*)::int INTO v_operacoes
   FROM public.sales s
   WHERE s.seller_id = p_seller
     AND s.status = 'completed'
@@ -640,6 +660,7 @@ BEGIN
   RETURN jsonb_build_object(
     'seller_id',       p_seller,
     'vendas_pagas',    v_vendas,
+    'vendas_registadas', v_operacoes,
     'vendas_minimas',  v_minimo,
     'vendas_faltam',   GREATEST(v_minimo - v_vendas, 0),
     'habilitado',      v_vendas >= v_minimo,
@@ -654,11 +675,19 @@ END;
 $$;
 
 -- ------------------------------------------------- 6.2 HISTÓRICO DE VENDAS
+-- Uma linha por PRODUTO vendido, não por registo de venda. Quem vende um
+-- perfume e um creme na mesma operação recebe duas comissões de 10 % e vê duas
+-- linhas. Uma venda antiga, sem linhas de detalhe, aparece como uma só linha
+-- com o valor total — assim os dados que já existem continuam a fazer sentido.
+DROP FUNCTION IF EXISTS public.minhas_comissoes(int);
+
 CREATE OR REPLACE FUNCTION public.minhas_comissoes(p_limite int DEFAULT 100)
 RETURNS TABLE (
   sale_id     uuid,
   referencia  text,
   criada_em   timestamptz,
+  produto     text,
+  quantidade  int,
   total       numeric,
   taxa        numeric,
   comissao    numeric,
@@ -674,9 +703,11 @@ AS $$
   SELECT s.id,
          s.reference,
          s.created_at,
-         s.total_amount,
+         COALESCE(NULLIF(it.nome, ''), 'Venda ' || s.reference),
+         it.quantidade,
+         it.valor,
          c.rate,
-         c.amount,
+         ROUND(it.valor * c.rate, 2),
          CASE
            WHEN c.status = 'cancelled' THEN 'cancelada'
            WHEN s.status = 'cancelled' THEN 'cancelada'
@@ -689,8 +720,19 @@ AS $$
   FROM public.sale_commissions c
   JOIN public.sales s ON s.id = c.sale_id
   LEFT JOIN public.provincias pr ON pr.id = c.provincia_id
+  CROSS JOIN LATERAL (
+    SELECT COALESCE(NULLIF(si.product_snapshot->>'name', ''), p.name) AS nome,
+           si.quantity::int AS quantidade,
+           si.total_price   AS valor
+    FROM public.sale_items si
+    LEFT JOIN public.products p ON p.id = si.product_id
+    WHERE si.sale_id = s.id
+    UNION ALL
+    SELECT NULL::text, 1, s.total_amount
+    WHERE NOT EXISTS (SELECT 1 FROM public.sale_items x WHERE x.sale_id = s.id)
+  ) it
   WHERE c.seller_id = auth.uid()
-  ORDER BY s.created_at DESC
+  ORDER BY s.created_at DESC, it.nome
   LIMIT GREATEST(COALESCE(p_limite, 100), 1);
 $$;
 

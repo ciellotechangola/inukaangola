@@ -44,7 +44,7 @@ export const DEFINICOES_PADRAO: DefinicoesLoja = {
   iosUrl: null,
   versao: "1.2.0",
   novidades:
-    "Levantamento de comissões na app: saldo disponível, pedido por XPRESS ou transferência e histórico. Promoções por província na loja.",
+    "Levantamento de comissões na app: saldo disponível, pedido por XPRESS ou transferência e histórico. Cada produto vendido conta como uma venda. Promoções por província na loja.",
   actualizadoEm: null,
 };
 

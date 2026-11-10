@@ -119,8 +119,8 @@ export default async function SellerDashboardPage() {
               {resumo.habilitado
                 ? resumo.reservado > 0
                   ? `${formatCurrency(resumo.reservado)} reservado num pedido em curso`
-                  : `${resumo.vendas_pagas} venda${resumo.vendas_pagas === 1 ? "" : "s"} confirmada${resumo.vendas_pagas === 1 ? "" : "s"} e paga${resumo.vendas_pagas === 1 ? "" : "s"}`
-                : `Faltam ${resumo.vendas_faltam} venda${resumo.vendas_faltam === 1 ? "" : "s"} confirmada${resumo.vendas_faltam === 1 ? "" : "s"} e paga${resumo.vendas_faltam === 1 ? "" : "s"} para desbloquear (${resumo.vendas_pagas}/${resumo.vendas_minimas})`}
+                  : `${resumo.vendas_pagas} produto${resumo.vendas_pagas === 1 ? "" : "s"} vendido${resumo.vendas_pagas === 1 ? "" : "s"} e pago${resumo.vendas_pagas === 1 ? "" : "s"}`
+                : `Faltam ${resumo.vendas_faltam} produto${resumo.vendas_faltam === 1 ? "" : "s"} vendido${resumo.vendas_faltam === 1 ? "" : "s"} e pago${resumo.vendas_faltam === 1 ? "" : "s"} para desbloquear (${resumo.vendas_pagas}/${resumo.vendas_minimas})`}
             </p>
             {!resumo.habilitado && (
               <div className="mt-2 h-1.5 w-48 overflow-hidden rounded-full bg-[#262626]">
