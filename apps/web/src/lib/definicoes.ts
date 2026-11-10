@@ -42,7 +42,7 @@ export const DEFINICOES_PADRAO: DefinicoesLoja = {
   telefones: [...TELEFONES_INUKA],
   androidUrl: null,
   iosUrl: null,
-  versao: "1.2.0",
+  versao: "1.2.1",
   novidades:
     "Levantamento de comissões na app: saldo disponível, pedido por XPRESS ou transferência e histórico. Cada produto vendido conta como uma venda. Promoções por província na loja.",
   actualizadoEm: null,
