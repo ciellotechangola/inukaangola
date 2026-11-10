@@ -104,6 +104,8 @@ export async function estadoEntrega(): Promise<EstadoEntrega> {
     provincia,
     taxa,
     gratis: provinciaGratis(provincia?.slug ?? null, defs),
+    // Sem província conhecida não se promete grátis nem se inventa preço.
+    porDefinir: taxa === null,
     taxaPadrao: defs.taxaPadrao,
     gratisNomes,
     nota: defs.nota,

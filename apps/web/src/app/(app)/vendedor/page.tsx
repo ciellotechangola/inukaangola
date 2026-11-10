@@ -12,6 +12,7 @@ import {
 import ColaboradorIdentidade from "@/components/ColaboradorIdentidade";
 import TaxaAoVivo from "@/components/comissoes/TaxaAoVivo";
 import { normalizarTaxa } from "@/lib/comissoes";
+import { normalizarResumo, progressoVendas } from "@/lib/levantamentos";
 import { GraficoEvolucao, ProgressoMeta } from "@/components/Graficos";
 
 export const dynamic = "force-dynamic";
@@ -21,12 +22,16 @@ export default async function SellerDashboardPage() {
   if (!profile || (profile.role !== "seller" && profile.role !== "manager")) redirect("/");
 
   const supabase = await createClientServer();
-  const [{ data, error }, { data: taxaBruta }] = await Promise.all([
+  const [{ data, error }, { data: taxaBruta }, { data: resumoBruto }] = await Promise.all([
     supabase.rpc("colaborador_painel"),
     supabase.rpc("taxa_comissao"),
+    supabase.rpc("levantamento_resumo", { p_seller: profile.id }),
   ]);
 
   const taxa = normalizarTaxa(taxaBruta);
+  // Se a migração dos levantamentos ainda não estiver aplicada, a RPC devolve
+  // erro e o resumo fica a zeros — o painel continua a abrir.
+  const resumo = normalizarResumo(resumoBruto);
 
   if (error) {
     return (
@@ -98,6 +103,41 @@ export default async function SellerDashboardPage() {
 
       <div className="mb-4">
         <TaxaAoVivo inicial={taxa} />
+      </div>
+
+      {/* Retirar dinheiro: o saldo é a primeira coisa que o colaborador quer ver. */}
+      <div className="mb-6 rounded-xl border border-[#C9A962]/40 bg-[#1A1A1A] p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-[#6F6F6F]">
+              Retirar dinheiro
+            </p>
+            <p className="mt-1 text-2xl font-light text-[#E3D5A7]">
+              {formatCurrency(resumo.disponivel)}
+            </p>
+            <p className="mt-1 text-[11px] text-[#8A8A8A]">
+              {resumo.habilitado
+                ? resumo.reservado > 0
+                  ? `${formatCurrency(resumo.reservado)} reservado num pedido em curso`
+                  : `${resumo.vendas_pagas} venda${resumo.vendas_pagas === 1 ? "" : "s"} confirmada${resumo.vendas_pagas === 1 ? "" : "s"} e paga${resumo.vendas_pagas === 1 ? "" : "s"}`
+                : `Faltam ${resumo.vendas_faltam} venda${resumo.vendas_faltam === 1 ? "" : "s"} confirmada${resumo.vendas_faltam === 1 ? "" : "s"} e paga${resumo.vendas_faltam === 1 ? "" : "s"} para desbloquear (${resumo.vendas_pagas}/${resumo.vendas_minimas})`}
+            </p>
+            {!resumo.habilitado && (
+              <div className="mt-2 h-1.5 w-48 overflow-hidden rounded-full bg-[#262626]">
+                <div
+                  className="h-full rounded-full bg-[#C9A962]"
+                  style={{ width: `${progressoVendas(resumo)}%` }}
+                />
+              </div>
+            )}
+          </div>
+          <Link
+            href="/vendedor/levantamentos"
+            className="rounded-lg bg-[#C9A962] px-6 py-2.5 text-xs font-semibold tracking-wide text-[#0A0A0A] transition hover:bg-[#E3D5A7]"
+          >
+            RETIRAR DINHEIRO
+          </Link>
+        </div>
       </div>
 
       {alertas.length > 0 && (
@@ -223,6 +263,11 @@ export default async function SellerDashboardPage() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Acao href="/vendedor/vendas/registar" titulo="Registar venda" descricao="Nova operação" />
         <Acao href="/vendedor/vendas" titulo="Histórico" descricao="Todas as vendas" />
+        <Acao
+          href="/vendedor/levantamentos"
+          titulo="Retirar dinheiro"
+          descricao="Comissões e levantamentos"
+        />
         <Acao href="/vendedor/clientes" titulo="Meus clientes" descricao="Gerir associações" />
         <Acao href="/vendedor/encomendas" titulo="Encomendas" descricao="Pedidos da carteira" />
         <Acao href="/cliente/conversas" titulo="Mensagens" descricao="Falar com clientes" />

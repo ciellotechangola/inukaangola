@@ -51,7 +51,9 @@ export default function FormularioDefinicoes({
   const [versao, setVersao] = useState(iniciais.versao);
   const [novidades, setNovidades] = useState(iniciais.novidades ?? "");
 
-  const [taxaPadrao, setTaxaPadrao] = useState(String(entregaInicial.taxaPadrao));
+  const [taxaPadrao, setTaxaPadrao] = useState(
+    entregaInicial.taxaPadrao === null ? "" : String(entregaInicial.taxaPadrao)
+  );
   const [gratis, setGratis] = useState<string[]>(entregaInicial.gratis);
   const [nota, setNota] = useState(entregaInicial.nota ?? "");
 
@@ -109,9 +111,13 @@ export default function FormularioDefinicoes({
       }
     }
 
-    const taxa = Number(String(taxaPadrao).replace(/[^\d.,-]/g, "").replace(",", "."));
-    if (!Number.isFinite(taxa) || taxa < 0) {
-      setErro("A taxa de entrega tem de ser um número igual ou superior a zero.");
+    // Campo vazio = «por definir». Não é zero: zero é entrega grátis.
+    const texto = String(taxaPadrao).trim();
+    const taxa = texto
+      ? Number(texto.replace(/[^\d.,-]/g, "").replace(",", "."))
+      : null;
+    if (taxa !== null && (!Number.isFinite(taxa) || taxa < 0)) {
+      setErro("A taxa de entrega tem de ser um número igual ou superior a zero, ou ficar vazia.");
       return;
     }
 
@@ -148,7 +154,7 @@ export default function FormularioDefinicoes({
       {
         key: CHAVE_ENTREGA,
         value: {
-          taxaPadrao: Math.round(taxa),
+          taxaPadrao: taxa === null ? null : Math.round(taxa),
           gratis,
           nota: nota.trim() || null,
         },
@@ -316,7 +322,9 @@ export default function FormularioDefinicoes({
               placeholder="2000"
               className={ENTRADA}
             />
-            <p className="mt-1 text-[11px] text-[#525252]">0 = entrega grátis em todo o país.</p>
+            <p className="mt-1 text-[11px] text-[#525252]">
+              Vazio = «taxa por definir» (a encomenda fica pendente). 0 = grátis em todo o país.
+            </p>
           </div>
           <div>
             <label className={ROTULO} htmlFor="nota-entrega">
@@ -367,12 +375,17 @@ export default function FormularioDefinicoes({
           <p className="mt-1 text-xs text-[#E5E5E5]">
             {resumoEntrega(entregaPrevia, nomesGratis)}
           </p>
-          {entregaPrevia.gratis.length === 0 && entregaPrevia.taxaPadrao > 0 && (
+          {entregaPrevia.gratis.length === 0 && entregaPrevia.taxaPadrao !== null && entregaPrevia.taxaPadrao > 0 && (
             <p className="mt-1 text-[11px] text-[#F59E0B]">
               Nenhuma província isenta: toda a entrega é paga.
             </p>
           )}
-          {entregaPrevia.taxaPadrao <= 0 && (
+          {entregaPrevia.taxaPadrao === null && (
+            <p className="mt-1 text-[11px] text-[#F59E0B]">
+              Taxa por definir: fora das províncias isentas a encomenda fica com a taxa pendente.
+            </p>
+          )}
+          {entregaPrevia.taxaPadrao !== null && entregaPrevia.taxaPadrao <= 0 && (
             <p className="mt-1 text-[11px] text-[#F59E0B]">
               Taxa a zero: a entrega fica gratuita em todo o país.
             </p>

@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../config/app_config.dart';
 import '../../core/formato.dart';
+import 'levantamentos_page.dart';
 import 'registar_venda_page.dart';
 
 /// Painel do colaborador dentro da app.
@@ -197,6 +198,24 @@ class _PainelColaboradorPageState extends State<PainelColaboradorPage> {
                 },
                 icon: const Icon(Icons.add_shopping_cart, size: 18),
                 label: const Text('Registar venda'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            // O dinheiro é a segunda razão para abrir a app: fica ao lado da
+            // venda, não escondido num menu.
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(
+                        builder: (_) => const LevantamentosPage()),
+                  );
+                  if (mounted) _carregar();
+                },
+                icon: const Icon(Icons.account_balance_wallet_outlined,
+                    size: 18),
+                label: const Text('Retirar dinheiro'),
               ),
             ),
             const SizedBox(height: 14),

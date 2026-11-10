@@ -55,6 +55,8 @@ const tabelas = [
   "content_items",
   "design_projects",
   "conversations",
+  "promocoes",
+  "levantamentos",
 ];
 
 // Colunas acrescentadas por migrações tardias.
@@ -62,8 +64,11 @@ const colunas = [
   ["sales", "customer_phone"],
   ["platform_settings", "updated_by"],
   ["orders", "delivery_fee"],
+  ["orders", "delivery_fee_pendente"],
   ["order_items", "product_name"],
   ["discount_requests", "product_name"],
+  ["seller_profiles", "banco_dados"],
+  ["seller_profiles", "xpress_dados"],
 ];
 
 // Funções chamáveis por RPC.
@@ -93,6 +98,22 @@ const funcoes = [
   "impacto_eliminar_produto",
   "eliminar_produto",
   "conteudo_comentarios",
+  "levantamento_resumo",
+  "minhas_comissoes",
+  "meus_levantamentos",
+  "levantamentos_equipa",
+  "solicitar_levantamento",
+  "decidir_levantamento",
+  "dados_recebimento",
+  "guardar_dados_recebimento",
+  "preco_efetivo",
+  "precos_efetivos",
+  "promocoes_vigentes",
+  "promocoes_lista",
+  "criar_promocao",
+  "actualizar_promocao",
+  "eliminar_promocao",
+  "minha_entrega",
 ];
 
 let especificacao = null;

@@ -50,7 +50,9 @@ export default function CartPage() {
 
   // Enquanto a taxa não chega não se escreve «Grátis»: um cliente do Huambo
   // veria entrega gratuita durante um segundo e depois o preço mudava.
-  const taxa = deliveryMethod === "delivery" && entrega ? entrega.taxa : 0;
+  // `null` = taxa por definir: não se soma nada e o total diz que falta a taxa.
+  const taxaPorDefinir = deliveryMethod === "delivery" && entrega?.taxa === null;
+  const taxa = deliveryMethod === "delivery" && entrega && entrega.taxa !== null ? entrega.taxa : 0;
   const totalComEntrega = total + taxa;
 
   async function handleCheckout() {
@@ -313,12 +315,12 @@ export default function CartPage() {
                   {entrega?.provincia ? (
                     <>
                       Província: <strong className="text-[#E5E5E5]">{entrega.provincia.nome}</strong>{" "}
-                      — {entrega.gratis ? "entrega gratuita." : `taxa ${formatCurrency(entrega.taxa)}.`}
+                      — {entrega.gratis ? "entrega gratuita." : etiquetaTaxa(entrega.taxa) + "."}
                     </>
                   ) : entrega ? (
                     <>
-                      A sua conta ainda não tem província definida, por isso aplica-se a taxa
-                      padrão de {formatCurrency(entrega.taxaPadrao)}. Pode defini-la em{" "}
+                      A sua conta ainda não tem província definida. A entrega fica com a taxa{" "}
+                      <strong className="text-[#E5E5E5]">por definir</strong> até indicar a província em{" "}
                       <Link href="/cliente/perfil" className="text-[#C9A962] underline-offset-2 hover:underline">
                         Perfil
                       </Link>
@@ -373,6 +375,10 @@ export default function CartPage() {
                 <span className="text-[#6F6F6F]">sem taxa</span>
               ) : !entrega ? (
                 <span className="text-[#6F6F6F]">a calcular…</span>
+              ) : taxaPorDefinir ? (
+                <span className="text-[11px] font-medium uppercase tracking-wide text-[#C9A962]">
+                  Taxa de entrega por definir
+                </span>
               ) : taxa > 0 ? (
                 <span className="text-[#E5E5E5]">{formatCurrency(taxa)}</span>
               ) : (

@@ -24,9 +24,10 @@ export async function GET() {
     return NextResponse.json(
       {
         provincia: null,
-        taxa: 0,
+        taxa: null,
         gratis: false,
-        taxaPadrao: 0,
+        porDefinir: true,
+        taxaPadrao: null,
         gratisNomes: [],
         nota: null,
       },

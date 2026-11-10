@@ -4,9 +4,10 @@ import { BadgeCheck, CreditCard, ShieldCheck, Truck } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
 import { lerEntrega, nomesProvinciasGratis } from "@/lib/entrega-server";
 import ProductActions from "@/components/ProductActions";
-import ProductCard, { percentagemDesconto, precoEfetivo } from "@/components/ProductCard";
+import ProductCard, { descontoDe, precoEfetivo } from "@/components/ProductCard";
 import ProductGallery from "@/components/ProductGallery";
 import { stockDosProdutos } from "@/lib/stock";
+import { precosDeCampanha, provinciaDoVisitante } from "@/lib/promocoes-server";
 import { formatCurrency } from "@/lib/utils";
 import type { Product } from "@/types";
 
@@ -27,8 +28,6 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   if (error || !product) notFound();
 
   const p = product as ProdutoComEstoque;
-  const desconto = percentagemDesconto(p);
-  const preco = precoEfetivo(p);
   const imagens = (p.images ?? [])
     .filter((i) => Boolean(i.url))
     .sort(
@@ -44,9 +43,11 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const defsEntrega = await lerEntrega();
   const gratisNomes = await nomesProvinciasGratis(defsEntrega);
   const entregaCurta =
-    defsEntrega.taxaPadrao <= 0
-      ? "Grátis em todo o país"
-      : `Grátis: ${gratisNomes.join(" · ") || "Uíge"} · ${formatCurrency(defsEntrega.taxaPadrao)} fora`;
+    defsEntrega.taxaPadrao === null
+      ? `Grátis: ${gratisNomes.join(" · ") || "Uíge"} · taxa por definir fora`
+      : defsEntrega.taxaPadrao <= 0
+        ? "Grátis em todo o país"
+        : `Grátis: ${gratisNomes.join(" · ") || "Uíge"} · ${formatCurrency(defsEntrega.taxaPadrao)} fora`;
 
   // Relacionados: mesma categoria, nunca o próprio.
   const relacionados = p.category_id
@@ -67,6 +68,22 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   // Uma só chamada serve o produto e os relacionados.
   const stock = await stockDosProdutos(supabase, [p.id, ...relacionados.map((r) => r.id)]);
   const disponivel = stock.get(p.id) ?? null;
+
+  // Preço de campanha para a província de quem está a ver. É o mesmo número
+  // que `place_order` vai cobrar — a promoção de outra província não aparece.
+  const provinciaId = await provinciaDoVisitante();
+  const precos = await precosDeCampanha(
+    [p.id, ...relacionados.map((r) => r.id)],
+    provinciaId
+  );
+  const campanha = precos.get(p.id) ?? null;
+  const preco = campanha ? campanha.final : precoEfetivo(p);
+  const desconto = descontoDe(Number(p.official_price), preco);
+
+  const campanhaDe = (produto: ProdutoComEstoque) => {
+    const c = precos.get(produto.id);
+    return c && c.final < c.base ? { preco: c.final, nome: c.promocaoNome } : null;
+  };
 
   const garantias = [
     { Icone: BadgeCheck, titulo: "Produto original", detalhe: "Distribuição oficial INUKA" },
@@ -137,6 +154,16 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             )}
           </div>
 
+          {campanha?.promocaoNome && (
+            <p className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[#E3D5A7]">
+              <span className="rounded-full border border-[#C9A962]/40 px-2 py-0.5">
+                Campanha
+              </span>
+              {campanha.promocaoNome}
+              <span className="text-[#525252]">· preço válido na sua província</span>
+            </p>
+          )}
+
           <p className="mt-3 text-sm">
             {disponivel === null ? (
               // Sem linha de inventário não há stock a anunciar — é diferente
@@ -206,6 +233,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
                 key={r.id}
                 product={r}
                 disponivel={stock.get(r.id) ?? null}
+                campanha={campanhaDe(r)}
               />
             ))}
           </div>

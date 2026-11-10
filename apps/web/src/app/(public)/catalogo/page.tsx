@@ -6,6 +6,7 @@ import ComprarNovamente from "@/components/ComprarNovamente";
 import OrdenarCatalogo from "@/components/OrdenarCatalogo";
 import { produtosComprados } from "@/lib/recompras";
 import { stockDosProdutos } from "@/lib/stock";
+import { precosDeCampanha, provinciaDoVisitante } from "@/lib/promocoes-server";
 import type { Category, Product } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -79,7 +80,8 @@ export default async function CatalogPage({
       categoriaAtual?.id ?? "00000000-0000-0000-0000-000000000000"
     );
   }
-  if (soPromocao) consulta = consulta.not("promotional_price", "is", null);
+  // «Só promoções» passou a ser decidido depois de saber o preço de campanha:
+  // um produto pode estar em campanha sem ter `promotional_price` gravado.
 
   // O preço que o cliente paga é `promotional_price` quando existe, senão
   // `official_price`. Filtrar só por `official_price` mostrava produtos fora
@@ -115,9 +117,29 @@ export default async function CatalogPage({
     ...new Set([...produtos.map((p) => p.id), ...comprados.map((p) => p.id)]),
   ]);
 
+  // Preço de campanha válido na província de quem está a ver. Sem sessão só
+  // contam as campanhas nacionais — a promoção do Uíge não aparece em Luanda.
+  const provinciaId = await provinciaDoVisitante();
+  const precos = await precosDeCampanha(
+    [...new Set([...produtos.map((p) => p.id), ...comprados.map((p) => p.id)])],
+    provinciaId
+  );
+
+  const precoDe = (p: ProdutoComEstoque) => precos.get(p.id)?.final ?? precoEfetivo(p);
+  const campanhaDe = (p: ProdutoComEstoque) => {
+    const c = precos.get(p.id);
+    return c && c.final < c.base ? { preco: c.final, nome: c.promocaoNome } : null;
+  };
+
+  // Só promoções: fica quem está mais barato do que o preço oficial, venha o
+  // desconto da campanha ou do `promotional_price` do produto.
+  if (soPromocao) {
+    produtos = produtos.filter((p) => precoDe(p) < Number(p.official_price));
+  }
+
   produtos = [...produtos].sort((a, b) => {
-    if (ordem === "preco-asc") return precoEfetivo(a) - precoEfetivo(b);
-    if (ordem === "preco-desc") return precoEfetivo(b) - precoEfetivo(a);
+    if (ordem === "preco-asc") return precoDe(a) - precoDe(b);
+    if (ordem === "preco-desc") return precoDe(b) - precoDe(a);
     if (ordem === "novidades") return (b.created_at ?? "").localeCompare(a.created_at ?? "");
     return 0;
   });
@@ -307,7 +329,7 @@ export default async function CatalogPage({
         produtos={comprados.map((p) => ({
           id: p.id,
           name: p.name,
-          price: precoEfetivo(p),
+          price: precoDe(p),
           image: fotoPrincipal(p),
           disponivel: disponibilidade(stock, p.id),
         }))}
@@ -361,6 +383,7 @@ export default async function CatalogPage({
                   product={p}
                   disponivel={disponibilidade(stock, p.id)}
                   jaComprou={idsComprados.has(p.id)}
+                  campanha={campanhaDe(p)}
                 />
               ))}
             </div>

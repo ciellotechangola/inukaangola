@@ -63,6 +63,7 @@ for (const rel of [
   "migrations/0012_stock_publico.sql",
   "migrations/0013_perfis_loja.sql",
   "migrations/0014_eliminar_forcado.sql",
+  "migrations/0015_promocoes_levantamentos.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -1278,17 +1279,21 @@ await expectError(
 );
 
 // 15.12 pagamento de comissões
+// Venda confirmada e paga: desde a 0015 só estas é que podem ser pagas.
 const vendaPaga = (await q(`
-  INSERT INTO public.sales (reference, seller_id, total_amount, provincia_id)
-  VALUES ('TST-COMM-2', '${S_UIGE}', 8000, '${UIG}') RETURNING id`))[0].id;
+  INSERT INTO public.sales (reference, seller_id, total_amount, provincia_id, payment_status, status)
+  VALUES ('TST-COMM-2', '${S_UIGE}', 8000, '${UIG}', 'paid', 'completed') RETURNING id`))[0].id;
 
 // O valor a pagar lê-se da base em vez de ser fixado no teste: desde a
 // migração 0008 quem não tem taxa pessoal herda a da empresa, e uma venda
-// anterior a este bloco já gerou comissão a essa taxa.
+// anterior a este bloco já gerou comissão a essa taxa. A 0015 restringe o
+// pagamento a vendas concluídas e pagas — a consulta segue a mesma regra.
 const aPagar = await q(`
-  SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*)::int AS n
-  FROM public.sale_commissions
-  WHERE seller_id = '${S_UIGE}' AND status = 'pending' AND amount > 0`);
+  SELECT COALESCE(SUM(c.amount), 0) AS total, COUNT(*)::int AS n
+  FROM public.sale_commissions c
+  JOIN public.sales s ON s.id = c.sale_id
+  WHERE c.seller_id = '${S_UIGE}' AND c.status = 'pending' AND c.amount > 0
+    AND s.status = 'completed' AND s.payment_status = 'paid'`);
 const valorPendente = Number(aPagar[0].total);
 
 const pag = await asUser(M_UIGE, async () =>
@@ -1300,8 +1305,10 @@ check("gestor paga as comissões pendentes",
   JSON.stringify({ r: pag[0].r, esperado: { total: valorPendente, n: aPagar[0].n } }));
 
 const pendentes = await q(`
-  SELECT COUNT(*) AS n FROM public.sale_commissions
-  WHERE seller_id = '${S_UIGE}' AND status = 'pending' AND amount > 0`);
+  SELECT COUNT(*) AS n FROM public.sale_commissions c
+  JOIN public.sales s ON s.id = c.sale_id
+  WHERE c.seller_id = '${S_UIGE}' AND c.status = 'pending' AND c.amount > 0
+    AND s.status = 'completed' AND s.payment_status = 'paid'`);
 check("depois de pagar não fica comissão pendente", Number(pendentes[0].n) === 0, String(pendentes[0].n));
 
 const recibo = await q(`
@@ -2418,8 +2425,388 @@ const foraDaProvincia = await asUser(LOJA, async () => {
 check("vendedor de loja não mexe em encomenda de outra província",
   /outra província/i.test(foraDaProvincia ?? ""), foraDaProvincia ?? "não deu erro");
 
+console.log("\n--- 15. PROMOÇÕES COM ÂMBITO DE PROVÍNCIA ---");
+
+// Produto próprio para não depender do que os testes anteriores mexeram.
+const catPromo = await q(`
+  INSERT INTO public.categories (name, slug) VALUES ('Promoções','promocoes-teste') RETURNING id`);
+const prodPromo = await q(`
+  INSERT INTO public.products (sku, name, category_id, official_price, promotional_price)
+  VALUES ('PROMO-001','Perfume Promo', '${catPromo[0].id}', 50000, 40000) RETURNING id`);
+const PROMO_PROD = prodPromo[0].id;
+
+const prodOutro = await q(`
+  INSERT INTO public.products (sku, name, category_id, official_price)
+  VALUES ('PROMO-002','Outro Produto', '${catPromo[0].id}', 30000) RETURNING id`);
+const OUTRO_PROD = prodOutro[0].id;
+
+// Só no Uíge, 20 %, para este produto.
+const promoUige = await asUser(MANAGER, async () =>
+  q(`SELECT public.criar_promocao(
+       'Black Friday Uíge', 'percentagem', 20,
+       now() - interval '1 hour', now() + interval '1 day',
+       ARRAY['${UIG}']::uuid[], ARRAY['${PROMO_PROD}']::uuid[]
+     ) AS r`));
+const PROMO_UIGE = promoUige[0].r.id;
+check("gestão cria promoção para uma província", !!PROMO_UIGE, JSON.stringify(promoUige[0].r));
+
+const precoUige = await q(`SELECT public.preco_efetivo('${PROMO_PROD}','${UIG}') AS p`);
+const precoLda = await q(`SELECT public.preco_efetivo('${PROMO_PROD}','${LDA}') AS p`);
+// base = promotional_price 40 000 → 20 % → 32 000
+check("promoção aplica-se na província escolhida", Number(precoUige[0].p) === 32000, String(precoUige[0].p));
+check("promoção não se aplica fora da província", Number(precoLda[0].p) === 40000, String(precoLda[0].p));
+
+const outroUige = await q(`SELECT public.preco_efetivo('${OUTRO_PROD}','${UIG}') AS p`);
+check("promoção de produto específico não apanha os outros",
+  Number(outroUige[0].p) === 30000, String(outroUige[0].p));
+
+const vigentesUige = await q(`SELECT * FROM public.promocoes_vigentes('${UIG}')`);
+const vigentesLda = await q(`SELECT * FROM public.promocoes_vigentes('${LDA}')`);
+check("cliente do Uíge vê a promoção", vigentesUige.some((p) => p.id === PROMO_UIGE),
+  `${vigentesUige.length} vigentes`);
+check("cliente de Luanda não vê a promoção do Uíge",
+  !vigentesLda.some((p) => p.id === PROMO_UIGE), `${vigentesLda.length} vigentes`);
+
+// Em bloco: a montra pede os preços todos de uma vez e tem de receber
+// exactamente os mesmos números que `preco_efetivo` dá produto a produto.
+const emBlocoUige = await q(
+  `SELECT * FROM public.precos_efetivos(
+     ARRAY['${PROMO_PROD}','${OUTRO_PROD}']::uuid[], '${UIG}')`
+);
+const blocoUige = Object.fromEntries(emBlocoUige.map((l) => [l.product_id, l]));
+check("preços em bloco batem com o preço unitário",
+  Number(blocoUige[PROMO_PROD]?.preco_final) === 32000 &&
+    Number(blocoUige[OUTRO_PROD]?.preco_final) === 30000,
+  JSON.stringify(emBlocoUige));
+check("preço em bloco diz qual foi a campanha",
+  blocoUige[PROMO_PROD]?.promocao_id === PROMO_UIGE &&
+    blocoUige[PROMO_PROD]?.promocao_nome === "Black Friday Uíge",
+  JSON.stringify(blocoUige[PROMO_PROD]));
+
+const emBlocoLda = await q(
+  `SELECT * FROM public.precos_efetivos(ARRAY['${PROMO_PROD}']::uuid[], '${LDA}')`
+);
+check("em bloco, a promoção de outra província não aparece",
+  Number(emBlocoLda[0]?.preco_final) === 40000 && emBlocoLda[0]?.promocao_id === null,
+  JSON.stringify(emBlocoLda[0]));
+
+const emBlocoVazio = await q(`SELECT * FROM public.precos_efetivos(ARRAY[]::uuid[], NULL)`);
+check("lista de produtos vazia não rebenta", emBlocoVazio.length === 0, String(emBlocoVazio.length));
+
+// Promoção nacional, para todo o catálogo: apanha os dois produtos.
+const promoNac = await asUser(MANAGER, async () =>
+  q(`SELECT public.criar_promocao('Nacional 10', 'percentagem', 10, now() - interval '1 hour')
+     AS r`));
+const PROMO_NAC = promoNac[0].r.id;
+const outroLda = await q(`SELECT public.preco_efetivo('${OUTRO_PROD}','${LDA}') AS p`);
+check("promoção nacional vale em qualquer província", Number(outroLda[0].p) === 27000, String(outroLda[0].p));
+
+// Promoção fora do prazo não conta.
+const promoVelha = await asUser(MANAGER, async () =>
+  q(`SELECT public.criar_promocao('Expirada', 'preco', 1000,
+       now() - interval '10 days', now() - interval '1 day',
+       ARRAY['${UIG}']::uuid[], ARRAY['${OUTRO_PROD}']::uuid[]) AS r`));
+const outroUige2 = await q(`SELECT public.preco_efetivo('${OUTRO_PROD}','${UIG}') AS p`);
+check("promoção fora do prazo não se aplica",
+  Number(outroUige2[0].p) === 27000, String(outroUige2[0].p));
+
+// Uma promoção nunca sobe o preço.
+const promoCara = await asUser(MANAGER, async () =>
+  q(`SELECT public.criar_promocao('Preço alto', 'preco', 99000,
+       now() - interval '1 hour', NULL,
+       ARRAY['${UIG}']::uuid[], ARRAY['${OUTRO_PROD}']::uuid[]) AS r`));
+const promoCaraJson = await q(`SELECT public.promocao_do_produto('${OUTRO_PROD}','${UIG}') AS j`);
+check("promoção mais cara do que o preço é ignorada",
+  promoCaraJson[0].j?.promocao_id !== promoCara[0].r.id && Number(promoCaraJson[0].j?.preco_final) === 27000,
+  JSON.stringify(promoCaraJson[0].j));
+
+await asUser(MANAGER, async () => {
+  await q(`SELECT public.eliminar_promocao('${promoCara[0].r.id}')`);
+  await q(`SELECT public.eliminar_promocao('${promoVelha[0].r.id}')`);
+});
+
+const semGestao = await asUser(C1, async () => {
+  try {
+    await q(`SELECT public.criar_promocao('Pirata','percentagem',50)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("cliente não cria promoções", /gestão/i.test(semGestao ?? ""), semGestao ?? "não deu erro");
+
+console.log("\n--- 16. ENTREGA: GRÁTIS NO UÍGE, POR DEFINIR NO RESTO ---");
+
+const taxaUige = await q(`SELECT public.taxa_entrega('${UIG}') AS t`);
+const taxaLda = await q(`SELECT public.taxa_entrega('${LDA}') AS t`);
+check("entrega gratuita no Uíge", Number(taxaUige[0].t) === 0, String(taxaUige[0].t));
+check("nas outras províncias a taxa está por definir", taxaLda[0].t === null, String(taxaLda[0].t));
+
+// Cliente do Uíge encomenda: leva o preço da promoção e entrega grátis.
+// A referência vai junto com a província: o gatilho `fill_referencia` reescreve
+// o prefixo e, sem um número livre, colidia com outro perfil do Uíge.
+await q(`UPDATE public.profiles
+         SET provincia_id = '${UIG}', referencia = 'INK-NAC-09001'
+         WHERE id = '${C1}'`);
+await q(`INSERT INTO public.inventory (product_id, quantity) VALUES ('${PROMO_PROD}', 50)`);
+
+const encUige2 = await asUser(C1, async () =>
+  q(`SELECT public.place_order(
+       '[{"product_id":"${PROMO_PROD}","quantity":2}]'::jsonb,
+       'delivery', 'Rua 1, Uíge', '923000001', NULL, 'ref-uige-promo') AS r`));
+const encUigeR = encUige2[0].r;
+// 2 × 32 000 = 64 000, entrega 0
+check("encomenda do Uíge usa o preço da promoção", Number(encUigeR.total) === 64000, String(encUigeR.total));
+check("encomenda do Uíge não paga entrega", Number(encUigeR.delivery_fee) === 0 && encUigeR.delivery_fee_pendente === false,
+  JSON.stringify({ taxa: encUigeR.delivery_fee, pendente: encUigeR.delivery_fee_pendente }));
+
+await q(`UPDATE public.profiles
+         SET provincia_id = '${LDA}', referencia = 'INK-NAC-09002'
+         WHERE id = '${C2}'`);
+const encLda2 = await asUser(C2, async () =>
+  q(`SELECT public.place_order(
+       '[{"product_id":"${PROMO_PROD}","quantity":1}]'::jsonb,
+       'delivery', 'Rua 2, Luanda', '923000002', NULL, 'ref-lda-taxa') AS r`));
+const encLdaR = encLda2[0].r;
+check("encomenda de Luanda fica com a taxa por definir",
+  encLdaR.delivery_fee_pendente === true && Number(encLdaR.delivery_fee) === 0,
+  JSON.stringify({ taxa: encLdaR.delivery_fee, pendente: encLdaR.delivery_fee_pendente }));
+// 1 × 40 000 − 10 % da campanha nacional = 36 000, e 0 de entrega (por definir).
+check("encomenda de Luanda não apanha a promoção do Uíge", Number(encLdaR.total) === 36000, String(encLdaR.total));
+
+console.log("\n--- 17. COMISSÕES E LEVANTAMENTOS ---");
+
+const VEND = "77777777-7777-4777-8777-777777777777";
+// O contador do Uíge já foi usado pelos testes anteriores. Sobe-se ANTES de
+// criar o perfil: a referência é atribuída no INSERT em `profiles`.
+await q(`INSERT INTO public.referencia_contadores (codigo, ultimo) VALUES ('UIG', 500)
+         ON CONFLICT (codigo) DO UPDATE
+         SET ultimo = GREATEST(public.referencia_contadores.ultimo, 500)`);
+await exec(`
+  INSERT INTO auth.users (id, email, raw_user_meta_data)
+  VALUES ('${VEND}', 'vend@inuka.ao', '{"full_name":"Vendedor Comissao","phone":"923000077"}');
+`);
+await q(`SELECT public.promote_to_seller('+244923000077', 'Uíge')`);
+await q(`UPDATE public.profiles SET provincia_id = '${UIG}' WHERE id = '${VEND}'`);
+// Taxa explícita de 10 % — o exemplo do requisito (20 000 Kz → 2 000 Kz).
+await q(`UPDATE public.seller_profiles SET commission_rate = 0.10 WHERE id = '${VEND}'`);
+
+const r0 = await asUser(VEND, async () => q(`SELECT public.levantamento_resumo() AS r`));
+const resumo0 = r0[0].r;
+check("colaborador novo não pode levantar", resumo0.habilitado === false, JSON.stringify(resumo0));
+check("faltam 5 vendas para habilitar", Number(resumo0.vendas_faltam) === 5, String(resumo0.vendas_faltam));
+
+// Quatro vendas pagas: ainda bloqueado.
+for (let i = 1; i <= 4; i++) {
+  await q(`INSERT INTO public.sales (reference, seller_id, total_amount, payment_status, status, provincia_id)
+           VALUES ('VND-${i}', '${VEND}', 20000, 'paid', 'completed', '${UIG}')`);
+}
+const r4 = await asUser(VEND, async () => q(`SELECT public.levantamento_resumo() AS r`));
+check("com 4 vendas ainda está bloqueado", r4[0].r.habilitado === false, String(r4[0].r.vendas_pagas));
+check("falta 1 venda", Number(r4[0].r.vendas_faltam) === 1, String(r4[0].r.vendas_faltam));
+
+const bloqueado = await asUser(VEND, async () => {
+  try {
+    await q(`SELECT public.solicitar_levantamento(1000, 'xpress', '{"telefone":"923000077"}'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("pedido antes das 5 vendas é recusado", /faltam/i.test(bloqueado ?? ""), bloqueado ?? "não deu erro");
+
+// Uma venda por pagar: entra nas pendentes, não nas ganhas.
+await q(`INSERT INTO public.sales (reference, seller_id, total_amount, payment_status, status, provincia_id)
+         VALUES ('VND-NAO-PAGA', '${VEND}', 50000, 'pending', 'completed', '${UIG}')`);
+const rPend = await asUser(VEND, async () => q(`SELECT public.levantamento_resumo() AS r`));
+check("venda por pagar não conta para o saldo", Number(rPend[0].r.comissoes_ganhas) === 8000,
+  String(rPend[0].r.comissoes_ganhas));
+check("venda por pagar aparece como comissão pendente", Number(rPend[0].r.comissoes_pendentes) === 5000,
+  String(rPend[0].r.comissoes_pendentes));
+
+// Quinta venda paga: habilita.
+await q(`INSERT INTO public.sales (reference, seller_id, total_amount, payment_status, status, provincia_id)
+         VALUES ('VND-5', '${VEND}', 20000, 'paid', 'completed', '${UIG}')`);
+const r5 = await asUser(VEND, async () => q(`SELECT public.levantamento_resumo() AS r`));
+check("com 5 vendas pagas fica habilitado", r5[0].r.habilitado === true, JSON.stringify({
+  vendas: r5[0].r.vendas_pagas, minimo: r5[0].r.vendas_minimas }));
+check("saldo disponível é 10 000 (5 × 2 000)", Number(r5[0].r.disponivel) === 10000, String(r5[0].r.disponivel));
+
+// Venda cancelada não conta.
+await q(`INSERT INTO public.sales (reference, seller_id, total_amount, payment_status, status, provincia_id)
+         VALUES ('VND-CANC', '${VEND}', 30000, 'paid', 'cancelled', '${UIG}')`);
+const rCanc = await asUser(VEND, async () => q(`SELECT public.levantamento_resumo() AS r`));
+check("venda cancelada não gera comissão", Number(rCanc[0].r.comissoes_ganhas) === 10000,
+  String(rCanc[0].r.comissoes_ganhas));
+
+// Comissão duplicada: uma linha por venda, garantido pela UNIQUE.
+await expectError("não se cria comissão duplicada para a mesma venda",
+  `INSERT INTO public.sale_commissions (sale_id, seller_id, amount)
+   SELECT sale_id, seller_id, amount FROM public.sale_commissions WHERE seller_id = '${VEND}' LIMIT 1`,
+  "duplicate key");
+
+// Pedido acima do saldo.
+const acima = await asUser(VEND, async () => {
+  try {
+    await q(`SELECT public.solicitar_levantamento(99999, 'xpress', '{"telefone":"923000077"}'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("não se levanta mais do que o saldo", /superior ao dispon/i.test(acima ?? ""), acima ?? "não deu erro");
+
+// Pedido válido.
+const pedido = await asUser(VEND, async () =>
+  q(`SELECT public.solicitar_levantamento(4000, 'xpress',
+       '{"telefone":"923000077","conta":"XPRESS-777"}'::jsonb) AS r`));
+const pedidoR = pedido[0].r;
+check("colaborador pede levantamento", Number(pedidoR.valor) === 4000 && pedidoR.estado === "pendente",
+  JSON.stringify(pedidoR));
+check("valor pedido fica reservado", Number(pedidoR.resumo.reservado) === 4000,
+  String(pedidoR.resumo.reservado));
+check("disponível desce para 6 000", Number(pedidoR.resumo.disponivel) === 6000,
+  String(pedidoR.resumo.disponivel));
+
+// Dois pedidos ao mesmo tempo não reservam o mesmo saldo.
+const segundo = await asUser(VEND, async () => {
+  try {
+    await q(`SELECT public.solicitar_levantamento(4000, 'xpress', '{"telefone":"923000077"}'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("não se abrem dois levantamentos ao mesmo tempo", /em curso/i.test(segundo ?? ""), segundo ?? "não deu erro");
+
+// Os dados de recebimento ficaram guardados.
+const dadosGuardados = await asUser(VEND, async () => q(`SELECT public.dados_recebimento() AS d`));
+check("dados XPRESS guardados no perfil",
+  dadosGuardados[0].d?.xpress?.conta === "XPRESS-777", JSON.stringify(dadosGuardados[0].d));
+
+// O colaborador vê o seu histórico.
+const meus = await asUser(VEND, async () => q(`SELECT * FROM public.meus_levantamentos()`));
+check("colaborador vê o seu pedido", meus.length === 1 && meus[0].estado === "pendente", `${meus.length}`);
+
+// Ninguém mais vê.
+const outros = await asUser(SELLER, async () => q(`SELECT count(*)::int n FROM public.levantamentos`));
+check("outro colaborador não vê os levantamentos alheios", outros[0].n === 0, String(outros[0].n));
+
+// O colaborador não decide o seu próprio pedido.
+const autoAprova = await asUser(VEND, async () => {
+  try {
+    await q(`SELECT public.decidir_levantamento('${pedidoR.id}', 'aprovado')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("colaborador não aprova o próprio levantamento", /gestão/i.test(autoAprova ?? ""), autoAprova ?? "não deu erro");
+
+// Gestão aprova → processa → paga.
+const aprova = await asUser(MANAGER, async () =>
+  q(`SELECT public.decidir_levantamento('${pedidoR.id}', 'aprovado') AS r`));
+check("gestão aprova o pedido", aprova[0].r.estado === "aprovado", JSON.stringify(aprova[0].r.estado));
+const aindaReservado = await asUser(VEND, async () => q(`SELECT public.levantamento_resumo() AS r`));
+check("aprovado ainda não paga nada",
+  Number(aindaReservado[0].r.total_pago) === 0 && Number(aindaReservado[0].r.reservado) === 4000,
+  JSON.stringify({ pago: aindaReservado[0].r.total_pago, reservado: aindaReservado[0].r.reservado }));
+
+const processa = await asUser(MANAGER, async () =>
+  q(`SELECT public.decidir_levantamento('${pedidoR.id}', 'em_processamento') AS r`));
+check("gestão marca como em processamento", processa[0].r.estado === "em_processamento", processa[0].r.estado);
+
+const paga = await asUser(MANAGER, async () =>
+  q(`SELECT public.decidir_levantamento('${pedidoR.id}', 'pago', 'Transferido') AS r`));
+check("gestão marca como pago", paga[0].r.estado === "pago", paga[0].r.estado);
+
+const depois = await asUser(VEND, async () => q(`SELECT public.levantamento_resumo() AS r`));
+const depoisR = depois[0].r;
+check("pagamento entra no total pago", Number(depoisR.total_pago) === 4000, String(depoisR.total_pago));
+check("valor pago deixa de estar reservado", Number(depoisR.reservado) === 0, String(depoisR.reservado));
+check("disponível volta a 6 000", Number(depoisR.disponivel) === 6000, String(depoisR.disponivel));
+
+const payout = await q(`SELECT amount, method FROM public.commission_payouts WHERE seller_id = '${VEND}'`);
+check("pagamento registado no histórico financeiro",
+  payout.length === 1 && Number(payout[0].amount) === 4000 && payout[0].method === "xpress",
+  JSON.stringify(payout));
+
+const auditado = await q(`SELECT count(*)::int n FROM public.audit_logs
+  WHERE entity = 'levantamentos' AND entity_id = '${pedidoR.id}'`);
+check("todas as decisões ficam auditadas", auditado[0].n >= 3, String(auditado[0].n));
+
+// Um pedido pago é final.
+const repetir = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.decidir_levantamento('${pedidoR.id}', 'pago')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("um pedido pago não se paga duas vezes", /não é possível/i.test(repetir ?? ""), repetir ?? "não deu erro");
+
+// Rejeição devolve o valor ao saldo.
+const pedido2 = await asUser(VEND, async () =>
+  q(`SELECT public.solicitar_levantamento(3000, 'xpress') AS r`));
+check("segundo pedido recupera os dados XPRESS guardados",
+  pedido2[0].r.estado === "pendente" && Number(pedido2[0].r.resumo.reservado) === 3000,
+  JSON.stringify(pedido2[0].r.resumo));
+
+// Transferência bancária sem dados guardados tem de ser recusada.
+const semBanco = await asUser(VEND, async () => {
+  try {
+    await q(`SELECT public.solicitar_levantamento(1000, 'transferencia')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("transferência sem coordenadas bancárias é recusada",
+  /dados de recebimento|em curso/i.test(semBanco ?? ""), semBanco ?? "não deu erro");
+
+// Guardar coordenadas bancárias e reutilizá-las.
+await asUser(VEND, async () => q(`SELECT public.guardar_dados_recebimento('transferencia',
+  '{"titular":"Vendedor Comissao","banco":"BAI","conta":"0040 0000 1234","iban":"AO06 0040 0000 1234 5678 9"}'::jsonb)`));
+
+const rejeita = await asUser(MANAGER, async () =>
+  q(`SELECT public.decidir_levantamento('${pedido2[0].r.id}', 'rejeitado', 'Dados incompletos') AS r`));
+check("gestão rejeita o pedido", rejeita[0].r.estado === "rejeitado", rejeita[0].r.estado);
+
+const aposRejeicao = await asUser(VEND, async () => q(`SELECT public.levantamento_resumo() AS r`));
+check("rejeição devolve o valor ao saldo",
+  Number(aposRejeicao[0].r.reservado) === 0 && Number(aposRejeicao[0].r.disponivel) === 6000,
+  JSON.stringify({ reservado: aposRejeicao[0].r.reservado, disponivel: aposRejeicao[0].r.disponivel }));
+
+const pedidoSemMotivo = await asUser(VEND, async () =>
+  q(`SELECT public.solicitar_levantamento(1000, 'transferencia') AS r`));
+
+const rejeitadoSemMotivo = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.decidir_levantamento('${pedidoSemMotivo[0].r.id}', 'rejeitado')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("rejeição exige motivo", /motivo/i.test(rejeitadoSemMotivo ?? ""), rejeitadoSemMotivo ?? "não deu erro");
+
+// A gestão vê os pedidos com identificação do colaborador.
+const equipa = await asUser(MANAGER, async () => q(`SELECT public.levantamentos_equipa() AS r`));
+const listaEquipa = equipa[0].r;
+const doVendedor = listaEquipa.find((l) => l.seller_id === VEND);
+check("gestão vê o pedido com nome e referência do colaborador",
+  !!doVendedor && !!doVendedor.seller_nome && !!doVendedor.dados,
+  JSON.stringify(doVendedor ? { nome: doVendedor.seller_nome, metodo: doVendedor.metodo } : null));
+
+// Histórico de comissões por venda.
+// 5 vendas pagas + 1 por pagar + 1 cancelada = 7 linhas, uma por venda.
+const comissoes = await asUser(VEND, async () => q(`SELECT * FROM public.minhas_comissoes()`));
+check("histórico mostra uma linha por venda", comissoes.length === 7, `${comissoes.length}`);
+check("comissão de 10 % sobre 20 000 = 2 000",
+  comissoes.filter((c) => Number(c.comissao) === 2000).length === 5,
+  JSON.stringify(comissoes.map((c) => Number(c.comissao))));
+check("venda cancelada aparece como cancelada",
+  comissoes.some((c) => c.estado === "cancelada"),
+  JSON.stringify(comissoes.map((c) => c.estado)));
+
+// Vendedor de loja não recebe comissão (taxa 0) e não levanta.
+const resumoLoja = await asUser(LOJA, async () => {
+  try {
+    await q(`SELECT public.solicitar_levantamento(100, 'xpress', '{"telefone":"923000088"}'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("vendedor de loja não pode levantar comissões", /colaboradores/i.test(resumoLoja ?? ""),
+  resumoLoja ?? "não deu erro");
+
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);
+
 if (failures > 0) {
   console.log("\nFalhas:");
   results.filter((r) => !r.ok).forEach((r) => console.log(` - ${r.name} :: ${r.detail}`));

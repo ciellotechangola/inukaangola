@@ -5,10 +5,13 @@ import type { Product } from "@/types";
 
 /** Desconto em percentagem inteira. 0 quando não há promoção válida. */
 export function percentagemDesconto(product: Product): number {
-  const oficial = Number(product.official_price);
-  const promo = product.promotional_price === null ? null : Number(product.promotional_price);
-  if (!oficial || promo === null || promo >= oficial) return 0;
-  return Math.round((1 - promo / oficial) * 100);
+  return descontoDe(Number(product.official_price), precoEfetivo(product));
+}
+
+/** Desconto de um preço sobre outro. 0 quando não há vantagem nenhuma. */
+export function descontoDe(oficial: number, preco: number): number {
+  if (!oficial || !Number.isFinite(oficial) || preco >= oficial) return 0;
+  return Math.round((1 - preco / oficial) * 100);
 }
 
 /** Preço que o cliente paga. A base manda: promoção quando existe. */
@@ -37,6 +40,12 @@ interface Props {
   prioridade?: boolean;
   /** O cliente já comprou este produto — mostra a marca de recompra. */
   jaComprou?: boolean;
+  /**
+   * Preço de campanha já resolvido para a província de quem está a ver
+   * (`precos_efetivos`). Sem isto o cartão mostra o preço do produto — que é
+   * o correcto para quem não tem província ou quando não há campanha.
+   */
+  campanha?: { preco: number; nome: string | null } | null;
 }
 
 export default function ProductCard({
@@ -44,8 +53,10 @@ export default function ProductCard({
   disponivel = null,
   prioridade = false,
   jaComprou = false,
+  campanha = null,
 }: Props) {
-  const desconto = percentagemDesconto(product);
+  const preco = campanha ? campanha.preco : precoEfetivo(product);
+  const desconto = descontoDe(Number(product.official_price), preco);
   const imagem = fotoPrincipal(product);
   const esgotado = disponivel === 0;
   const variasFotos = (product.images?.filter((i) => i.url).length ?? 0) > 1;
@@ -128,7 +139,7 @@ export default function ProductCard({
         </h3>
         <div className="mt-auto flex min-w-0 flex-wrap items-baseline gap-x-1.5 pt-1.5 sm:gap-x-2 sm:pt-2">
           <span className="text-sm font-semibold text-[#C9A962] sm:text-[15px]">
-            {formatCurrency(precoEfetivo(product))}
+            {formatCurrency(preco)}
           </span>
           {desconto > 0 && (
             <span className="text-[11px] text-[#6F6F6F] line-through sm:text-xs">

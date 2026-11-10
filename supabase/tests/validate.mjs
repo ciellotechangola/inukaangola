@@ -19,6 +19,7 @@ const files = [
   "migrations/0012_stock_publico.sql",
   "migrations/0013_perfis_loja.sql",
   "migrations/0014_eliminar_forcado.sql",
+  "migrations/0015_promocoes_levantamentos.sql",
 ];
 
 const db = new PGlite();

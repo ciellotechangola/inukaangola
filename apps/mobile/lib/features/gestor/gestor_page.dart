@@ -6,6 +6,7 @@ import '../../core/formato.dart';
 import '../../core/sessao.dart';
 import '../../widgets/estado.dart';
 import '../../widgets/produto_cartao.dart';
+import 'levantamentos_gestor.dart';
 
 /// Gestão — o painel do gestor no telemóvel.
 ///
@@ -22,7 +23,7 @@ class GestorPage extends StatefulWidget {
 }
 
 class _GestorPageState extends State<GestorPage> with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 4, vsync: this);
+  late final TabController _tabs = TabController(length: 5, vsync: this);
 
   Map<String, dynamic>? _stats;
   List<Map<String, dynamic>> _produtos = [];
@@ -154,6 +155,7 @@ class _GestorPageState extends State<GestorPage> with SingleTickerProviderStateM
             const Tab(text: 'Produtos'),
             const Tab(text: 'Encomendas'),
             Tab(text: 'Descontos${_descontos.isEmpty ? '' : ' (${_descontos.length})'}'),
+            const Tab(text: 'Levantamentos'),
           ],
         ),
       ),
@@ -168,6 +170,7 @@ class _GestorPageState extends State<GestorPage> with SingleTickerProviderStateM
                     _produtosTab(),
                     _encomendasTab(),
                     _descontosTab(),
+                    const LevantamentosGestorTab(),
                   ],
                 ),
     );

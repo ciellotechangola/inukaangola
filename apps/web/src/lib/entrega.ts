@@ -3,23 +3,33 @@ import { formatCurrency } from "@/lib/utils";
 /**
  * Entrega: quanto custa e onde é gratuita.
  *
- * A regra do negócio é uma só — **a entrega é gratuita no Uíge; nas outras
- * províncias paga-se uma taxa** — mas os valores vivem em `platform_settings`
- * (chave `entrega`), para a gerência poder mudar a taxa sem tocar em código.
+ * A regra do negócio é uma só — **a entrega é gratuita no Uíge** — mas o preço
+ * nas outras províncias ainda não está decidido. Por isso a taxa é
+ * `number | null`:
+ *
+ *   `0`     → entrega gratuita (Uíge)
+ *   `> 0`   → taxa definida pela gestão
+ *   `null`  → **por definir** — não se inventa um valor nem se oferece portes
+ *
+ * Os valores vivem em `platform_settings` (chave `entrega`), para a gerência
+ * mudar a taxa sem tocar em código.
  *
  * Este ficheiro é **puro** (importado por componentes de browser). A mesma
  * regra existe em SQL, dentro de `public.taxa_entrega()`, que é quem manda:
  * o cliente vê aqui a estimativa, mas o valor gravado na encomenda é o que a
  * base calcular. As duas implementações têm de andar de mãos dadas — se mudar
- * uma, mude a outra (`supabase/migrations/0010_taxa_entrega.sql`).
+ * uma, mude a outra (`supabase/migrations/0015_promocoes_levantamentos.sql`).
  */
 
 /** Chave em `platform_settings`. */
 export const CHAVE_ENTREGA = "entrega";
 
+/** O que se mostra quando ainda não há preço para a província. */
+export const TAXA_POR_DEFINIR = "TAXA DE ENTREGA POR DEFINIR";
+
 export interface DefinicoesEntrega {
-  /** Taxa cobrada nas províncias sem isenção, em kwanzas. */
-  taxaPadrao: number;
+  /** Taxa nas províncias sem isenção. `null` = ainda por definir. */
+  taxaPadrao: number | null;
   /** Slugs (`provincias.slug`) das províncias com entrega gratuita. */
   gratis: string[];
   /** Uma linha que a gerência queira acrescentar (ex.: prazo de entrega). */
@@ -27,11 +37,11 @@ export interface DefinicoesEntrega {
 }
 
 /**
- * O que a loja faz quando ninguém configurou nada: grátis no Uíge, 2 000 Kz
- * nas restantes províncias. É este o valor que o SQL também assume.
+ * O que a loja faz quando ninguém configurou nada: grátis no Uíge, e o preço
+ * nas restantes províncias **por definir**. É o mesmo que o SQL assume.
  */
 export const ENTREGA_PADRAO: DefinicoesEntrega = {
-  taxaPadrao: 2000,
+  taxaPadrao: null,
   gratis: ["uige"],
   nota: null,
 };
@@ -65,10 +75,11 @@ export function normalizarEntrega(valor: unknown): DefinicoesEntrega {
     ? cru.gratis.map(slug).filter((s): s is string => Boolean(s))
     : ENTREGA_PADRAO.gratis;
 
+  // `null` explícito (ou ausente) significa «por definir», não zero.
   const taxa = numero(cru.taxaPadrao);
 
   return {
-    taxaPadrao: taxa === null ? ENTREGA_PADRAO.taxaPadrao : Math.round(taxa),
+    taxaPadrao: taxa === null ? null : Math.round(taxa),
     gratis,
     nota: typeof cru.nota === "string" && cru.nota.trim() ? cru.nota.trim() : null,
   };
@@ -84,21 +95,23 @@ export function provinciaGratis(
 }
 
 /**
- * Taxa aplicada a uma província. `0` significa entrega gratuita.
+ * Taxa aplicada a uma província.
  *
- * Sem província conhecida assume-se a taxa padrão: cobrar a mais é corrigível
- * no balcão, cobrar a menos é dinheiro que não volta.
+ *   `0`    → gratuita
+ *   `> 0`  → taxa definida
+ *   `null` → por definir (a encomenda fica com a taxa pendente)
  */
 export function taxaDeEntrega(
   provinciaSlug: string | null | undefined,
   defs: DefinicoesEntrega
-): number {
+): number | null {
   if (provinciaGratis(provinciaSlug, defs)) return 0;
   return defs.taxaPadrao;
 }
 
-/** «Grátis» ou «2 000 Kz». */
-export function etiquetaTaxa(valor: number): string {
+/** «Grátis», «2 000 Kz» ou «TAXA DE ENTREGA POR DEFINIR». */
+export function etiquetaTaxa(valor: number | null | undefined): string {
+  if (valor === null || valor === undefined) return TAXA_POR_DEFINIR;
   return valor <= 0 ? "Grátis" : formatCurrency(valor);
 }
 
@@ -111,10 +124,12 @@ export function etiquetaTaxa(valor: number): string {
 export interface EstadoEntrega {
   /** Província do cliente (do perfil); `null` se ainda não tem. */
   provincia: { slug: string; nome: string } | null;
-  /** Taxa que esta encomenda paga. `0` = grátis. */
-  taxa: number;
+  /** Taxa que esta encomenda paga. `0` = grátis, `null` = por definir. */
+  taxa: number | null;
   gratis: boolean;
-  taxaPadrao: number;
+  /** A taxa ainda não está definida para esta província. */
+  porDefinir: boolean;
+  taxaPadrao: number | null;
   /** Nomes das províncias isentas, para o texto genérico. */
   gratisNomes: string[];
   nota: string | null;
@@ -123,7 +138,7 @@ export interface EstadoEntrega {
 /**
  * Frase para o cliente, com os nomes das províncias isentas já resolvidos.
  *
- *   «Entrega grátis no Uíge · 2 000 Kz nas outras províncias»
+ *   «Entrega grátis: Uíge · taxa por definir nas outras províncias»
  */
 export function resumoEntrega(
   defs: DefinicoesEntrega,
@@ -133,6 +148,9 @@ export function resumoEntrega(
   // «no Huíla» não. Uma lista resolve todos os casos sem errar gramática.
   const nomes = (nomesGratis.length ? nomesGratis : ["Uíge"]).join(" · ");
 
+  if (defs.taxaPadrao === null) {
+    return `Entrega grátis: ${nomes} · taxa por definir nas outras províncias`;
+  }
   if (defs.taxaPadrao <= 0) return "Entrega grátis em todo o país";
   return `Entrega grátis: ${nomes} · ${formatCurrency(defs.taxaPadrao)} nas outras províncias`;
 }

@@ -7,6 +7,7 @@ import { lerEntrega, nomesProvinciasGratis } from "@/lib/entrega-server";
 import { formatCurrency } from "@/lib/utils";
 import ProductCard from "@/components/ProductCard";
 import { stockDosProdutos } from "@/lib/stock";
+import { precosDeCampanha, provinciaDoVisitante } from "@/lib/promocoes-server";
 import type { Category, Product } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -35,9 +36,18 @@ async function getDados() {
     produtos.map((p) => p.id)
   );
 
+  // Campanhas por província: a promoção do Uíge não aparece a quem está em
+  // Luanda. Sem sessão (ou sem província no perfil) só valem as nacionais.
+  const provinciaId = await provinciaDoVisitante();
+  const precos = await precosDeCampanha(
+    produtos.map((p) => p.id),
+    provinciaId
+  );
+
   return {
     produtos,
     stock,
+    precos,
     categorias: (categoriasRes.data ?? []) as Category[],
   };
 }
@@ -48,18 +58,28 @@ function disponibilidade(stock: Map<string, number>, id: string): number | null 
 }
 
 export default async function HomePage() {
-  const { produtos, stock, categorias } = await getDados();
+  const { produtos, stock, precos, categorias } = await getDados();
 
   // A regra de entrega é configurável: não se escreve «grátis em Luanda,
   // Uíge e Huambo» à mão, senão o site promete o que a caixa não cobra.
   const entrega = await lerEntrega();
   const gratisNomes = await nomesProvinciasGratis(entrega);
   const entregaCurta =
-    entrega.taxaPadrao <= 0
-      ? "Grátis em todo o país"
-      : `Grátis: ${gratisNomes.join(" · ") || "Uíge"} · ${formatCurrency(entrega.taxaPadrao)} fora`;
+    entrega.taxaPadrao === null
+      ? `Grátis: ${gratisNomes.join(" · ") || "Uíge"} · taxa por definir fora`
+      : entrega.taxaPadrao <= 0
+        ? "Grátis em todo o país"
+        : `Grátis: ${gratisNomes.join(" · ") || "Uíge"} · ${formatCurrency(entrega.taxaPadrao)} fora`;
 
-  const promocoes = produtos.filter((p) => p.promotional_price !== null).slice(0, 4);
+  // Em promoção: preço de campanha válido nesta província ou, na falta dele,
+  // o preço promocional do próprio produto. Só entra quem fica mais barato do
+  // que o preço oficial — um cartão «em promoção» sem desconto não engana.
+  const promocoes = produtos
+    .filter((p) => {
+      const preco = precos.get(p.id)?.final ?? Number(p.promotional_price ?? p.official_price);
+      return preco < Number(p.official_price);
+    })
+    .slice(0, 4);
 
   // Destaques: primeiro os marcados pela gerência, depois os mais recentes.
   // Sem este preenchimento, uma loja com poucos produtos marcados mostrava
@@ -76,6 +96,15 @@ export default async function HomePage() {
     { Icone: CreditCard, titulo: "Pagamento na entrega", detalhe: "Dinheiro ou transferência" },
     { Icone: Headphones, titulo: "Apoio dedicado", detalhe: TELEFONES_INUKA.join(" · ") },
   ];
+
+  /**
+   * Preço de campanha a passar ao cartão. `null` quando o preço desta
+   * província é o do produto — aí o cartão não tem nada de especial a mostrar.
+   */
+  const campanhaDe = (id: string) => {
+    const c = precos.get(id);
+    return c && c.final < c.base ? { preco: c.final, nome: c.promocaoNome } : null;
+  };
 
   return (
     <main>
@@ -231,7 +260,12 @@ export default async function HomePage() {
             </div>
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
               {promocoes.map((p) => (
-                <ProductCard key={p.id} product={p} disponivel={disponibilidade(stock, p.id)} />
+                <ProductCard
+                  key={p.id}
+                  product={p}
+                  disponivel={disponibilidade(stock, p.id)}
+                  campanha={campanhaDe(p.id)}
+                />
               ))}
             </div>
           </div>
@@ -260,7 +294,12 @@ export default async function HomePage() {
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
             {destaques.map((p) => (
-              <ProductCard key={p.id} product={p} disponivel={disponibilidade(stock, p.id)} />
+              <ProductCard
+                  key={p.id}
+                  product={p}
+                  disponivel={disponibilidade(stock, p.id)}
+                  campanha={campanhaDe(p.id)}
+                />
             ))}
           </div>
         )}

@@ -216,6 +216,28 @@ function texto(html) {
     .trim();
 }
 
+/**
+ * Nomes dos produtos activos, para os testes da montra contarem cartões.
+ *
+ * Estes testes contavam a etiqueta `[DEMO]` do seed. Quando os produtos
+ * fictícios foram limpos da base, passaram a falhar sem haver bug nenhum — a
+ * loja estava certa e o teste é que estava preso a dados que já não existem.
+ * Derivar dos produtos activos mantém o teste a testar a montra.
+ */
+async function nomesDeProdutosActivos() {
+  const { data } = await sb(
+    "/rest/v1/products?select=name&is_active=eq.true&order=name",
+    { key: SR, jwt: SR }
+  );
+  return (data ?? []).map((p) => p.name).filter(Boolean);
+}
+
+/** Quantos desses nomes aparecem no HTML (um cartão por produto). */
+function contarProdutos(html, nomes) {
+  const t = texto(html);
+  return nomes.filter((n) => t.includes(n)).length;
+}
+
 const PWD = "WebE2e2026!";
 const CLIENTE = { name: "Cliente Web", phone: "+244924200001" };
 const VENDEDOR = { name: "Vendedor Web", phone: "+244924200002" };
@@ -476,12 +498,16 @@ await check("páginas públicas têm um só cabeçalho e um só rodapé", async 
 });
 
 await check("catálogo lista os produtos da base", async () => {
+  const nomes = await nomesDeProdutosActivos();
+  assert(nomes.length > 0, "a base não tem produtos activos");
+
   const r = await pagina("/catalogo");
   const t = texto(r.html);
   assert(t.includes("Catálogo"), "sem título");
-  assert(/\[DEMO\]/.test(t), "sem produtos [DEMO]");
-  const nomes = t.match(/\[DEMO\][^]*?(?=\s*Kz)/g);
-  return `${(t.match(/\[DEMO\]/g) || []).length} produtos renderizados`;
+
+  const vistos = nomes.filter((n) => t.includes(n));
+  assert(vistos.length > 0, "sem produtos activos na montra");
+  return `${vistos.length} de ${nomes.length} produtos renderizados`;
 });
 
 await check("filtro por categoria reduz o catálogo", async () => {
@@ -490,12 +516,13 @@ await check("filtro por categoria reduz o catálogo", async () => {
   // desactiva em vez de apagar) — e o filtro passava a devolver zero por falta
   // de dados, não por bug. Escolhe-se aqui uma categoria que tenha alguns
   // produtos activos, mas não todos, para se ver o filtro a reduzir de facto.
-  const [cats, prods] = await Promise.all([
+  const [cats, prods, nomes] = await Promise.all([
     sb("/rest/v1/categories?select=id,slug,name&is_active=eq.true&order=sort_order", {
       key: SR,
       jwt: SR,
     }),
     sb("/rest/v1/products?select=category_id&is_active=eq.true", { key: SR, jwt: SR }),
+    nomesDeProdutosActivos(),
   ]);
   const linhas = prods.data ?? [];
   const porCategoria = new Map();
@@ -508,10 +535,10 @@ await check("filtro por categoria reduz o catálogo", async () => {
   });
   assert(alvo, "nenhuma categoria com parte (e não todos) dos produtos activos");
 
-  const todos = (texto((await pagina("/catalogo")).html).match(/\[DEMO\]/g) || []).length;
+  const todos = contarProdutos((await pagina("/catalogo")).html, nomes);
   const r = await pagina(`/catalogo?cat=${alvo.slug}`);
   assert(r.status === 200, `HTTP ${r.status}`);
-  const filtrados = (texto(r.html).match(/\[DEMO\]/g) || []).length;
+  const filtrados = contarProdutos(r.html, nomes);
   assert(filtrados > 0, `o filtro «${alvo.slug}» não devolveu nada`);
   assert(filtrados < todos, `filtro inerte: ${filtrados} de ${todos}`);
   assert(texto(r.html).includes(alvo.name), "sem a categoria no título");
@@ -520,30 +547,57 @@ await check("filtro por categoria reduz o catálogo", async () => {
 
 await check("filtro de preço respeita o preço pago", async () => {
   // Um produto em promoção conta pelo preço promocional, não pelo oficial.
-  const r = await pagina("/catalogo?max=10000");
+  // O tecto não é fixo: 10 000 Kz deixou de apanhar produto nenhum quando o
+  // catálogo real substituiu os produtos [DEMO], e o teste passou a falhar por
+  // falta de dados em vez de por bug. Escolhe-se aqui um valor que deixe
+  // alguns produtos de fora e outros dentro.
+  const [prods, nomes] = await Promise.all([
+    sb("/rest/v1/products?select=official_price,promotional_price&is_active=eq.true", {
+      key: SR,
+      jwt: SR,
+    }),
+    nomesDeProdutosActivos(),
+  ]);
+
+  const precosBase = (prods.data ?? [])
+    .map((p) => Number(p.promotional_price ?? p.official_price))
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b);
+  assert(precosBase.length > 0, "sem preços na base");
+
+  // Com três ou mais produtos, o do meio deixa de fora os mais caros; com
+  // menos, o mais caro garante que a lista não vem vazia.
+  const limite =
+    precosBase.length >= 3
+      ? precosBase[Math.floor(precosBase.length / 2)]
+      : precosBase[precosBase.length - 1];
+
+  const r = await pagina(`/catalogo?max=${limite}`);
   assert(r.status === 200, `HTTP ${r.status}`);
   const t = texto(r.html);
 
   // Ler apenas dentro dos cartões: os rótulos do filtro também terminam em "Kz".
-  const precos = t
-    .split("[DEMO]")
-    .slice(1)
-    .map((bloco) => {
-      const m = bloco.match(/(\d[\d\s]*)\s*Kz/);
-      return m ? Number(m[1].replace(/\s/g, "")) : null;
-    })
-    .filter((v) => v !== null);
+  // O preço vem logo depois do nome do produto; corta-se aí, não na etiqueta
+  // do seed (que já não existe).
+  const precos = [];
+  for (const nome of nomes) {
+    const i = t.indexOf(nome);
+    if (i < 0) continue;
+    const m = t.slice(i + nome.length, i + nome.length + 200).match(/(\d[\d\s]*)\s*Kz/);
+    if (m) precos.push(Number(m[1].replace(/\s/g, "")));
+  }
 
-  assert(precos.length > 0, "sem preços nos cartões");
-  assert(precos.every((p) => p <= 10000), `preço acima do filtro: ${precos.join(", ")}`);
-  return `${precos.length} preços ≤ 10 000 (${precos.join(", ")})`;
+  assert(precos.length > 0, `sem cartões até ${limite} Kz`);
+  assert(precos.every((p) => p <= limite), `preço acima do filtro: ${precos.join(", ")}`);
+  return `${precos.length} preços ≤ ${limite} Kz (${precos.join(", ")})`;
 });
 
 await check("categoria inexistente não devolve o catálogo inteiro", async () => {
+  const nomes = await nomesDeProdutosActivos();
   const r = await pagina("/catalogo?cat=nao-existe");
   assert(r.status === 200, `HTTP ${r.status}`);
   const t = texto(r.html);
-  assert(!/\[DEMO\]/.test(t), "devolveu produtos para uma categoria que não existe");
+  assert(contarProdutos(r.html, nomes) === 0, "devolveu produtos para uma categoria que não existe");
   assert(/Nenhum produto/i.test(t), "sem mensagem de vazio");
   return "vazio, como deve ser";
 });

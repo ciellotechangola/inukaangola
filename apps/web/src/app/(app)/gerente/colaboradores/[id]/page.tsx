@@ -15,6 +15,14 @@ import ColaboradorIdentidade from "@/components/ColaboradorIdentidade";
 import CopiarReferencia from "@/components/CopiarReferencia";
 import { GraficoEvolucao, ProgressoMeta } from "@/components/Graficos";
 import GestaoColaborador from "./GestaoColaborador";
+import {
+  COR_ESTADO,
+  ROTULO_ESTADO,
+  ROTULO_METODO,
+  resumoDestino,
+  type EstadoLevantamento,
+  type MetodoRecebimento,
+} from "@/lib/levantamentos";
 
 export const dynamic = "force-dynamic";
 
@@ -30,23 +38,42 @@ export default async function ColaboradorDetalhePage({
 
   const supabase = await createClientServer();
 
-  const [fichaRes, painelRes, metaRes, provincias, taxaRes] = await Promise.all([
-    supabase.rpc("colaborador_ficha", { p_id: id }),
-    supabase.rpc("colaborador_painel", { p_id: id }),
-    supabase
-      .from("sales_goals")
-      .select("target_amount, target_sales, period_start, period_end")
-      .eq("seller_id", id)
-      .lte("period_start", new Date().toISOString().slice(0, 10))
-      .gte("period_end", new Date().toISOString().slice(0, 10))
-      .order("period_start", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    listarProvincias(supabase),
-    // A ficha devolve 0 quando não há taxa pessoal, o que se confunde com 0%.
-    // Aqui lê-se a taxa tal como ela é: pessoal, ou herdada da empresa.
-    supabase.rpc("taxa_comissao_de", { p_seller: id }),
-  ]);
+  const [fichaRes, painelRes, metaRes, provincias, taxaRes, levantamentosRes, pagamentoRes] =
+    await Promise.all([
+      supabase.rpc("colaborador_ficha", { p_id: id }),
+      supabase.rpc("colaborador_painel", { p_id: id }),
+      supabase
+        .from("sales_goals")
+        .select("target_amount, target_sales, period_start, period_end")
+        .eq("seller_id", id)
+        .lte("period_start", new Date().toISOString().slice(0, 10))
+        .gte("period_end", new Date().toISOString().slice(0, 10))
+        .order("period_start", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      listarProvincias(supabase),
+      // A ficha devolve 0 quando não há taxa pessoal, o que se confunde com 0%.
+      // Aqui lê-se a taxa tal como ela é: pessoal, ou herdada da empresa.
+      supabase.rpc("taxa_comissao_de", { p_seller: id }),
+      // Levantamentos do colaborador: o pedido fica no perfil dele, com o
+      // estado, o valor e para onde foi o dinheiro. O RLS já limita a leitura
+      // ao próprio e à gestão da província.
+      supabase
+        .from("levantamentos")
+        .select(
+          "id, referencia, valor, metodo, estado, solicitado_em, pago_em, motivo_rejeicao, notas, dados"
+        )
+        .eq("seller_id", id)
+        .order("solicitado_em", { ascending: false })
+        .limit(20),
+      // Coordenadas guardadas para o próximo pedido (dados sensíveis: só a
+      // gestão da província as lê, por RLS de `seller_profiles`).
+      supabase
+        .from("seller_profiles")
+        .select("xpress_dados, banco_dados")
+        .eq("id", id)
+        .maybeSingle(),
+    ]);
 
   // A RPC recusa com 42501 quem não pode ver; o RLS esconde o resto. Em ambos
   // os casos a resposta certa é "não existe" — não se confirma que a pessoa
@@ -60,6 +87,24 @@ export default async function ColaboradorDetalhePage({
   const metaIndividual = metaRes.data as
     | { target_amount: number; target_sales: number }
     | null;
+
+  const levantamentos = (levantamentosRes.data ?? []) as {
+    id: string;
+    referencia: string | null;
+    valor: number;
+    metodo: string;
+    estado: EstadoLevantamento;
+    solicitado_em: string;
+    pago_em: string | null;
+    motivo_rejeicao: string | null;
+    notas: string | null;
+    dados: Record<string, string> | null;
+  }[];
+
+  const pagamento = (pagamentoRes.data ?? null) as {
+    xpress_dados: Record<string, string> | null;
+    banco_dados: Record<string, string> | null;
+  } | null;
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-10">
@@ -211,6 +256,96 @@ export default async function ColaboradorDetalhePage({
             />
             <Linha rotulo="Conta criada em" valor={dataCurta(ficha.created_at)} />
           </dl>
+        </section>
+      </div>
+
+      {/* ---------------------------------------------------------------
+          Recebimento e levantamentos
+          O pedido de dinheiro vive no perfil do colaborador: aqui a gestão vê
+          para onde vai o dinheiro, o estado de cada pedido e o histórico.
+          --------------------------------------------------------------- */}
+      <div className="mb-6 grid gap-4 lg:grid-cols-2">
+        <section className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-6">
+          <h2 className="mb-1 text-sm font-medium text-[#F5F5F5]">
+            Dados de recebimento
+          </h2>
+          <p className="mb-4 text-[11px] text-[#6F6F6F]">
+            Guardados pelo colaborador. Só o próprio e a gestão os vêem.
+          </p>
+
+          <div className="space-y-3 text-sm">
+            <div>
+              <p className="mb-1 text-[10px] uppercase tracking-wide text-[#525252]">
+                XPRESS
+              </p>
+              <p className="text-[#D4D4D4]">
+                {pagamento?.xpress_dados
+                  ? resumoDestino("xpress", pagamento.xpress_dados)
+                  : "Ainda não indicou dados XPRESS."}
+              </p>
+            </div>
+            <div>
+              <p className="mb-1 text-[10px] uppercase tracking-wide text-[#525252]">
+                Transferência bancária
+              </p>
+              <p className="text-[#D4D4D4]">
+                {pagamento?.banco_dados
+                  ? resumoDestino("transferencia", pagamento.banco_dados)
+                  : "Ainda não indicou dados bancários."}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-6">
+          <div className="mb-4 flex items-baseline justify-between gap-3">
+            <h2 className="text-sm font-medium text-[#F5F5F5]">
+              Levantamentos
+            </h2>
+            <Link
+              href="/gerente/levantamentos"
+              className="text-[11px] text-[#6F6F6F] transition hover:text-[#C9A962]"
+            >
+              gerir todos
+            </Link>
+          </div>
+
+          {levantamentos.length === 0 ? (
+            <p className="text-sm text-[#525252]">Ainda não pediu levantamentos.</p>
+          ) : (
+            <ul className="space-y-3">
+              {levantamentos.slice(0, 6).map((l) => (
+                <li key={l.id} className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm text-[#F5F5F5]">
+                        {l.referencia ?? "Levantamento"}
+                      </span>
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                          COR_ESTADO[l.estado] ?? COR_ESTADO.pendente
+                        }`}
+                      >
+                        {ROTULO_ESTADO[l.estado] ?? l.estado}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[#6F6F6F]">
+                      {new Date(l.solicitado_em).toLocaleString("pt-PT")} ·{" "}
+                      {ROTULO_METODO[l.metodo as MetodoRecebimento] ?? l.metodo}
+                    </p>
+                    {l.estado === "rejeitado" && l.motivo_rejeicao && (
+                      <p className="text-[11px] text-[#F87171]">
+                        Motivo: {l.motivo_rejeicao}
+                      </p>
+                    )}
+                  </div>
+                  <span className="shrink-0 text-sm text-[#C9A962]">
+                    {formatCurrency(Number(l.valor))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       </div>
 

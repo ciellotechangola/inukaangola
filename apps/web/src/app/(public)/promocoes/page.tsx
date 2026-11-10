@@ -3,6 +3,15 @@ import { ArrowRight, CalendarClock, Clock, Sparkles, Tag } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
 import { CartaoConteudo } from "@/components/conteudos/CartaoConteudo";
 import { dataConteudo, estadoDaPromocao, type Conteudo } from "@/lib/conteudos";
+import {
+  ambitoCatalogo,
+  etiquetaValor,
+  normalizarCampanhasVigentes,
+  validadeCampanha,
+  type CampanhaVigente,
+} from "@/lib/promocoes";
+import { provinciaDoVisitante } from "@/lib/promocoes-server";
+import { formatCurrency } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +46,15 @@ export default async function PromocoesPage() {
     p_kind: "promocao",
     p_limit: 40,
   });
+
+  // Campanhas de preço: as que valem na província de quem está a ver. Sem
+  // sessão, ou sem província no perfil, só aparecem as nacionais — é a mesma
+  // regra que `preco_efetivo` aplica ao cobrar.
+  const provinciaId = await provinciaDoVisitante();
+  const { data: campanhasBrutas } = await supabase.rpc("promocoes_vigentes", {
+    p_provincia: provinciaId,
+  });
+  const campanhas: CampanhaVigente[] = normalizarCampanhasVigentes(campanhasBrutas);
 
   const promocoes = (data ?? []) as Conteudo[];
   const ativas = promocoes.filter((p) => estadoDaPromocao(p) === "ativa");
@@ -97,6 +115,64 @@ export default async function PromocoesPage() {
           </div>
         </div>
       </section>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Campanhas de preço (aplicadas ao cobrar)                            */}
+      {/* ------------------------------------------------------------------ */}
+      {campanhas.length > 0 && (
+        <section className="mt-10">
+          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-light text-[#F5F5F5]">Campanhas de preço</h2>
+              <p className="mt-1 text-xs text-[#6F6F6F]">
+                O desconto já está no preço que a encomenda cobra
+                {provinciaId ? " na sua província." : " em todo o país."}
+              </p>
+            </div>
+            <Link
+              href="/catalogo?promo=1"
+              className="text-[11px] text-[#C9A962] transition hover:text-[#D8BC7A]"
+            >
+              Ver produtos em promoção →
+            </Link>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {campanhas.map((c) => {
+              return (
+                <div
+                  key={c.id}
+                  className="rounded-xl border border-[#C9A962]/25 bg-gradient-to-br from-[#191919] to-[#111] p-5"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-medium text-[#F5F5F5]">{c.nome}</h3>
+                    <span className="rounded-full bg-[#C9A962] px-2 py-0.5 text-[10px] font-bold text-[#0A0A0A]">
+                      {etiquetaValor(c, formatCurrency)}
+                    </span>
+                  </div>
+
+                  {c.descricao && (
+                    <p className="mt-2 text-xs leading-relaxed text-[#A3A3A3]">{c.descricao}</p>
+                  )}
+
+                  <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#6F6F6F]">
+                    <span className="text-[#E3D5A7]">
+                      {c.nacional ? "Todo o país" : c.provincias.join(" · ")}
+                    </span>
+                    <span>·</span>
+                    <span>{ambitoCatalogo(c)}</span>
+                  </p>
+
+                  <p className="mt-1 flex items-center gap-1.5 text-[11px] text-[#C9A962]">
+                    <Clock className="h-3 w-3" />
+                    {validadeCampanha(c)}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {error && (
         <div className="mt-8 rounded-xl border border-[#4A2020] bg-[#2A1010] p-4 text-sm text-[#F87171]">
