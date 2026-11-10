@@ -42,9 +42,9 @@ export const DEFINICOES_PADRAO: DefinicoesLoja = {
   telefones: [...TELEFONES_INUKA],
   androidUrl: null,
   iosUrl: null,
-  versao: "1.2.1",
+  versao: "1.2.2",
   novidades:
-    "Levantamento de comissões na app: saldo disponível, pedido por XPRESS ou transferência e histórico. Cada produto vendido conta como uma venda. Promoções por província na loja.",
+    "Uma só Área de Colaborador: dados pessoais, carteira, comissões e levantamentos no mesmo sítio. A app abre logo na sua área. A referência aparece uma vez só. «Ser revendedor» passou a «Ser colaborador».",
   actualizadoEm: null,
 };
 
