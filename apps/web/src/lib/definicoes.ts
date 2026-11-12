@@ -42,9 +42,9 @@ export const DEFINICOES_PADRAO: DefinicoesLoja = {
   telefones: [...TELEFONES_INUKA],
   androidUrl: null,
   iosUrl: null,
-  versao: "1.2.3",
+  versao: "1.2.4",
   novidades:
-    "Registar venda passou a ser o cadastro do cliente: com o telefone, quem comprou entra logo nos seus clientes conquistados — associado à carteira se já tiver conta, ou por activar com o nome e a compra se ainda não tiver. Novo campo «Nome do cliente».",
+    "Conversas com o aspecto do Telegram: mensagens seguidas da mesma pessoa ficam juntas, com a hora em cada bolha e o dia separado. Caixa de escrita maior, que cresce até cinco linhas. Aba «Feed» com o Feed Inuka e o Feed Clientes.",
   actualizadoEm: null,
 };
 
