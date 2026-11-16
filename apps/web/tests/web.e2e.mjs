@@ -494,6 +494,25 @@ await check("a tela inicial mostra «Iniciar sessão» a quem ainda não entrou"
   return "botão à vista";
 });
 
+await check("o Feed Clientes abre sem sessão e está no menu a seguir ao catálogo", async () => {
+  const r = await pagina("/feed");
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  assert(/Feed Clientes/.test(t), "sem título do feed");
+  // Sem sessão, o feed convida a entrar em vez de mostrar botões que falham.
+  assert(/Iniciar sessão/.test(t), "sem caminho para entrar");
+
+  // A ordem do menu é a promessa: catálogo -> feed -> descarregar.
+  const nav = r.html.slice(r.html.indexOf("<nav"), r.html.indexOf("</nav>"));
+  const catalogo = nav.indexOf('href="/catalogo"');
+  const feed = nav.indexOf('href="/feed"');
+  const descarregar = nav.indexOf('href="/download"');
+  assert(catalogo >= 0 && feed >= 0, `menu sem catálogo ou feed: ${catalogo}/${feed}`);
+  assert(catalogo < feed, "o feed não está depois do catálogo");
+  assert(descarregar < 0 || feed < descarregar, "o feed não está antes do descarregar");
+  return "200 sem sessão";
+});
+
 await check("páginas públicas têm um só cabeçalho e um só rodapé", async () => {
   // Os layouts de grupo já os renderizam; as páginas voltaram a renderizá-los
   // e o resultado foram dois de cada.
@@ -825,6 +844,26 @@ await check("gestor entra no painel", async () => {
   assert(t.includes("Painel de gestão"), "sem painel");
   assert(/Valor vendido/.test(t), "sem indicador de valor");
   return "200 com indicadores";
+});
+
+await check("gestor regista venda e escolhe o colaborador", async () => {
+  const r = await pagina("/gerente/vendas/registar", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  // Sem colaborador a venda é da casa; com colaborador, a comissão é dele.
+  assert(/Sem colaborador/.test(t), "sem opção «Sem colaborador»");
+  assert(/A quem pertence esta venda/.test(t), "sem escolha de colaborador");
+  return "200 com escolha";
+});
+
+await check("a gestão é levada para a tela de venda dela", async () => {
+  const r = await pagina("/vendedor/vendas/registar", cGestor);
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  assert(
+    String(r.location ?? "").includes("/gerente/vendas/registar"),
+    String(r.location)
+  );
+  return "redirecciona";
 });
 
 await check("gestor abre produtos", async () => {
@@ -2797,10 +2836,30 @@ if (TEM_CONTEUDOS) {
     return disposicao.replace(/.*filename=/, "");
   });
 
-  await check("o download exige sessão", async () => {
+  await check("o download de um comunicado exige sessão", async () => {
+    // O comunicado é interno: sem sessão não sai. As publicações do Feed
+    // Clientes, essas, saem — `/feed` é público e o botão de descarregar tem
+    // de funcionar para quem não tem conta.
     const r = await fetch(`${APP}/api/conteudos/${COM_ID}/download`);
     assert(r.status === 403, `HTTP ${r.status}`);
     return "403 sem cookie";
+  });
+
+  await check("o download de uma publicação pública dispensa sessão", async () => {
+    const promocao = await inserir("content_items", {
+      kind: "promocao",
+      title: `[E2E] Promoção descarregável ${SUF}`,
+      body: "Campanha de teste para o download público.",
+      status: "publicado",
+    });
+    assert(promocao.ok, `promoção: ${JSON.stringify(promocao.data).slice(0, 140)}`);
+    criados.push(["content_items", promocao.data[0].id]);
+
+    const r = await fetch(`${APP}/api/conteudos/${promocao.data[0].id}/download`);
+    assert(r.status === 200, `HTTP ${r.status}`);
+    const disposicao = r.headers.get("content-disposition") ?? "";
+    assert(disposicao.includes("attachment"), disposicao || "sem content-disposition");
+    return "200 sem cookie";
   });
 
   await check("descarregar um conteúdo inexistente devolve 404", async () => {

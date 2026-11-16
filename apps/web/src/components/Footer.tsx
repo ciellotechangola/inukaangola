@@ -18,6 +18,7 @@ export default function Footer() {
           </a>
         </div>
         <div className="flex flex-wrap justify-center gap-6 text-sm text-[#A3A3A3]">
+          <Link href="/feed" className="hover:text-[#C9A962]">Feed Clientes</Link>
           <Link href="/promocoes" className="hover:text-[#C9A962]">Promoções</Link>
           <Link href="/download" className="hover:text-[#C9A962]">Descarregar app</Link>
           <Link href="/sobre" className="hover:text-[#C9A962]">Sobre</Link>

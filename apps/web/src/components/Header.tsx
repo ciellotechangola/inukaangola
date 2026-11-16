@@ -61,6 +61,10 @@ export default function Header() {
   // formação) o menu passava a não caber a partir de 768 px.
   const navLinks: { href: string; label: string; desde?: "md" | "lg" }[] = [
     { href: "/catalogo", label: "Catálogo" },
+    // Feed Clientes logo a seguir ao catálogo, e para todos: é a montra viva
+    // da marca — promoções e testemunhos — e abre **sem sessão**. Quem chega
+    // de um link não pode ter de criar conta para ver o que a INUKA oferece.
+    { href: "/feed", label: "Feed Clientes" },
     // Descarregar fica junto ao catálogo: é a segunda coisa que um visitante
     // procura depois de ver os produtos — ter a app no telemóvel.
     { href: "/download", label: "Descarregar", desde: "md" },
@@ -73,9 +77,6 @@ export default function Header() {
           // Compras = o que um colaborador registou em nome deste número,
           // incluindo antes de a conta existir.
           { href: "/cliente/compras", label: "Compras" },
-          // «Feed Clientes»: promoções e testemunhos. Os comunicados internos
-          // não aparecem ao cliente — são do «Feed Inuka», que é da equipa.
-          { href: "/cliente/conteudo", label: "Feed Clientes" },
           // «Perfil» é a área de cliente inteira numa tela: identidade,
           // referência, colaborador e atalhos. O botão com o nome também leva lá.
           { href: "/cliente", label: "Perfil" },

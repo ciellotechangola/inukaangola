@@ -201,6 +201,18 @@ export default async function HomePage() {
               </Link>
             </div>
 
+            {/* O feed é a montra viva da marca: promoções e testemunhos. Fica
+                aqui como ligação discreta — o hero já tem botões suficientes,
+                e o menu do cabeçalho leva lá em qualquer página. */}
+            <Link
+              href="/feed"
+              className="mt-4 inline-flex items-center gap-1.5 text-xs text-[#C9A962] transition hover:text-[#E3D5A7]"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Ver promoções e testemunhos no Feed Clientes
+              <ArrowRight className="h-3 w-3" />
+            </Link>
+
             <p className="mt-6 text-xs leading-relaxed text-[#6F6F6F]">
               {conta ? (
                 <>

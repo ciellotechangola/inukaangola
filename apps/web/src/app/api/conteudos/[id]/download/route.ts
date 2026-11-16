@@ -17,20 +17,21 @@ export const dynamic = "force-dynamic";
  * Sem imagem (um comunicado só de texto), devolve o texto num `.txt`: quem lê
  * um aviso da gestão pode querer guardá-lo ou reenviá-lo tal e qual.
  *
- * Quem entra: quem tem sessão **e** pode ver o conteúdo. A verificação é feita
- * com o cliente da sessão (não com a chave de serviço) para passar pelas
- * políticas — sem ela, o download era uma porta lateral ao RLS: bastava saber
- * o id de um comunicado para o receber, mesmo sendo cliente.
+ * Quem entra: quem pode ver o conteúdo. A verificação é feita com o cliente
+ * da sessão (não com a chave de serviço) para passar pelas políticas — sem
+ * ela, o download era uma porta lateral ao RLS: bastava saber o id de um
+ * comunicado para o receber, mesmo sendo cliente.
+ *
+ * **Sem sessão também entra**, desde que a publicação seja pública: o Feed
+ * Clientes abre a qualquer visitante (`/feed`) e um botão de descarregar que
+ * responde 403 é pior do que não existir. `pode_ver_conteudo` é que decide —
+ * com `auth.uid()` nulo só passa promoção e testemunho dentro das datas.
  */
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const perfil = await getProfile();
-  if (!perfil) {
-    return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
-  }
-
   const { id } = await params;
 
   // Primeiro procura-se (404 para um id que não existe), depois verifica-se a
@@ -60,7 +61,7 @@ export async function GET(
     status: string;
   };
 
-  if (item.status !== "publicado" && perfil.role !== "manager") {
+  if (item.status !== "publicado" && perfil?.role !== "manager") {
     return NextResponse.json({ error: "Conteúdo não publicado." }, { status: 404 });
   }
 

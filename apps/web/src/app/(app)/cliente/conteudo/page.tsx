@@ -4,7 +4,7 @@ import { MessageSquare, Sparkles } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
 import type { Conteudo } from "@/lib/conteudos";
-import { FeedClientes } from "./FeedClientes";
+import { FeedClientes } from "@/components/conteudos/FeedClientes";
 
 export const dynamic = "force-dynamic";
 

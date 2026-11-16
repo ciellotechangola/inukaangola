@@ -141,6 +141,12 @@ export async function registerSale(
     paymentStatus?: PaymentStatus;
     notes?: string;
     clientRef?: string;
+    /**
+     * A quem fica a venda. Omitido = fica com quem regista (o caso do
+     * colaborador). Só a gestão pode indicar outra pessoa — a base de dados
+     * recusa o resto com 42501.
+     */
+    sellerId?: string | null;
   } = {}
 ): Promise<SaleResult> {
   const supabase = createClientBrowser();
@@ -151,6 +157,7 @@ export async function registerSale(
     p_payment_status: options.paymentStatus ?? "pending",
     p_notes: options.notes ?? null,
     p_client_ref: options.clientRef ?? crypto.randomUUID(),
+    p_seller_id: options.sellerId ?? null,
   });
   rpcError(error);
   return data as SaleResult;
@@ -179,6 +186,8 @@ export async function registerSaleByPhone(
     paymentStatus?: PaymentStatus;
     notes?: string;
     clientRef?: string;
+    /** Só a gestão: a venda (e a carteira do cliente) fica com este colaborador. */
+    sellerId?: string | null;
   } = {}
 ): Promise<
   SaleResult & {
@@ -200,6 +209,7 @@ export async function registerSaleByPhone(
     p_notes: options.notes ?? null,
     p_client_ref: options.clientRef ?? crypto.randomUUID(),
     p_customer_name: options.customerName?.trim() || null,
+    p_seller_id: options.sellerId ?? null,
   });
   rpcError(error);
 

@@ -35,6 +35,7 @@ export function FeedConteudos({
   hrefNovo,
   rotuloNovo = "Publicar",
   gerirReacoes,
+  soLeitura,
 }: {
   itens: Conteudo[];
   /** Só a gestão recebe isto — o colaborador e o cliente são leitores. */
@@ -43,6 +44,12 @@ export function FeedConteudos({
   rotuloNovo?: string;
   /** A gestão vê **quem** reagiu, não só quantos. */
   gerirReacoes?: boolean;
+  /**
+   * Visitante sem sessão: vê tudo, mas reagir e comentar exigem conta. Os
+   * botões apareciam e respondiam «inicia sessão» a cada toque — um convite
+   * claro é melhor do que um erro.
+   */
+  soLeitura?: boolean;
 }) {
   const [aberto, setAberto] = useState<Conteudo | null>(null);
 
@@ -85,6 +92,7 @@ export function FeedConteudos({
             key={c.id}
             conteudo={c}
             gerirReacoes={gerirReacoes}
+            soLeitura={soLeitura}
             onAbrir={() => setAberto(c)}
           />
         ))}
@@ -98,10 +106,12 @@ export function FeedConteudos({
 function Cartao({
   conteudo,
   gerirReacoes,
+  soLeitura,
   onAbrir,
 }: {
   conteudo: Conteudo;
   gerirReacoes?: boolean;
+  soLeitura?: boolean;
   onAbrir: () => void;
 }) {
   const promo = estadoDaPromocao(conteudo);
@@ -258,15 +268,37 @@ function Cartao({
 
       <div className="flex flex-wrap items-center gap-1 border-t border-[#1F1F1F] px-2 py-1">
         <div className="min-w-0 flex-1">
-          <Interacoes
-            itemId={conteudo.id}
-            permitirReacoes={conteudo.allow_reactions}
-            permitirComentarios={conteudo.allow_comments}
-            reacoes={conteudo.reacoes}
-            minhaReacao={conteudo.minha_reacao}
-            comentarios={conteudo.comentarios}
-            compacto
-          />
+          {soLeitura ? (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-1.5 text-[11px] text-[#8A8A8A]">
+              {Number(conteudo.reacoes) > 0 && (
+                <span>
+                  {conteudo.reacoes} {Number(conteudo.reacoes) === 1 ? "reacção" : "reações"}
+                </span>
+              )}
+              {Number(conteudo.comentarios) > 0 && (
+                <span>
+                  {conteudo.comentarios}{" "}
+                  {Number(conteudo.comentarios) === 1 ? "comentário" : "comentários"}
+                </span>
+              )}
+              <Link
+                href="/login?next=/feed"
+                className="text-[#C9A962] transition hover:text-[#E3D5A7]"
+              >
+                Entrar para reagir
+              </Link>
+            </div>
+          ) : (
+            <Interacoes
+              itemId={conteudo.id}
+              permitirReacoes={conteudo.allow_reactions}
+              permitirComentarios={conteudo.allow_comments}
+              reacoes={conteudo.reacoes}
+              minhaReacao={conteudo.minha_reacao}
+              comentarios={conteudo.comentarios}
+              compacto
+            />
+          )}
         </div>
         {gerirReacoes && <QuemReagiu itemId={conteudo.id} total={conteudo.reacoes} />}
         <a

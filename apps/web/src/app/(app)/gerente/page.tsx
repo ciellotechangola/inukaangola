@@ -109,6 +109,9 @@ export default async function ManagerDashboardPage() {
         </div>
 
         <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {/* Registar venda fica à frente de tudo: é o que a gestão faz com o
+              cliente à frente, e a venda pode ser atribuída a um colaborador. */}
+          <Action href="/gerente/vendas/registar" title="Registar venda" />
           <Action href="/gerente/produtos" title="Produtos e stock" />
           <Action href="/gerente/promocoes" title="Promoções por província" />
           <Action href="/gerente/levantamentos" title="Levantamentos de comissões" />

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { FeedConteudos } from "@/components/conteudos/FeedConteudos";
+import { FeedConteudos } from "./FeedConteudos";
 import type { Conteudo } from "@/lib/conteudos";
 
 /**
@@ -10,6 +10,10 @@ import type { Conteudo } from "@/lib/conteudos";
  * São dois filtros e não quatro: o cliente só tem promoções e testemunhos para
  * ver. Os comunicados e a formação são da equipa — não é uma questão de esconder
  * no menu, é a base de dados que os não devolve (migração 0019).
+ *
+ * O mesmo componente serve o feed dentro da área de cliente e o feed público
+ * (`/feed`), que qualquer visitante abre sem sessão. A diferença é `soLeitura`:
+ * sem sessão não há reacções nem comentários, só a leitura e o convite a entrar.
  */
 
 const FILTROS = [
@@ -22,10 +26,15 @@ export function FeedClientes({
   itens,
   hrefNovo,
   gerirReacoes,
+  soLeitura,
+  vazio = "Ainda não há publicações neste filtro.",
 }: {
   itens: Conteudo[];
   hrefNovo?: string;
   gerirReacoes?: boolean;
+  /** Visitante sem sessão: lê tudo, não reage. */
+  soLeitura?: boolean;
+  vazio?: string;
 }) {
   const [filtro, setFiltro] = useState<string>("tudo");
 
@@ -53,12 +62,17 @@ export function FeedClientes({
 
       {visiveis.length === 0 && (
         <p className="mx-auto mb-5 max-w-[560px] rounded-2xl border border-dashed border-[#2A2A2A] bg-[#111] px-6 py-14 text-center text-sm text-[#6F6F6F]">
-          Ainda não há publicações neste filtro.
+          {vazio}
         </p>
       )}
 
       {/* Renderizado mesmo vazio: é aqui que vive o botão de publicar da gestão. */}
-      <FeedConteudos itens={visiveis} hrefNovo={hrefNovo} gerirReacoes={gerirReacoes} />
+      <FeedConteudos
+        itens={visiveis}
+        hrefNovo={hrefNovo}
+        gerirReacoes={gerirReacoes}
+        soLeitura={soLeitura}
+      />
     </div>
   );
 }

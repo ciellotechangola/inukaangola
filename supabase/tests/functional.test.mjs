@@ -68,6 +68,7 @@ for (const rel of [
   "migrations/0017_cliente_da_venda_na_carteira.sql",
   "migrations/0018_tarefas_e_gestor.sql",
   "migrations/0019_feed_clientes.sql",
+  "migrations/0020_venda_do_gestor.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -3333,6 +3334,157 @@ check("conteúdo sem reacções devolve zero e lista vazia",
   Number(semReacoes[0].r.total) === 0 && Array.isArray(semReacoes[0].r.gente)
   && semReacoes[0].r.gente.length === 0,
   JSON.stringify(semReacoes[0].r));
+
+console.log("\n--- 21. A GESTÃO REGISTA VENDAS E ESCOLHE O COLABORADOR (0020) ---");
+
+// Produto próprio desta secção: o stock que os testes anteriores mediram não
+// pode mudar por causa daqui.
+const pGestor = (await q(`
+  INSERT INTO public.products (sku, name, official_price, is_active)
+  VALUES ('INK-GEST', 'Perfume da gestão', 12000, true) RETURNING id`))[0].id;
+await exec(`
+  INSERT INTO public.inventory (product_id, provincia_id, quantity)
+  VALUES ('${pGestor}', '${UIG}', 30);`);
+
+// 21.1 sem colaborador: a venda fica com quem a registou
+const vendaPropria = await asUser(M_UIGE, async () =>
+  q(`SELECT public.register_sale('[{"product_id":"${pGestor}","quantity":1}]'::jsonb,
+      NULL, 'dinheiro', 'paid', 'Venda da gestão', 'gest-001') AS r`)
+);
+const donoPropria = await q(`
+  SELECT seller_id, provincia_id, total_amount FROM public.sales
+  WHERE id = '${vendaPropria[0].r.sale_id}'`);
+check("gestor regista venda mesmo sem colaborador",
+  donoPropria[0]?.seller_id === M_UIGE, JSON.stringify(donoPropria[0]));
+check("a venda sem colaborador fica na província do gestor",
+  donoPropria[0]?.provincia_id === UIG, String(donoPropria[0]?.provincia_id));
+
+const stockGestor = await q(`
+  SELECT quantity FROM public.inventory WHERE product_id = '${pGestor}' AND provincia_id = '${UIG}'`);
+check("a venda da gestão debita o stock", stockGestor[0].quantity === 29,
+  String(stockGestor[0].quantity));
+
+// 21.2 com colaborador: a venda e a comissão passam para ele
+const vendaAtribuida = await asUser(M_UIGE, async () =>
+  q(`SELECT public.register_sale('[{"product_id":"${pGestor}","quantity":2}]'::jsonb,
+      NULL, 'dinheiro', 'paid', 'Venda do colaborador', 'gest-002', '${S_UIGE}') AS r`)
+);
+const donoAtrib = await q(`
+  SELECT seller_id, total_amount FROM public.sales
+  WHERE id = '${vendaAtribuida[0].r.sale_id}'`);
+check("a venda passa a ser do colaborador escolhido",
+  donoAtrib[0]?.seller_id === S_UIGE, JSON.stringify(donoAtrib[0]));
+
+// A taxa efectiva: `commission_rate` pode estar NULL (herda a da empresa) e um
+// teste anterior já a pôs a NULL de propósito. `taxa_comissao_de` é da gestão,
+// por isso lê-se a mesma regra directamente.
+const taxaDoColab = await q(`
+  SELECT COALESCE(sp.commission_rate, public.taxa_comissao_global()) AS taxa
+  FROM public.seller_profiles sp WHERE sp.id = '${S_UIGE}'`);
+const comissaoAtrib = await q(`
+  SELECT seller_id, rate, amount FROM public.sale_commissions
+  WHERE sale_id = '${vendaAtribuida[0].r.sale_id}'`);
+check("a comissão é do colaborador, à taxa dele",
+  comissaoAtrib[0]?.seller_id === S_UIGE
+  && Number(comissaoAtrib[0]?.rate) === Number(taxaDoColab[0].taxa)
+  && Number(comissaoAtrib[0]?.amount)
+     === Math.round(Number(donoAtrib[0].total_amount) * Number(taxaDoColab[0].taxa) * 100) / 100,
+  JSON.stringify({ taxa: taxaDoColab[0].taxa, linha: comissaoAtrib[0] }));
+
+// 21.3 o colaborador não atribui a outra pessoa
+const atribuiuAlheio = await asUser(S_UIGE, async () => {
+  try {
+    await q(`SELECT public.register_sale('[{"product_id":"${pGestor}","quantity":1}]'::jsonb,
+      NULL, 'dinheiro', 'paid', NULL, NULL, '${C1}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("colaborador não regista venda em nome de outro",
+  /só a gestão/i.test(atribuiuAlheio ?? ""), atribuiuAlheio ?? "não deu erro");
+
+// 21.4 gestor provincial só atribui dentro da sua província
+const atribuiuFora = await asUser(M_UIGE, async () => {
+  try {
+    await q(`SELECT public.register_sale('[{"product_id":"${pGestor}","quantity":1}]'::jsonb,
+      NULL, 'dinheiro', 'paid', NULL, NULL, '${SELLER}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("gestor provincial não atribui a colaborador de outra província",
+  /província/i.test(atribuiuFora ?? ""), atribuiuFora ?? "não deu erro");
+
+// 21.5 um colaborador inactivo não recebe vendas
+await exec(`UPDATE public.profiles SET is_active = false WHERE id = '${SELLER}'`);
+const atribuiuInactivo = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.register_sale('[{"product_id":"${pGestor}","quantity":1}]'::jsonb,
+      NULL, 'dinheiro', 'paid', NULL, NULL, '${SELLER}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+await exec(`UPDATE public.profiles SET is_active = true WHERE id = '${SELLER}'`);
+check("colaborador inactivo não recebe vendas",
+  /inactivo|não existe/i.test(atribuiuInactivo ?? ""), atribuiuInactivo ?? "não deu erro");
+
+// 21.6 a administração nacional atribui a qualquer colaborador
+const vendaNacional = await asUser(MANAGER, async () =>
+  q(`SELECT public.register_sale('[{"product_id":"${pGestor}","quantity":1}]'::jsonb,
+      NULL, 'dinheiro', 'paid', 'Venda nacional', 'gest-nac-001', '${SELLER}') AS r`)
+);
+const donoNacional = await q(`
+  SELECT seller_id FROM public.sales WHERE id = '${vendaNacional[0].r.sale_id}'`);
+check("a administração nacional atribui a qualquer colaborador",
+  donoNacional[0]?.seller_id === SELLER, String(donoNacional[0]?.seller_id));
+
+// 21.7 repetir a referência não duplica a venda do colaborador
+const repetida = await asUser(M_UIGE, async () =>
+  q(`SELECT public.register_sale('[{"product_id":"${pGestor}","quantity":2}]'::jsonb,
+      NULL, 'dinheiro', 'paid', 'Venda do colaborador', 'gest-002', '${S_UIGE}') AS r`)
+);
+check("repetir a referência devolve a mesma venda",
+  repetida[0].r.duplicated === true && repetida[0].r.sale_id === vendaAtribuida[0].r.sale_id,
+  JSON.stringify(repetida[0].r));
+
+// 21.8 venda com telefone: a reserva vai para o colaborador escolhido
+const telefoneNovo = "+244923000666";
+const vendaGestorTelefone = await asUser(M_UIGE, async () =>
+  q(`SELECT public.register_sale_by_phone('[{"product_id":"${pGestor}","quantity":1}]'::jsonb,
+      '${telefoneNovo}', 'dinheiro', 'paid', 'Gestão com telefone', 'gest-003',
+      'Cliente da Gestão', '${S_UIGE}') AS r`)
+);
+const reservaGestor = await q(`
+  SELECT seller_id, created_by, full_name FROM public.reserved_customers
+  WHERE phone = '${telefoneNovo}'`);
+check("a reserva do telefone fica com o colaborador escolhido",
+  reservaGestor[0]?.seller_id === S_UIGE, JSON.stringify(reservaGestor[0]));
+check("a reserva guarda quem a registou",
+  reservaGestor[0]?.created_by === M_UIGE, String(reservaGestor[0]?.created_by));
+check("a reserva guarda o nome que a gestão escreveu",
+  reservaGestor[0]?.full_name === "Cliente da Gestão", String(reservaGestor[0]?.full_name));
+
+const donoTelefone = await q(`
+  SELECT seller_id, customer_phone FROM public.sales
+  WHERE id = '${vendaGestorTelefone[0].r.sale_id}'`);
+check("a venda com telefone também é do colaborador",
+  donoTelefone[0]?.seller_id === S_UIGE && donoTelefone[0]?.customer_phone === telefoneNovo,
+  JSON.stringify(donoTelefone[0]));
+
+// 21.9 as duas versões antigas da função deixaram de existir
+const assinaturas = await q(`
+  SELECT pg_get_function_identity_arguments(p.oid) AS args
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'register_sale'`);
+check("register_sale tem uma só assinatura, com p_seller_id",
+  assinaturas.length === 1 && assinaturas[0].args.includes("p_seller_id"),
+  JSON.stringify(assinaturas.map((a) => a.args)));
+
+const assinaturasTelefone = await q(`
+  SELECT pg_get_function_identity_arguments(p.oid) AS args
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'register_sale_by_phone'`);
+check("register_sale_by_phone tem uma só assinatura, com p_seller_id",
+  assinaturasTelefone.length === 1 && assinaturasTelefone[0].args.includes("p_seller_id"),
+  JSON.stringify(assinaturasTelefone.map((a) => a.args)));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

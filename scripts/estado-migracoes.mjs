@@ -157,6 +157,16 @@ if (especificacao) {
   // o argumento novo sim.
   const forcado = especificacao.includes('"p_forcar"');
   linhas.push(["eliminar_produto(forçar histórico)", forcado ? "OK" : "em falta"]);
+
+  // A 0020 acrescentou `p_seller_id` a `register_sale` e a
+  // `register_sale_by_phone`. O nome do argumento **já existia** noutras
+  // funções (`definir_meta`, `pagar_comissoes`), por isso a procura tem de ser
+  // feita só dentro da entrada da função, não no documento inteiro.
+  const entradaVenda = especificacao.indexOf('"/rpc/register_sale"');
+  const blocoVenda =
+    entradaVenda >= 0 ? especificacao.slice(entradaVenda, entradaVenda + 6000) : "";
+  const vendaGestor = blocoVenda.includes('"p_seller_id"');
+  linhas.push(["register_sale(escolher colaborador)", vendaGestor ? "OK" : "em falta"]);
 } else {
   linhas.push(["funções (OpenAPI)", "não foi possível ler /rest/v1/"]);
 }

@@ -7,6 +7,10 @@ const PUBLIC_ROUTES = [
   "/produto",
   "/carrinho",
   "/promocoes",
+  // Feed Clientes: promoções e testemunhos, aberto a quem não tem conta. Está
+  // no menu a seguir ao catálogo e é a primeira coisa que um visitante vindo
+  // de um link vê — pedir sessão aqui era fechar a porta à entrada.
+  "/feed",
   "/login",
   "/registo",
   "/sobre",
