@@ -69,6 +69,7 @@ for (const rel of [
   "migrations/0018_tarefas_e_gestor.sql",
   "migrations/0019_feed_clientes.sql",
   "migrations/0020_venda_do_gestor.sql",
+  "migrations/0021_despesas_e_investimento.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -3485,6 +3486,286 @@ const assinaturasTelefone = await q(`
 check("register_sale_by_phone tem uma só assinatura, com p_seller_id",
   assinaturasTelefone.length === 1 && assinaturasTelefone[0].args.includes("p_seller_id"),
   JSON.stringify(assinaturasTelefone.map((a) => a.args)));
+
+console.log("\n--- 22. DESPESAS E INVESTIMENTO: A COMISSÃO PAGA A EMPRESA (0021) ---");
+
+// Colaborador próprio desta secção: os saldos usados antes já foram gastos
+// pelos testes anteriores e não deixam medir o que sai daqui.
+const S_DESP = "8a8a8a8a-8a8a-4a8a-8a8a-8a8a8a8a8a8a";
+await q(`INSERT INTO public.referencia_contadores (codigo, ultimo) VALUES ('UIG', 600)
+         ON CONFLICT (codigo) DO UPDATE
+         SET ultimo = GREATEST(public.referencia_contadores.ultimo, 600)`);
+await exec(`
+  INSERT INTO auth.users (id, email, raw_user_meta_data)
+  VALUES ('${S_DESP}', 'desp@inuka.ao', '{"full_name":"Colaborador Despesas","phone":"923000088"}');
+`);
+await q(`SELECT public.promote_to_seller('+244923000088', 'Uíge')`);
+await q(`UPDATE public.profiles SET provincia_id = '${UIG}' WHERE id = '${S_DESP}'`);
+await q(`UPDATE public.seller_profiles SET commission_rate = 0.10 WHERE id = '${S_DESP}'`);
+
+// Cinco vendas pagas de 20 000 Kz → 2 000 Kz de comissão cada → 10 000 Kz.
+for (let i = 1; i <= 5; i++) {
+  await q(`INSERT INTO public.sales (reference, seller_id, total_amount, payment_status, status, provincia_id)
+           VALUES ('VND-DESP-${i}', '${S_DESP}', 20000, 'paid', 'completed', '${UIG}')`);
+}
+const saldoDesp = await asUser(S_DESP, async () => q(`SELECT public.levantamento_resumo() AS r`));
+check("o colaborador das despesas começa com 10 000 Kz disponíveis",
+  Number(saldoDesp[0].r.disponivel) === 10000 && saldoDesp[0].r.habilitado === true,
+  JSON.stringify({ disponivel: saldoDesp[0].r.disponivel, habilitado: saldoDesp[0].r.habilitado }));
+
+// 22.1 registar um investimento
+const despEquip = await asUser(MANAGER, async () =>
+  q(`SELECT public.registar_despesa(
+       'Balança industrial para a delegação', 12000, 'investimento', 'equipamento',
+       'Fornecedor Kwanza', '${UIG}', 'Compra aprovada em conselho') AS r`));
+const despEquipR = despEquip[0].r;
+check("gestão registra um investimento por pagar",
+  despEquipR.estado === "pendente" && Number(despEquipR.valor) === 12000,
+  JSON.stringify(despEquipR));
+check("a despesa ganha referência DES-AAAA-NNNNN",
+  /^DES-\d{4}-\d{5}$/.test(despEquipR.referencia ?? ""), despEquipR.referencia);
+
+// 22.2 o colaborador não registra despesas
+const despColab = await asUser(S_DESP, async () => {
+  try {
+    await q(`SELECT public.registar_despesa('Tentativa do colaborador', 1000)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("colaborador não registra despesas",
+  /gestão/i.test(despColab ?? ""), despColab ?? "não deu erro");
+
+// 22.3 valor e categoria são validados
+const despZero = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.registar_despesa('Sem valor', 0)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("despesa sem valor é recusada", /valor válido/i.test(despZero ?? ""), despZero ?? "não deu erro");
+
+const despCategoria = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.registar_despesa('Categoria inventada', 1000, 'despesa', 'inventada')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("categoria fora da lista é recusada",
+  /categoria inválida/i.test(despCategoria ?? ""), despCategoria ?? "não deu erro");
+
+// 22.4 o colaborador vê a despesa por pagar da sua província
+const listaDesp = await asUser(S_DESP, async () =>
+  q(`SELECT public.despesas_para_colaborador() AS r`));
+const listaDespR = listaDesp[0].r;
+check("o colaborador vê a despesa por pagar da sua província",
+  Array.isArray(listaDespR)
+  && listaDespR.some((d) => d.id === despEquipR.id && Number(d.restante) === 12000),
+  JSON.stringify(listaDespR));
+
+// 22.5 quem é de outra província não vê
+await q(`UPDATE public.profiles SET provincia_id = '${LDA}' WHERE id = '${C2}'`);
+const visaoOutraProv = await asUser(C2, async () =>
+  q(`SELECT public.despesas_para_colaborador() AS r`));
+check("quem é de outra província não vê a despesa",
+  Array.isArray(visaoOutraProv[0].r) && !visaoOutraProv[0].r.some((d) => d.id === despEquipR.id),
+  JSON.stringify(visaoOutraProv[0].r));
+
+// 22.6 o colaborador aplica 5 000 Kz da comissão na despesa
+const pedEmpresa = await asUser(S_DESP, async () =>
+  q(`SELECT public.solicitar_levantamento(5000, 'empresa', NULL,
+       'Pago a balança da delegação', 'empresa', '${despEquipR.id}') AS r`));
+const rPedEmpresa = pedEmpresa[0].r;
+check("o colaborador aplica a comissão numa despesa da empresa",
+  rPedEmpresa.metodo === "empresa" && rPedEmpresa.destino === "empresa"
+  && rPedEmpresa.despesa_id === despEquipR.id,
+  JSON.stringify({ metodo: rPedEmpresa.metodo, despesa: rPedEmpresa.despesa_id }));
+check("aplicar em despesa reserva o saldo como um levantamento",
+  Number(rPedEmpresa.resumo.reservado) === 5000 && Number(rPedEmpresa.resumo.disponivel) === 5000,
+  JSON.stringify({ reservado: rPedEmpresa.resumo.reservado, disponivel: rPedEmpresa.resumo.disponivel }));
+
+// 22.7 gestão aprova, processa e marca como pago
+await asUser(MANAGER, async () =>
+  q(`SELECT public.decidir_levantamento('${rPedEmpresa.id}', 'aprovado')`));
+await asUser(MANAGER, async () =>
+  q(`SELECT public.decidir_levantamento('${rPedEmpresa.id}', 'em_processamento')`));
+const pagoDesp = await asUser(MANAGER, async () =>
+  q(`SELECT public.decidir_levantamento('${rPedEmpresa.id}', 'pago') AS r`));
+
+// O pagamento leva o destino escrito por extenso no livro de pagamentos.
+const pagamentoEmpresa = await q(`
+  SELECT amount, method, notes FROM public.commission_payouts
+  WHERE id = '${pagoDesp[0].r.payout_id}'`);
+check("o pagamento é registado como despesa da empresa",
+  pagamentoEmpresa[0]?.method === "despesa_empresa"
+  && Number(pagamentoEmpresa[0]?.amount) === 5000,
+  JSON.stringify(pagamentoEmpresa[0]));
+
+// O saldo baixa exactamente como se tivesse recebido o dinheiro na mão.
+const saldoPosDesp = await asUser(S_DESP, async () =>
+  q(`SELECT public.levantamento_resumo() AS r`));
+check("o saldo do colaborador baixa com o pagamento da despesa",
+  Number(saldoPosDesp[0].r.total_pago) === 5000
+  && Number(saldoPosDesp[0].r.disponivel) === 5000,
+  JSON.stringify({ pago: saldoPosDesp[0].r.total_pago, disponivel: saldoPosDesp[0].r.disponivel }));
+check("o resumo mostra quanto foi para despesas",
+  Number(saldoPosDesp[0].r.pago_em_despesas) === 5000,
+  String(saldoPosDesp[0].r.pago_em_despesas));
+
+// A despesa ficou parcialmente coberta e continua por pagar.
+const cobertoEquip = await q(`SELECT public.despesa_coberto('${despEquipR.id}') AS c`);
+check("a despesa fica parcialmente coberta e por pagar",
+  Number(cobertoEquip[0].c) === 5000, String(cobertoEquip[0].c));
+const estadoEquip = await q(`SELECT estado FROM public.despesas WHERE id = '${despEquipR.id}'`);
+check("a despesa parcialmente coberta não se dá por paga",
+  estadoEquip[0].estado === "pendente", estadoEquip[0].estado);
+
+// 22.8 o histórico do colaborador diz para onde foi o dinheiro
+const meusDesp = await asUser(S_DESP, async () =>
+  q(`SELECT * FROM public.meus_levantamentos()`));
+check("o histórico mostra a despesa em que a comissão foi aplicada",
+  meusDesp.length === 1 && (meusDesp[0].despesa ?? "").includes(despEquipR.referencia),
+  JSON.stringify(meusDesp.map((l) => l.despesa)));
+
+// 22.9 pedido para a empresa sem despesa e sem nota é recusado
+const pedidoSemDestino = await asUser(S_DESP, async () => {
+  try {
+    await q(`SELECT public.solicitar_levantamento(1000, 'empresa', NULL, NULL, 'empresa', NULL)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("sem despesa escolhida, a nota é obrigatória",
+  /indique em que foi aplicado/i.test(pedidoSemDestino ?? ""), pedidoSemDestino ?? "não deu erro");
+
+// 22.10 não se paga mais do que o saldo disponível
+const pagarSemSaldo = await asUser(MANAGER, async () => {
+  try {
+    // Faltam 7 000 nesta despesa; o colaborador só tem 5 000.
+    await q(`SELECT public.pagar_despesa('${despEquipR.id}', '${S_DESP}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("não se desconta mais do que o saldo do colaborador",
+  /não chega/i.test(pagarSemSaldo ?? ""), pagarSemSaldo ?? "não deu erro");
+
+// 22.11 a gestão registra uma despesa e desconta-a do saldo
+const despMarketing = await asUser(MANAGER, async () =>
+  q(`SELECT public.registar_despesa('Anúncio na rádio do Uíge', 3000, 'despesa', 'marketing') AS r`));
+const despMarketingR = despMarketing[0].r;
+check("a despesa sem província fica na do gestor",
+  despMarketingR.estado === "pendente", JSON.stringify(despMarketingR));
+
+const pagoMarketing = await asUser(MANAGER, async () =>
+  q(`SELECT public.pagar_despesa('${despMarketingR.id}', '${S_DESP}') AS r`));
+check("a gestão desconta a despesa do saldo do colaborador",
+  Number(pagoMarketing[0].r.pago_agora) === 3000 && pagoMarketing[0].r.seller_id === S_DESP,
+  JSON.stringify(pagoMarketing[0].r));
+
+const saldoPosMarketing = await asUser(S_DESP, async () =>
+  q(`SELECT public.levantamento_resumo() AS r`));
+check("o saldo desce para 2 000 Kz",
+  Number(saldoPosMarketing[0].r.disponivel) === 2000
+  && Number(saldoPosMarketing[0].r.pago_em_despesas) === 8000,
+  JSON.stringify({ disponivel: saldoPosMarketing[0].r.disponivel,
+                   despesas: saldoPosMarketing[0].r.pago_em_despesas }));
+
+// O colaborador tem de ver no histórico o dinheiro que a gestão retirou do
+// saldo dele: não é um pedido dele, mas é dinheiro que saiu.
+const historicoDesconto = await asUser(S_DESP, async () =>
+  q(`SELECT * FROM public.meus_levantamentos()`));
+const linhaDesconto = historicoDesconto.find(
+  (l) => l.estado === "pago" && l.metodo === "empresa"
+    && Number(l.valor) === 3000);
+check("a retirada da gestão aparece no histórico do colaborador",
+  !!linhaDesconto && (linhaDesconto.despesa ?? "").includes(despMarketingR.referencia),
+  JSON.stringify(historicoDesconto.map((l) => [l.valor, l.metodo, l.estado, l.despesa])));
+
+// 22.12 a tesouraria paga sem mexer no saldo de ninguém
+const despTesouraria = await asUser(MANAGER, async () =>
+  q(`SELECT public.registar_despesa('Renda do armazém', 2000, 'despesa', 'instalacoes') AS r`));
+const pagoTesouraria = await asUser(MANAGER, async () =>
+  q(`SELECT public.pagar_despesa('${despTesouraria[0].r.id}') AS r`));
+check("a tesouraria paga uma despesa sem criar pagamento de comissão",
+  pagoTesouraria[0].r.estado === "paga" && pagoTesouraria[0].r.payout_id === null,
+  JSON.stringify(pagoTesouraria[0].r));
+
+const saldoPosTesouraria = await asUser(S_DESP, async () =>
+  q(`SELECT public.levantamento_resumo() AS r`));
+check("pagar pela tesouraria não mexe no saldo do colaborador",
+  Number(saldoPosTesouraria[0].r.disponivel) === 2000,
+  String(saldoPosTesouraria[0].r.disponivel));
+
+// 22.13 uma despesa paga não se anula
+const despPagaTentativa = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.anular_despesa('${despTesouraria[0].r.id}', 'engano')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("uma despesa paga não se anula",
+  /paga não se anula/i.test(despPagaTentativa ?? ""), despPagaTentativa ?? "não deu erro");
+
+// 22.14 uma despesa por pagar anula-se
+const despAnular = await asUser(MANAGER, async () =>
+  q(`SELECT public.registar_despesa('Despesa em duplicado', 4500, 'despesa', 'outros') AS r`));
+const despAnulada = await asUser(MANAGER, async () =>
+  q(`SELECT public.anular_despesa('${despAnular[0].r.id}', 'registada duas vezes') AS r`));
+check("uma despesa por pagar pode ser anulada",
+  despAnulada[0].r.estado === "anulada", JSON.stringify(despAnulada[0].r));
+
+// 22.15 o painel da gestão traz o coberto e quem financiou
+const listaGestao = await asUser(MANAGER, async () =>
+  q(`SELECT public.despesas_equipa() AS r`));
+const equipNaLista = (listaGestao[0].r ?? []).find((d) => d.id === despEquipR.id);
+check("o painel mostra o que falta pagar e quem já pagou",
+  equipNaLista && Number(equipNaLista.coberto) === 5000
+  && Number(equipNaLista.restante) === 7000
+  && (equipNaLista.financiadores ?? []).includes("Colaborador Despesas"),
+  JSON.stringify(equipNaLista));
+
+const resumoDesp = await asUser(MANAGER, async () => q(`SELECT public.despesas_resumo() AS r`));
+check("o resumo soma as despesas pagas e o que saiu de comissões",
+  Number(resumoDesp[0].r.investimento_total) === 0
+  && Number(resumoDesp[0].r.despesa_total) === 5000
+  && Number(resumoDesp[0].r.pago_com_comissoes) === 8000,
+  JSON.stringify(resumoDesp[0].r));
+
+// 22.16 o colaborador não vê o painel da gestão
+const painelProibido = await asUser(S_DESP, async () => {
+  try {
+    await q(`SELECT public.despesas_equipa()`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("colaborador não vê o painel de despesas da gestão",
+  /gestão/i.test(painelProibido ?? ""), painelProibido ?? "não deu erro");
+
+// 22.17 um gestor provincial não paga despesa de outra província
+const despLuanda = await asUser(MANAGER, async () =>
+  q(`SELECT public.registar_despesa('Material para a loja de Luanda', 1000, 'despesa', 'outros', NULL, '${LDA}') AS r`));
+const pagarFora = await asUser(M_UIGE, async () => {
+  try {
+    await q(`SELECT public.pagar_despesa('${despLuanda[0].r.id}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("gestor provincial não paga despesa de outra província",
+  /província que gere/i.test(pagarFora ?? ""), pagarFora ?? "não deu erro");
+
+// 22.18 as assinaturas ficaram únicas
+const assinaturaLevanta = await q(`
+  SELECT pg_get_function_identity_arguments(p.oid) AS args
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'solicitar_levantamento'`);
+check("solicitar_levantamento tem uma só assinatura, com p_destino",
+  assinaturaLevanta.length === 1 && assinaturaLevanta[0].args.includes("p_destino"),
+  JSON.stringify(assinaturaLevanta.map((a) => a.args)));
+
+const assinaturaHist = await q(`
+  SELECT pg_get_function_identity_arguments(p.oid) AS args
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'meus_levantamentos'`);
+check("meus_levantamentos tem uma só assinatura",
+  assinaturaHist.length === 1, JSON.stringify(assinaturaHist.map((a) => a.args)));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

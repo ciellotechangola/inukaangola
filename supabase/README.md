@@ -65,6 +65,7 @@ npm run setup:sql     # concatena migrations/ em SETUP_COMPLETO.sql
 | `PATCH_TAREFAS_GESTOR.sql` | **Obrigatório** para a ficha do colaborador ter tarefas, gestor responsável e correcção de vendas: tabela `colaborador_tarefas` (o colaborador só muda o estado), `gestores_para_colaborador`/`definir_gestor_colaborador` e a política que deixa a gestão corrigir as linhas de uma venda — com guarda para não mexer em vendas com a comissão paga. É a migração 0018 isolada. Depende da 0015. |
 | `PATCH_FEED_CLIENTES.sql` | **Obrigatório** para o feed separado: `comunicado` e `formacao` passam a ser exclusivos da equipa (`kind_so_equipa`/`pode_ver_kind`), o cliente só vê promoções e testemunhos, e a gestão passa a ver **quem** reagiu em cada publicação (`conteudo_reacoes`). É a migração 0019 isolada. Depende da 0013. |
 | `PATCH_VENDA_GESTOR.sql` | **Obrigatório** para a gestão atribuir vendas a um colaborador: `register_sale` e `register_sale_by_phone` ganham `p_seller_id` (nulo = fica com quem registou). A comissão, a carteira do cliente e a reserva do telefone passam a ir para o colaborador escolhido; só a gestão pode escolher, e um gestor provincial só dentro da sua província. É a migração 0020 isolada. Depende da 0017. |
+| `PATCH_DESPESAS_INVESTIMENTO.sql` | **Obrigatório** para as despesas e investimento da empresa: tabela `despesas`, `registar_despesa`/`pagar_despesa`/`anular_despesa` e o terceiro destino do levantamento (`solicitar_levantamento` ganha `p_destino` e `p_despesa_id`). A comissão de um colaborador passa a poder pagar uma despesa da INUKA em vez de sair para a mão dele; a gestão também pode descontar uma despesa do saldo de um colaborador. O dinheiro continua a fechar-se num só livro (`commission_payouts`, com `method = 'despesa_empresa'`). É a migração 0021 isolada. Depende da 0015 e da 0020. |
 
 ### Ordem de aplicação numa base já existente
 
@@ -87,6 +88,7 @@ npm run setup:sql     # concatena migrations/ em SETUP_COMPLETO.sql
 16. `PATCH_TAREFAS_GESTOR.sql`
 17. `PATCH_FEED_CLIENTES.sql`
 18. `PATCH_VENDA_GESTOR.sql`
+19. `PATCH_DESPESAS_INVESTIMENTO.sql`
 
 `npm run estado` diz, item a item, o que ainda falta na base alojada.
 

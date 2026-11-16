@@ -57,6 +57,7 @@ const tabelas = [
   "conversations",
   "promocoes",
   "levantamentos",
+  "despesas",
   "colaborador_tarefas",
 ];
 
@@ -70,6 +71,7 @@ const colunas = [
   ["discount_requests", "product_name"],
   ["seller_profiles", "banco_dados"],
   ["seller_profiles", "xpress_dados"],
+  ["levantamentos", "despesa_id"],
 ];
 
 // Funções chamáveis por RPC.
@@ -124,6 +126,13 @@ const funcoes = [
   "pode_ver_kind",
   "kind_so_equipa",
   "conteudo_reacoes",
+  "despesa_coberto",
+  "registar_despesa",
+  "pagar_despesa",
+  "anular_despesa",
+  "despesas_equipa",
+  "despesas_resumo",
+  "despesas_para_colaborador",
 ];
 
 let especificacao = null;
@@ -167,6 +176,15 @@ if (especificacao) {
     entradaVenda >= 0 ? especificacao.slice(entradaVenda, entradaVenda + 6000) : "";
   const vendaGestor = blocoVenda.includes('"p_seller_id"');
   linhas.push(["register_sale(escolher colaborador)", vendaGestor ? "OK" : "em falta"]);
+
+  // A 0021 acrescentou `p_destino` e `p_despesa_id` a `solicitar_levantamento`.
+  // Mesma técnica: o nome do argumento pode aparecer noutra função, por isso a
+  // procura fica dentro da entrada desta.
+  const entradaLevanta = especificacao.indexOf('"/rpc/solicitar_levantamento"');
+  const blocoLevanta =
+    entradaLevanta >= 0 ? especificacao.slice(entradaLevanta, entradaLevanta + 4000) : "";
+  const levantamentoEmpresa = blocoLevanta.includes('"p_destino"');
+  linhas.push(["solicitar_levantamento(destino empresa)", levantamentoEmpresa ? "OK" : "em falta"]);
 } else {
   linhas.push(["funções (OpenAPI)", "não foi possível ler /rest/v1/"]);
 }

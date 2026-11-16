@@ -16,7 +16,7 @@ import {
   type LevantamentoEquipa,
 } from "@/lib/levantamentos";
 
-const PATCH = "supabase/PATCH_PROMOCOES_LEVANTAMENTOS.sql";
+const PATCH = "supabase/PATCH_DESPESAS_INVESTIMENTO.sql";
 
 const ENTRADA =
   "w-full rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none";
@@ -97,9 +97,14 @@ export default function GestaoLevantamentos() {
     }
 
     if (estado === "pago") {
+      const paraEmpresa = pedido.metodo === "empresa";
       const confirmar = window.confirm(
-        `Marcar ${formatCurrency(pedido.valor)} como PAGO a ${pedido.seller_nome}?\n\n` +
-          "Confirme que o dinheiro já saiu. Esta acção fecha as comissões e não se desfaz."
+        paraEmpresa
+          ? `Marcar ${formatCurrency(pedido.valor)} como aplicado numa despesa da empresa?\n\n` +
+              "O dinheiro não sai para o colaborador: o valor é descontado do saldo de comissões dele " +
+              "e a despesa fica registada como paga. Esta acção não se desfaz."
+          : `Marcar ${formatCurrency(pedido.valor)} como PAGO a ${pedido.seller_nome}?\n\n` +
+              "Confirme que o dinheiro já saiu. Esta acção fecha as comissões e não se desfaz."
       );
       if (!confirmar) return;
     }
@@ -232,31 +237,57 @@ export default function GestaoLevantamentos() {
                   </div>
                 </div>
 
-                {/* Coordenadas: é o que a gestão precisa para pagar */}
-                <div className="mt-3 rounded-lg border border-[#262626] bg-[#161616] p-3">
-                  <p className="mb-1 text-[10px] uppercase tracking-wide text-[#525252]">
-                    Dados de recebimento
-                  </p>
-                  <p className="text-xs text-[#D4D4D4]">{resumoDestino(p.metodo, p.dados)}</p>
-                  {p.dados && Object.keys(p.dados).length > 0 && (
-                    <dl className="mt-2 grid gap-x-4 gap-y-1 text-[11px] sm:grid-cols-2">
-                      {Object.entries(p.dados).map(([campo, valor]) => (
-                        <div key={campo} className="flex gap-1">
-                          <dt className="text-[#6F6F6F]">
-                            {campo.charAt(0).toUpperCase() + campo.slice(1)}:
-                          </dt>
-                          <dd className="break-all text-[#D4D4D4]">{valor || "—"}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  )}
-                  {p.notas && (
-                    <p className="mt-2 text-[11px] text-[#A3A3A3]">Nota: {p.notas}</p>
-                  )}
-                  {p.estado === "rejeitado" && p.motivo && (
-                    <p className="mt-2 text-[11px] text-[#F87171]">Motivo: {p.motivo}</p>
-                  )}
-                </div>
+                {/* O destino do dinheiro. Numa despesa da empresa não há
+                    coordenadas para pagar: há uma despesa para fechar. */}
+                {p.metodo === "empresa" ? (
+                  <div className="mt-3 rounded-lg border border-[#C9A962]/30 bg-[#241E0E] p-3">
+                    <p className="mb-1 text-[10px] uppercase tracking-wide text-[#C9A962]">
+                      Aplicado numa despesa da empresa
+                    </p>
+                    {p.despesa_ref ? (
+                      <p className="text-xs text-[#F5F5F5]">
+                        {p.despesa_ref} · {p.despesa_desc}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-[#F5F5F5]">
+                        Sem despesa registada — ver a nota do colaborador.
+                      </p>
+                    )}
+                    <p className="mt-1 text-[11px] text-[#8A8A8A]">
+                      Ao marcar como pago, o valor é descontado do saldo do colaborador e a
+                      despesa fica registada como paga.
+                    </p>
+                    {p.notas && (
+                      <p className="mt-2 text-[11px] text-[#A3A3A3]">Nota: {p.notas}</p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-lg border border-[#262626] bg-[#161616] p-3">
+                    <p className="mb-1 text-[10px] uppercase tracking-wide text-[#525252]">
+                      Dados de recebimento
+                    </p>
+                    <p className="text-xs text-[#D4D4D4]">{resumoDestino(p.metodo, p.dados)}</p>
+                    {p.dados && Object.keys(p.dados).length > 0 && (
+                      <dl className="mt-2 grid gap-x-4 gap-y-1 text-[11px] sm:grid-cols-2">
+                        {Object.entries(p.dados).map(([campo, valor]) => (
+                          <div key={campo} className="flex gap-1">
+                            <dt className="text-[#6F6F6F]">
+                              {campo.charAt(0).toUpperCase() + campo.slice(1)}:
+                            </dt>
+                            <dd className="break-all text-[#D4D4D4]">{valor || "—"}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    )}
+                    {p.notas && (
+                      <p className="mt-2 text-[11px] text-[#A3A3A3]">Nota: {p.notas}</p>
+                    )}
+                  </div>
+                )}
+
+                {p.estado === "rejeitado" && p.motivo && (
+                  <p className="mt-2 text-[11px] text-[#F87171]">Motivo: {p.motivo}</p>
+                )}
 
                 {accoes.length > 0 && (
                   <div className="mt-3 flex flex-wrap items-center gap-2">

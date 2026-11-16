@@ -38,11 +38,12 @@ export const COR_ESTADO: Record<EstadoLevantamento, string> = {
 /** Estados que ainda reservam saldo. Um pedido fechado já não conta. */
 export const ESTADOS_ABERTOS: EstadoLevantamento[] = ["pendente", "aprovado", "em_processamento"];
 
-export type MetodoRecebimento = "xpress" | "transferencia";
+export type MetodoRecebimento = "xpress" | "transferencia" | "empresa";
 
 export const ROTULO_METODO: Record<MetodoRecebimento, string> = {
   xpress: "XPRESS",
   transferencia: "Transferência bancária",
+  empresa: "Despesa da empresa",
 };
 
 /** O que `levantamento_resumo()` devolve, já em números. */
@@ -64,6 +65,11 @@ export interface ResumoLevantamento {
   /** Comissões de vendas ainda por confirmar/pagar — não levantáveis. */
   comissoes_pendentes: number;
   total_pago: number;
+  /**
+   * Fatia do `total_pago` que foi aplicada em despesas/investimento da empresa
+   * em vez de sair para a mão do colaborador. Já está incluída em `total_pago`.
+   */
+  pago_em_despesas: number;
   /** Pedidos em curso, presos até à decisão da gestão. */
   reservado: number;
   disponivel: number;
@@ -80,6 +86,7 @@ const ZERO_RESUMO: ResumoLevantamento = {
   comissoes_ganhas: 0,
   comissoes_pendentes: 0,
   total_pago: 0,
+  pago_em_despesas: 0,
   reservado: 0,
   disponivel: 0,
   taxa: 0.1,
@@ -109,6 +116,8 @@ export function normalizarResumo(bruto: unknown): ResumoLevantamento {
     comissoes_ganhas: num(r.comissoes_ganhas),
     comissoes_pendentes: num(r.comissoes_pendentes),
     total_pago: num(r.total_pago),
+    // Uma base sem a 0021 não devolve o campo: zero é a leitura certa.
+    pago_em_despesas: num(r.pago_em_despesas),
     reservado: num(r.reservado),
     disponivel: num(r.disponivel),
     taxa: num(r.taxa, 0.1),
@@ -213,6 +222,8 @@ export interface Levantamento {
   solicitado_em: string;
   pago_em: string | null;
   motivo: string | null;
+  /** «DES-2026-00001 · Balança industrial» quando o dinheiro foi para uma despesa. */
+  despesa: string | null;
 }
 
 /** O mesmo pedido, mas do lado da gestão: com quem pediu e para onde vai. */
@@ -224,10 +235,15 @@ export interface LevantamentoEquipa extends Levantamento {
   seller_ref: string | null;
   seller_phone: string | null;
   provincia: string | null;
+  despesa_id: string | null;
+  despesa_ref: string | null;
+  despesa_desc: string | null;
 }
 
 function metodoRecebimento(bruto: unknown): MetodoRecebimento {
-  return bruto === "transferencia" ? "transferencia" : "xpress";
+  if (bruto === "transferencia") return "transferencia";
+  if (bruto === "empresa") return "empresa";
+  return "xpress";
 }
 
 function estadoLevantamento(bruto: unknown): EstadoLevantamento {
@@ -257,6 +273,7 @@ export function normalizarMeusLevantamentos(bruto: unknown): Levantamento[] {
       solicitado_em: String(l.solicitado_em ?? ""),
       pago_em: (l.pago_em as string | null) ?? null,
       motivo: (l.motivo as string | null) ?? null,
+      despesa: (l.despesa as string | null) ?? null,
     };
   });
 }
@@ -282,6 +299,14 @@ export function normalizarLevantamentosEquipa(bruto: unknown): LevantamentoEquip
       seller_ref: (l.seller_ref as string | null) ?? null,
       seller_phone: (l.seller_phone as string | null) ?? null,
       provincia: (l.provincia as string | null) ?? null,
+      despesa_id: (l.despesa_id as string | null) ?? null,
+      despesa_ref: (l.despesa_ref as string | null) ?? null,
+      despesa_desc: (l.despesa_desc as string | null) ?? null,
+      // A lista da gestão não devolve o campo `despesa` (é o histórico do
+      // colaborador que o traz), por isso compõe-se aqui com o que ela tem.
+      despesa: l.despesa_ref
+        ? `${l.despesa_ref}${l.despesa_desc ? ` · ${l.despesa_desc}` : ""}`
+        : null,
     };
   });
 }
@@ -376,6 +401,9 @@ export function resumoDestino(
   metodo: MetodoRecebimento,
   dados: Record<string, string> | null
 ): string {
+  // Uma despesa da empresa não tem coordenadas: o dinheiro não vai para
+  // ninguém, fica na empresa. Não é um erro de preenchimento.
+  if (metodo === "empresa") return "Aplicado em despesa/investimento da empresa";
   if (!dados) return "Sem dados de recebimento";
   const campos =
     metodo === "xpress"

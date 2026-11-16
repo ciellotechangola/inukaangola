@@ -33,8 +33,18 @@ import {
   type MetodoRecebimento,
   type ResumoLevantamento,
 } from "@/lib/levantamentos";
+import {
+  ROTULO_CATEGORIA,
+  ROTULO_TIPO,
+  normalizarDespesasParaColaborador,
+  progressoDespesa,
+  type DespesaParaColaborador,
+} from "@/lib/despesas";
 
-const PATCH = "supabase/PATCH_PROMOCOES_LEVANTAMENTOS.sql";
+const PATCH = "supabase/PATCH_DESPESAS_INVESTIMENTO.sql";
+
+/** Para onde vai o dinheiro. `receber` = para a mão; `empresa` = paga a INUKA. */
+type Destino = "receber" | "empresa";
 
 const ENTRADA =
   "w-full rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none";
@@ -59,13 +69,16 @@ export default function AreaLevantamento() {
   const [comissoes, setComissoes] = useState<ComissaoLinha[]>([]);
   const [historico, setHistorico] = useState<Levantamento[]>([]);
   const [recebimento, setRecebimento] = useState<DadosRecebimento>({ xpress: null, banco: null });
+  const [despesas, setDespesas] = useState<DespesaParaColaborador[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
   const [aviso, setAviso] = useState("");
 
   // Painel do saque
   const [aberto, setAberto] = useState(false);
+  const [destino, setDestino] = useState<Destino | null>(null);
   const [metodo, setMetodo] = useState<MetodoRecebimento | null>(null);
+  const [despesaId, setDespesaId] = useState<string | null>(null);
   const [valor, setValor] = useState("");
   const [xpress, setXpress] = useState<DadosXpress>({ ...XPRESS_VAZIO });
   const [banco, setBanco] = useState<DadosBanco>({ ...BANCO_VAZIO });
@@ -113,6 +126,13 @@ export default function AreaLevantamento() {
     setRecebimento(guardados);
     setXpress(xpressDe(guardados.xpress));
     setBanco(bancoDe(guardados.banco));
+
+    // As despesas que ele pode ajudar a pagar. Se a função ainda não existir
+    // (base sem a 0021), a lista fica vazia — o painel continua a funcionar
+    // para receber, que é o que já existia.
+    const { data: brutoDespesas } = await supabase.rpc("despesas_para_colaborador");
+    setDespesas(normalizarDespesasParaColaborador(brutoDespesas));
+
     setCarregando(false);
   }, []);
 
@@ -129,11 +149,19 @@ export default function AreaLevantamento() {
   const podePedir = resumo.habilitado && resumo.disponivel > 0 && !pedidoAberto;
   const progresso = progressoVendas(resumo);
 
+  /** A despesa escolhida, quando o destino é a empresa. */
+  const despesaEscolhida = useMemo(
+    () => despesas.find((d) => d.id === despesaId) ?? null,
+    [despesas, despesaId]
+  );
+
   function abrir() {
     setErro("");
     setAviso("");
     setErroForm("");
+    setDestino(null);
     setMetodo(null);
+    setDespesaId(null);
     setNotas("");
     // Sugere o saldo todo — o colaborador pode baixar.
     setValor(resumo.disponivel > 0 ? String(Math.floor(resumo.disponivel)) : "");
@@ -144,7 +172,9 @@ export default function AreaLevantamento() {
 
   function fechar() {
     setAberto(false);
+    setDestino(null);
     setMetodo(null);
+    setDespesaId(null);
     setErroForm("");
   }
 
@@ -152,12 +182,33 @@ export default function AreaLevantamento() {
     return metodo === "xpress" ? limparDados(xpress) : limparDados(banco);
   }
 
+  /** O máximo que faz sentido pedir: o saldo, ou o que falta na despesa. */
+  function maximo(): number {
+    if (destino === "empresa" && despesaEscolhida) {
+      return Math.min(resumo.disponivel, despesaEscolhida.restante);
+    }
+    return resumo.disponivel;
+  }
+
   function validar(): string | null {
+    if (!destino) return "Escolha para onde vai o dinheiro.";
     const n = Number(String(valor).replace(/\s/g, "").replace(",", "."));
     if (!Number.isFinite(n) || n <= 0) return "Indique o valor que quer levantar.";
     if (n > resumo.disponivel) {
       return `O valor pedido é superior ao disponível (${formatCurrency(resumo.disponivel)}).`;
     }
+
+    if (destino === "empresa") {
+      if (despesaEscolhida && n > despesaEscolhida.restante) {
+        return `Faltam só ${formatCurrency(despesaEscolhida.restante)} nesta despesa.`;
+      }
+      // Sem despesa escolhida, a nota é o único registo do destino do dinheiro.
+      if (!despesaEscolhida && !notas.trim()) {
+        return "Escolha a despesa ou escreva em que foi aplicado o dinheiro.";
+      }
+      return null;
+    }
+
     if (!metodo) return "Escolha como quer receber.";
     const erroDados = metodo === "xpress" ? validarXpress(xpress) : validarBanco(banco);
     if (erroDados) return erroDados;
@@ -178,13 +229,18 @@ export default function AreaLevantamento() {
       return;
     }
 
+    const paraEmpresa = destino === "empresa";
+
     setAEnviar(true);
     const supabase = createClientBrowser();
     const { error } = await supabase.rpc("solicitar_levantamento", {
       p_valor: valorNumerico(),
-      p_metodo: metodo,
-      p_dados: dadosDoMetodo(),
+      p_metodo: paraEmpresa ? "empresa" : metodo,
+      // Uma despesa da empresa não tem coordenadas de recebimento.
+      p_dados: paraEmpresa ? null : dadosDoMetodo(),
       p_notas: notas.trim() || null,
+      p_destino: paraEmpresa ? "empresa" : "receber",
+      p_despesa_id: paraEmpresa ? despesaId : null,
     });
     setAEnviar(false);
 
@@ -194,7 +250,9 @@ export default function AreaLevantamento() {
     }
 
     setAviso(
-      "Pedido enviado para a gestão. O valor fica reservado até à decisão — pode acompanhar o estado aqui em baixo."
+      paraEmpresa
+        ? "Pedido enviado para a gestão. O valor fica reservado até a despesa ser confirmada — o saldo baixa quando for marcada como paga."
+        : "Pedido enviado para a gestão. O valor fica reservado até à decisão — pode acompanhar o estado aqui em baixo."
     );
     fechar();
     await carregar();
@@ -243,6 +301,10 @@ export default function AreaLevantamento() {
           Comissão de {formatarTaxa(resumo.taxa)} por produto vendido, calculada venda a venda.
           Só contam as vendas confirmadas e pagas.
         </p>
+        <p className="mt-1 text-xs text-[#6F6F6F]">
+          Pode receber o dinheiro (XPRESS ou transferência) ou aplicá-lo numa despesa ou
+          investimento da INUKA — o saldo baixa da mesma maneira.
+        </p>
       </div>
 
       {erro && (
@@ -276,7 +338,11 @@ export default function AreaLevantamento() {
         <Cartao
           rotulo="Já levantado"
           valor={formatCurrency(resumo.total_pago)}
-          detalhe="total pago pela gestão"
+          detalhe={
+            resumo.pago_em_despesas > 0
+              ? `${formatCurrency(resumo.pago_em_despesas)} em despesas da empresa`
+              : "total pago pela gestão"
+          }
         />
         <Cartao
           rotulo="Por confirmar"
@@ -368,7 +434,13 @@ export default function AreaLevantamento() {
         <div className="mb-8 rounded-xl border border-[#C9A962]/40 bg-[#121212] p-5">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-sm uppercase tracking-wider text-[#C9A962]">
-              {metodo ? ROTULO_METODO[metodo] : "Como quer receber?"}
+              {!destino
+                ? "Para onde vai o dinheiro?"
+                : destino === "empresa"
+                  ? "Pagar despesa da empresa"
+                  : metodo
+                    ? ROTULO_METODO[metodo]
+                    : "Como quer receber?"}
             </h2>
             <button onClick={fechar} className="text-xs text-[#8A8A8A] hover:text-[#F5F5F5]">
               fechar
@@ -381,44 +453,138 @@ export default function AreaLevantamento() {
             </div>
           )}
 
-          {/* Passo 1 — método */}
-          {!metodo ? (
+          {/* Passo 1 — o destino: receber, ou pagar uma despesa da INUKA */}
+          {!destino ? (
             <div className="grid gap-3 sm:grid-cols-2">
               <OpcaoMetodo
-                titulo="XPRESS"
-                descricao="Recebe numa conta XPRESS. Indique o número da conta ou o telefone associado."
+                titulo="Receber agora"
+                descricao="O dinheiro sai para si: XPRESS ou transferência bancária."
                 activo={false}
                 onClick={() => {
-                  setMetodo("xpress");
+                  setDestino("receber");
                   setErroForm("");
                 }}
               />
               <OpcaoMetodo
-                titulo="Transferência bancária"
-                descricao="Recebe numa conta bancária. Indique o titular, o banco e o número de conta ou IBAN."
+                titulo="Pagar despesa ou investimento da INUKA"
+                descricao="A sua comissão paga uma despesa da empresa. O saldo baixa na mesma, mas o dinheiro fica na INUKA."
                 activo={false}
                 onClick={() => {
-                  setMetodo("transferencia");
+                  setDestino("empresa");
                   setErroForm("");
                 }}
               />
             </div>
-          ) : (
+          ) : destino === "receber" && !metodo ? (
+            /* Passo 2a — como recebe */
             <>
               <button
                 onClick={() => {
-                  setMetodo(null);
+                  setDestino(null);
                   setErroForm("");
                 }}
                 className="mb-4 text-[11px] text-[#8A8A8A] hover:text-[#C9A962]"
               >
-                ← escolher outro método
+                ← escolher outro destino
               </button>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <OpcaoMetodo
+                  titulo="XPRESS"
+                  descricao="Recebe numa conta XPRESS. Indique o número da conta ou o telefone associado."
+                  activo={false}
+                  onClick={() => {
+                    setMetodo("xpress");
+                    setErroForm("");
+                  }}
+                />
+                <OpcaoMetodo
+                  titulo="Transferência bancária"
+                  descricao="Recebe numa conta bancária. Indique o titular, o banco e o número de conta ou IBAN."
+                  activo={false}
+                  onClick={() => {
+                    setMetodo("transferencia");
+                    setErroForm("");
+                  }}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => {
+                  if (destino === "empresa") setDestino(null);
+                  else setMetodo(null);
+                  setErroForm("");
+                }}
+                className="mb-4 text-[11px] text-[#8A8A8A] hover:text-[#C9A962]"
+              >
+                {destino === "empresa" ? "← escolher outro destino" : "← escolher outro método"}
+              </button>
+
+              {/* Despesas por pagar: é o que ele pode escolher financiar */}
+              {destino === "empresa" && (
+                <div className="mb-4">
+                  {despesas.length === 0 ? (
+                    <p className="rounded-lg border border-[#262626] bg-[#161616] p-3 text-[11px] text-[#8A8A8A]">
+                      A gestão ainda não registou despesas por pagar. Pode na mesma aplicar a
+                      comissão na empresa — escreva em baixo em que foi aplicado.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {despesas.map((d) => (
+                        <button
+                          key={d.id}
+                          type="button"
+                          onClick={() => {
+                            setDespesaId(despesaId === d.id ? null : d.id);
+                            setErroForm("");
+                          }}
+                          aria-pressed={despesaId === d.id}
+                          className={`w-full rounded-xl border p-3 text-left transition ${
+                            despesaId === d.id
+                              ? "border-[#C9A962] bg-[#241E0E]"
+                              : "border-[#333333] bg-[#161616] hover:border-[#C9A962]/50"
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-baseline justify-between gap-2">
+                            <p className="text-sm text-[#F5F5F5]">{d.descricao}</p>
+                            <span className="shrink-0 text-sm text-[#C9A962]">
+                              {formatCurrency(d.restante)}
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-[11px] text-[#8A8A8A]">
+                            {ROTULO_TIPO[d.tipo]} · {ROTULO_CATEGORIA[d.categoria]}
+                            {d.provincia ? ` · ${d.provincia}` : ""}
+                            {d.referencia ? ` · ${d.referencia}` : ""}
+                          </p>
+                          {d.coberto > 0 && (
+                            <div className="mt-2">
+                              <div className="h-1 w-full overflow-hidden rounded-full bg-[#262626]">
+                                <div
+                                  className="h-full rounded-full bg-[#C9A962]"
+                                  style={{ width: `${progressoDespesa(d)}%` }}
+                                />
+                              </div>
+                              <p className="mt-1 text-[10px] text-[#6F6F6F]">
+                                {formatCurrency(d.coberto)} de {formatCurrency(d.valor)} já pagos
+                                por comissões
+                              </p>
+                            </div>
+                          )}
+                        </button>
+                      ))}
+                      <p className="text-[10px] text-[#525252]">
+                        Toque outra vez para não escolher nenhuma.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Valor */}
               <div className="mb-4">
                 <label className={ROTULO} htmlFor="valor">
-                  Valor a levantar (Kz)
+                  {destino === "empresa" ? "Valor a aplicar (Kz)" : "Valor a levantar (Kz)"}
                 </label>
                 <div className="flex gap-2">
                   <input
@@ -431,7 +597,7 @@ export default function AreaLevantamento() {
                   />
                   <button
                     type="button"
-                    onClick={() => setValor(String(Math.floor(resumo.disponivel)))}
+                    onClick={() => setValor(String(Math.floor(maximo())))}
                     className="shrink-0 rounded-lg border border-[#404040] px-3 text-xs text-[#D4D4D4] transition hover:border-[#C9A962]"
                   >
                     Tudo
@@ -439,90 +605,110 @@ export default function AreaLevantamento() {
                 </div>
                 <p className="mt-1 text-[11px] text-[#525252]">
                   Disponível: {formatCurrency(resumo.disponivel)}
+                  {destino === "empresa" && despesaEscolhida
+                    ? ` · falta nesta despesa: ${formatCurrency(despesaEscolhida.restante)}`
+                    : ""}
                 </p>
               </div>
 
-              {/* Dados do método */}
-              {metodo === "xpress" ? (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Campo
-                    id="xp-titular"
-                    rotulo="Titular da conta"
-                    valor={xpress.titular}
-                    onChange={(v) => setXpress({ ...xpress, titular: v })}
-                    placeholder="Nome completo"
-                  />
-                  <Campo
-                    id="xp-telefone"
-                    rotulo="Telefone XPRESS"
-                    valor={xpress.telefone}
-                    onChange={(v) => setXpress({ ...xpress, telefone: v })}
-                    placeholder="+244 9xx xxx xxx"
-                  />
-                  <Campo
-                    id="xp-conta"
-                    rotulo="Número da conta XPRESS"
-                    valor={xpress.conta}
-                    onChange={(v) => setXpress({ ...xpress, conta: v })}
-                    placeholder="Opcional se indicar o telefone"
-                  />
-                </div>
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Campo
-                    id="bk-titular"
-                    rotulo="Titular da conta"
-                    valor={banco.titular}
-                    onChange={(v) => setBanco({ ...banco, titular: v })}
-                    placeholder="Nome como está no banco"
-                  />
-                  <Campo
-                    id="bk-banco"
-                    rotulo="Banco"
-                    valor={banco.banco}
-                    onChange={(v) => setBanco({ ...banco, banco: v })}
-                    placeholder="Ex.: BAI, BFA, BIC, Standard Bank"
-                  />
-                  <Campo
-                    id="bk-conta"
-                    rotulo="Número de conta"
-                    valor={banco.conta}
-                    onChange={(v) => setBanco({ ...banco, conta: v })}
-                    placeholder="Número da conta"
-                  />
-                  <Campo
-                    id="bk-iban"
-                    rotulo="IBAN (opcional)"
-                    valor={banco.iban}
-                    onChange={(v) => setBanco({ ...banco, iban: v })}
-                    placeholder="AO06 0000 0000 0000 0000 0000 0"
-                  />
-                  <Campo
-                    id="bk-agencia"
-                    rotulo="Agência (opcional)"
-                    valor={banco.agencia}
-                    onChange={(v) => setBanco({ ...banco, agencia: v })}
-                    placeholder="Balcão / agência"
-                  />
-                </div>
-              )}
+              {/* Dados do método — só quando recebe */}
+              {destino === "receber" &&
+                (metodo === "xpress" ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Campo
+                      id="xp-titular"
+                      rotulo="Titular da conta"
+                      valor={xpress.titular}
+                      onChange={(v) => setXpress({ ...xpress, titular: v })}
+                      placeholder="Nome completo"
+                    />
+                    <Campo
+                      id="xp-telefone"
+                      rotulo="Telefone XPRESS"
+                      valor={xpress.telefone}
+                      onChange={(v) => setXpress({ ...xpress, telefone: v })}
+                      placeholder="+244 9xx xxx xxx"
+                    />
+                    <Campo
+                      id="xp-conta"
+                      rotulo="Número da conta XPRESS"
+                      valor={xpress.conta}
+                      onChange={(v) => setXpress({ ...xpress, conta: v })}
+                      placeholder="Opcional se indicar o telefone"
+                    />
+                  </div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Campo
+                      id="bk-titular"
+                      rotulo="Titular da conta"
+                      valor={banco.titular}
+                      onChange={(v) => setBanco({ ...banco, titular: v })}
+                      placeholder="Nome como está no banco"
+                    />
+                    <Campo
+                      id="bk-banco"
+                      rotulo="Banco"
+                      valor={banco.banco}
+                      onChange={(v) => setBanco({ ...banco, banco: v })}
+                      placeholder="Ex.: BAI, BFA, BIC, Standard Bank"
+                    />
+                    <Campo
+                      id="bk-conta"
+                      rotulo="Número de conta"
+                      valor={banco.conta}
+                      onChange={(v) => setBanco({ ...banco, conta: v })}
+                      placeholder="Número da conta"
+                    />
+                    <Campo
+                      id="bk-iban"
+                      rotulo="IBAN (opcional)"
+                      valor={banco.iban}
+                      onChange={(v) => setBanco({ ...banco, iban: v })}
+                      placeholder="AO06 0000 0000 0000 0000 0000 0"
+                    />
+                    <Campo
+                      id="bk-agencia"
+                      rotulo="Agência (opcional)"
+                      valor={banco.agencia}
+                      onChange={(v) => setBanco({ ...banco, agencia: v })}
+                      placeholder="Balcão / agência"
+                    />
+                  </div>
+                ))}
 
               <div className="mt-4">
                 <label className={ROTULO} htmlFor="notas">
-                  Nota para a gestão (opcional)
+                  {destino === "empresa"
+                    ? "Em que foi aplicado? (obrigatório sem despesa escolhida)"
+                    : "Nota para a gestão (opcional)"}
                 </label>
                 <input
                   id="notas"
                   value={notas}
                   onChange={(e) => setNotas(e.target.value)}
-                  placeholder="Ex.: pode processar até sexta"
+                  placeholder={
+                    destino === "empresa"
+                      ? "Ex.: material para a delegação do Uíge"
+                      : "Ex.: pode processar até sexta"
+                  }
                   className={ENTRADA}
                 />
               </div>
 
               <p className="mt-3 rounded-lg border border-[#262626] bg-[#161616] p-3 text-[11px] text-[#8A8A8A]">
-                {resumoDestino(metodo, dadosDoMetodo())} — estes dados ficam guardados no seu
-                perfil e aparecem preenchidos no próximo pedido. Só a gestão os vê.
+                {destino === "empresa" ? (
+                  <>
+                    O valor sai do seu saldo de comissões e fica na INUKA como pagamento de uma
+                    despesa. A gestão confirma antes de o saldo baixar.
+                  </>
+                ) : (
+                  <>
+                    {resumoDestino(metodo ?? "xpress", dadosDoMetodo())} — estes dados ficam
+                    guardados no seu perfil e aparecem preenchidos no próximo pedido. Só a gestão
+                    os vê.
+                  </>
+                )}
               </p>
 
               <div className="mt-5 flex flex-wrap gap-2">
@@ -531,15 +717,21 @@ export default function AreaLevantamento() {
                   disabled={aEnviar}
                   className="rounded-lg bg-[#C9A962] px-5 py-2.5 text-sm font-semibold tracking-wide text-[#0A0A0A] transition hover:bg-[#E3D5A7] disabled:opacity-50"
                 >
-                  {aEnviar ? "A enviar…" : "CONFIRMAR SAQUE"}
+                  {aEnviar
+                    ? "A enviar…"
+                    : destino === "empresa"
+                      ? "APLICAR NA DESPESA"
+                      : "CONFIRMAR SAQUE"}
                 </button>
-                <button
-                  onClick={guardarDados}
-                  disabled={aEnviar}
-                  className="rounded-lg border border-[#404040] px-4 py-2.5 text-sm text-[#D4D4D4] transition hover:border-[#C9A962] disabled:opacity-50"
-                >
-                  Guardar dados
-                </button>
+                {destino === "receber" && (
+                  <button
+                    onClick={guardarDados}
+                    disabled={aEnviar}
+                    className="rounded-lg border border-[#404040] px-4 py-2.5 text-sm text-[#D4D4D4] transition hover:border-[#C9A962] disabled:opacity-50"
+                  >
+                    Guardar dados
+                  </button>
+                )}
                 <button
                   onClick={fechar}
                   className="rounded-lg px-4 py-2.5 text-sm text-[#8A8A8A] transition hover:text-[#F5F5F5]"
@@ -582,6 +774,11 @@ export default function AreaLevantamento() {
                       Pedido em {quando(l.solicitado_em)}
                       {l.pago_em ? ` · pago em ${quando(l.pago_em)}` : ""}
                     </p>
+                    {l.despesa && (
+                      <p className="mt-1 text-[11px] text-[#E3D5A7]">
+                        Aplicado em: {l.despesa}
+                      </p>
+                    )}
                     {l.estado === "rejeitado" && l.motivo && (
                       <p className="mt-1 text-[11px] text-[#F87171]">Motivo: {l.motivo}</p>
                     )}

@@ -866,6 +866,44 @@ await check("a gestão é levada para a tela de venda dela", async () => {
   return "redirecciona";
 });
 
+// ---------------------------------------------------------------------------
+// DESPESAS E INVESTIMENTO — a comissão de um colaborador pode pagar a empresa,
+// e a gestão tem onde registar o que gasta. Depende da 0021.
+// ---------------------------------------------------------------------------
+await check("gestor abre despesas e investimento", async () => {
+  const r = await pagina("/gerente/despesas", cGestor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  const t = texto(r.html);
+  // O módulo tem de existir à vista: registar, ver o que falta pagar e o que
+  // já saiu do saldo da equipa.
+  assert(/Despesas e investimento/.test(t), "sem título");
+  assert(/REGISTAR DESPESA/.test(t), "sem botão de registar");
+  assert(/Por pagar/.test(t), "sem indicador do que falta pagar");
+  assert(/Pago com comissões/.test(t), "sem indicador do que saiu do saldo da equipa");
+  return "200 com registo e totais";
+});
+
+await check("o painel de gestão leva às despesas", async () => {
+  const r = await pagina("/gerente", cGestor);
+  assert(/href="\/gerente\/despesas"/.test(r.html), "sem atalho para as despesas no painel");
+  return "atalho presente";
+});
+
+await check("colaborador NÃO abre as despesas da gestão", async () => {
+  const r = await pagina("/gerente/despesas", cVendedor);
+  assert(r.status === 307 || r.status === 302, `HTTP ${r.status}`);
+  return `${r.status} -> ${r.location}`;
+});
+
+await check("colaborador abre a área de retirar dinheiro", async () => {
+  const r = await pagina("/vendedor/levantamentos", cVendedor);
+  assert(r.status === 200, `HTTP ${r.status}`);
+  // O painel de saque (onde se escolhe «receber» ou «pagar despesa») abre no
+  // browser, por isso o HTML do servidor só tem o caminho de volta.
+  assert(/Área d[eo] colaborador/.test(texto(r.html)), "sem caminho de volta à área");
+  return "200";
+});
+
 await check("gestor abre produtos", async () => {
   const r = await pagina("/gerente/produtos", cGestor);
   assert(r.status === 200, `HTTP ${r.status}`);

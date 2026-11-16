@@ -35,6 +35,7 @@ const PARTES = [
   { ficheiro: "migrations/0018_tarefas_e_gestor.sql", titulo: "TAREFAS, GESTOR RESPONSÁVEL E CORRECÇÃO DE VENDAS" },
   { ficheiro: "migrations/0019_feed_clientes.sql", titulo: "FEED CLIENTES: COMUNICADOS SÓ PARA A EQUIPA" },
   { ficheiro: "migrations/0020_venda_do_gestor.sql", titulo: "A GESTÃO REGISTA VENDAS, COM OU SEM COLABORADOR" },
+  { ficheiro: "migrations/0021_despesas_e_investimento.sql", titulo: "DESPESAS E INVESTIMENTO: A COMISSÃO PAGA A EMPRESA" },
 ];
 
 const cabecalho = `-- =============================================================================
