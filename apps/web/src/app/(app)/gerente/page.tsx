@@ -4,6 +4,8 @@ import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
 import { formatCurrency } from "@/lib/utils";
 import { numero, iniciais, type OverviewColaboradores } from "@/lib/colaborador";
+import { normalizarActivo } from "@/lib/activo";
+import PainelActivo from "@/components/despesas/PainelActivo";
 import TabelaResponsiva from "@/components/TabelaResponsiva";
 
 export const dynamic = "force-dynamic";
@@ -44,12 +46,18 @@ export default async function ManagerDashboardPage() {
   if (!profile || profile.role !== "manager") redirect("/");
 
   const supabase = await createClientServer();
-  const [{ data, error }, { data: redeRaw }] = await Promise.all([
+  const [
+    { data, error },
+    { data: redeRaw },
+    { data: activoRaw, error: activoError },
+  ] = await Promise.all([
     supabase.rpc("dashboard_stats"),
     supabase.rpc("colaboradores_overview"),
+    supabase.rpc("activo_provincia"),
   ]);
 
   const rede = (redeRaw ?? null) as OverviewColaboradores | null;
+  const activo = normalizarActivo(activoRaw);
 
   const stats = (data ?? {
     sales_total_value: 0,
@@ -95,6 +103,16 @@ export default async function ManagerDashboardPage() {
           <div className="mb-6 rounded-lg bg-red-950/50 p-3 text-sm text-red-200">
             Não foi possível carregar os indicadores: {error.message}
           </div>
+        )}
+
+        {activoError ? (
+          <div className="mb-6 rounded-lg border border-[#4A3F1F] bg-[#241E0E] p-3 text-sm text-[#C9A962]">
+            O activo ainda não está calculado. Cole{" "}
+            <code className="font-mono text-xs">supabase/PATCH_ACTIVO_PROVINCIA.sql</code> no SQL
+            Editor do Supabase e recarregue a página.
+          </div>
+        ) : (
+          <PainelActivo activo={activo} />
         )}
 
         <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

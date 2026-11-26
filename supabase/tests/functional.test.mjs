@@ -70,6 +70,7 @@ for (const rel of [
   "migrations/0019_feed_clientes.sql",
   "migrations/0020_venda_do_gestor.sql",
   "migrations/0021_despesas_e_investimento.sql",
+  "migrations/0022_activo_provincia.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -3766,6 +3767,97 @@ const assinaturaHist = await q(`
   WHERE n.nspname = 'public' AND p.proname = 'meus_levantamentos'`);
 check("meus_levantamentos tem uma só assinatura",
   assinaturaHist.length === 1, JSON.stringify(assinaturaHist.map((a) => a.args)));
+
+console.log("\n--- 23. ACTIVO DA PROVÍNCIA: O QUE SOBRA DEPOIS DAS DESPESAS (0022) ---");
+
+const activoNac = await asUser(MANAGER, async () =>
+  q(`SELECT public.activo_provincia() AS r`));
+const aNac = activoNac[0].r;
+
+check("a administração nacional vê o activo de todas as províncias",
+  aNac.scope === "nacional" && Array.isArray(aNac.linhas) && aNac.linhas.length === 18,
+  JSON.stringify({ scope: aNac.scope, linhas: (aNac.linhas ?? []).length }));
+
+const uigeActivo = (aNac.linhas ?? []).find((l) => l.id === UIG);
+check("o activo total soma vendas e investimento pago",
+  uigeActivo
+  && Number(uigeActivo.activo_total) === Number(uigeActivo.vendas) + Number(uigeActivo.investimento_pago),
+  JSON.stringify({ total: uigeActivo?.activo_total, vendas: uigeActivo?.vendas,
+                   invest: uigeActivo?.investimento_pago }));
+
+// Secção 22 no Uíge: 5 000 pagos pela tesouraria (3 000 marketing + 2 000
+// renda), 12 000 de investimento por pagar com 5 000 já cobertos por comissão
+// e uma despesa anulada de 4 500 que não pode contar.
+check("«por pagar» desconta o que já saiu do saldo da equipa",
+  Number(uigeActivo.por_pagar) === 7000 && Number(uigeActivo.ja_coberto) === 5000,
+  JSON.stringify({ por_pagar: uigeActivo?.por_pagar, coberto: uigeActivo?.ja_coberto }));
+
+check("a despesa anulada não entra no activo",
+  Number(uigeActivo.despesas_total) === 17000,
+  String(uigeActivo?.despesas_total));
+
+check("despesas reais = pagas + investimento + coberto + por pagar",
+  Number(uigeActivo.despesas_total) === Number(uigeActivo.despesas_pagas)
+    + Number(uigeActivo.investimento_pago)
+    + Number(uigeActivo.ja_coberto)
+    + Number(uigeActivo.por_pagar),
+  JSON.stringify(uigeActivo));
+
+check("o activo líquido é o activo total menos as despesas reais",
+  Number(uigeActivo.activo_liquido) === Number(uigeActivo.activo_total) - Number(uigeActivo.despesas_total),
+  JSON.stringify({ liquido: uigeActivo?.activo_liquido, total: uigeActivo?.activo_total,
+                   despesas: uigeActivo?.despesas_total }));
+
+check("o máximo do país é a província com maior activo total",
+  aNac.maximo
+  && Number(aNac.maximo.activo_total) === Math.max(...aNac.linhas.map((l) => Number(l.activo_total))),
+  JSON.stringify({ max: aNac.maximo?.nome, valor: aNac.maximo?.activo_total }));
+
+check("o total nacional soma as províncias",
+  Number(aNac.total.activo_total)
+    === aNac.linhas.reduce((s, l) => s + Number(l.activo_total), 0),
+  JSON.stringify(aNac.total));
+
+// 23.6 um gestor provincial só vê a sua, mesmo pedindo outra
+const activoProv = await asUser(M_UIGE, async () =>
+  q(`SELECT public.activo_provincia('${LDA}') AS r`));
+check("gestor provincial vê só a sua província",
+  activoProv[0].r.scope === "provincial"
+  && activoProv[0].r.provincia_id === UIG
+  && activoProv[0].r.linhas.length === 1,
+  JSON.stringify({ scope: activoProv[0].r.scope, prov: activoProv[0].r.provincia_id,
+                   linhas: activoProv[0].r.linhas.length }));
+
+// 23.7 despesas acima do activo ficam sinalizadas
+const semMovimento = (aNac.linhas ?? []).find(
+  (l) => Number(l.vendas) === 0 && Number(l.despesas_total) === 0);
+const alvoRisco = semMovimento
+  ?? (aNac.linhas ?? []).reduce(
+    (min, l) => (Number(l.activo_total) < Number(min.activo_total) ? l : min),
+    aNac.linhas[0]);
+const valorRisco = Number(alvoRisco.activo_total) + 1000;
+
+await asUser(MANAGER, async () =>
+  q(`SELECT public.registar_despesa('Despesa acima do activo', ${valorRisco},
+       'despesa', 'outros', NULL, '${alvoRisco.id}')`));
+
+const activoRisco = await asUser(MANAGER, async () =>
+  q(`SELECT public.activo_provincia('${alvoRisco.id}') AS r`));
+const linhaRisco = activoRisco[0].r.linhas[0];
+check("despesas acima do activo marcam a província como excedida",
+  linhaRisco.excedido === true && Number(linhaRisco.activo_liquido) < 0,
+  JSON.stringify({ excedido: linhaRisco.excedido, liquido: linhaRisco.activo_liquido,
+                   total: linhaRisco.activo_total, despesas: linhaRisco.despesas_total }));
+
+// 23.8 o colaborador não consulta o activo da empresa
+const activoColab = await asUser(S_DESP, async () => {
+  try {
+    await q(`SELECT public.activo_provincia()`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("colaborador não consulta o activo da empresa",
+  /gerência/i.test(activoColab ?? ""), activoColab ?? "não deu erro");
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

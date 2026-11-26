@@ -5,6 +5,8 @@ import { createClientBrowser } from "@/lib/supabase-browser";
 import { formatCurrency } from "@/lib/utils";
 import { mensagemDeErro } from "@/lib/erros";
 import { normalizarResumo } from "@/lib/levantamentos";
+import { normalizarActivo, type ActivoProvincia } from "@/lib/activo";
+import PainelActivo from "@/components/despesas/PainelActivo";
 import {
   CATEGORIAS,
   COR_ESTADO_DESPESA,
@@ -26,6 +28,7 @@ import {
 } from "@/lib/despesas";
 
 const PATCH = "supabase/PATCH_DESPESAS_INVESTIMENTO.sql";
+const PATCH_ACTIVO = "supabase/PATCH_ACTIVO_PROVINCIA.sql";
 
 const ENTRADA =
   "w-full rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none";
@@ -46,6 +49,12 @@ interface Colaborador {
   provincia: string | null;
 }
 
+interface Provincia {
+  id: string;
+  nome: string;
+  is_default: boolean;
+}
+
 function quando(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -61,6 +70,7 @@ function numero(valor: string): number {
 export default function GestaoDespesas() {
   const [despesas, setDespesas] = useState<Despesa[]>([]);
   const [resumo, setResumo] = useState<ResumoDespesas>(normalizarResumoDespesas(null));
+  const [activo, setActivo] = useState<ActivoProvincia>(normalizarActivo(null));
   const [filtro, setFiltro] = useState<Filtro>("pendente");
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
@@ -75,6 +85,10 @@ export default function GestaoDespesas() {
   const [fornecedor, setFornecedor] = useState("");
   const [notas, setNotas] = useState("");
   const [aGravar, setAGravar] = useState(false);
+  /** Só a administração nacional escolhe a província; os restantes ficam na sua. */
+  const [nacional, setNacional] = useState(false);
+  const [provincias, setProvincias] = useState<Provincia[]>([]);
+  const [provinciaId, setProvinciaId] = useState("");
 
   // Pagar
   const [aPagar, setAPagar] = useState<string | null>(null);
@@ -89,19 +103,28 @@ export default function GestaoDespesas() {
 
   const carregar = useCallback(async () => {
     const supabase = createClientBrowser();
-    const [{ data: lista, error }, { data: brutoResumo }] = await Promise.all([
+    const [
+      { data: lista, error },
+      { data: brutoResumo },
+      { data: brutoActivo, error: erroActivo },
+    ] = await Promise.all([
       supabase.rpc("despesas_equipa", {
         p_estado: filtro === "todas" ? null : filtro,
         p_tipo: null,
       }),
       supabase.rpc("despesas_resumo"),
+      supabase.rpc("activo_provincia"),
     ]);
 
+    // O activo é o indicador principal da página: se faltar a migração, diz-se
+    // qual é o ficheiro a colar em vez de mostrar zeros silenciosos.
     if (error) setErro(mensagemDeErro(error, PATCH));
+    else if (erroActivo) setErro(mensagemDeErro(erroActivo, PATCH_ACTIVO));
     else setErro("");
 
     setDespesas(normalizarDespesas(lista));
     setResumo(normalizarResumoDespesas(brutoResumo));
+    setActivo(normalizarActivo(brutoActivo));
     setCarregando(false);
   }, [filtro]);
 
@@ -144,6 +167,44 @@ export default function GestaoDespesas() {
     };
   }, []);
 
+  // Quem é administração nacional escolhe a província da despesa; um gestor
+  // provincial registra sempre na sua (a base de dados recusa outra).
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      const supabase = createClientBrowser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!vivo || !user) return;
+
+      const [{ data: perfil }, { data: lista }] = await Promise.all([
+        supabase
+          .from("profiles")
+          .select("is_national_admin, provincia_id")
+          .eq("id", user.id)
+          .maybeSingle(),
+        supabase
+          .from("provincias")
+          .select("id, nome, is_default")
+          .eq("is_active", true)
+          .order("nome"),
+      ]);
+
+      if (!vivo) return;
+
+      const p = perfil as {
+        is_national_admin: boolean | null;
+        provincia_id: string | null;
+      } | null;
+      setNacional(Boolean(p?.is_national_admin) || !p?.provincia_id);
+      setProvincias((lista ?? []) as Provincia[]);
+    })();
+    return () => {
+      vivo = false;
+    };
+  }, []);
+
   const pendentes = useMemo(
     () => despesas.filter((d) => d.estado === "pendente"),
     [despesas]
@@ -179,7 +240,7 @@ export default function GestaoDespesas() {
       p_tipo: tipo,
       p_categoria: categoria,
       p_fornecedor: fornecedor.trim() || null,
-      p_provincia_id: null,
+      p_provincia_id: provinciaId || null,
       p_notas: notas.trim() || null,
       p_comprovativo: null,
     });
@@ -194,6 +255,11 @@ export default function GestaoDespesas() {
     setAviso(`${referencia ?? "Despesa"} registada. Já aparece na lista por pagar.`);
     limparFormulario();
     setNovoAberto(false);
+
+    // A despesa nova está «por pagar». Se o filtro estivesse em «Pagas», ela
+    // desaparecia da vista e parecia não ter sido gravada — e o registo era
+    // repetido. Passa-se para «Todas» e recarrega-se tudo do zero.
+    setFiltro("todas");
     await carregar();
   }
 
@@ -320,6 +386,9 @@ export default function GestaoDespesas() {
         </div>
       )}
 
+      {/* ---------- Activo ---------- */}
+      <PainelActivo activo={activo} />
+
       {/* ---------- Totais ---------- */}
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-4">
@@ -411,6 +480,27 @@ export default function GestaoDespesas() {
                 className={ENTRADA}
               />
             </div>
+            {nacional && (
+              <div>
+                <label className={ROTULO} htmlFor="d-provincia">
+                  Província
+                </label>
+                <select
+                  id="d-provincia"
+                  value={provinciaId}
+                  onChange={(e) => setProvinciaId(e.target.value)}
+                  className={ENTRADA}
+                >
+                  <option value="">Sede / nacional (predefinido)</option>
+                  {provincias.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nome}
+                      {p.is_default ? " · sede" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div>
               <label className={ROTULO} htmlFor="d-categoria">
                 Categoria
@@ -455,7 +545,9 @@ export default function GestaoDespesas() {
           </div>
 
           <p className="mt-3 text-[11px] text-[#525252]">
-            A despesa fica na província que gere. A administração nacional registra na sede.
+            {nacional
+              ? "Escolha a província a que a despesa pertence. Sem escolha, fica na sede. Todas as despesas ficam registadas — nenhuma é apagada, só anulada com motivo."
+              : "A despesa fica na província que gere. Todas as despesas ficam registadas — nenhuma é apagada, só anulada com motivo."}
           </p>
 
           <div className="mt-4 flex flex-wrap gap-2">
