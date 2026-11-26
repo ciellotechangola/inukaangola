@@ -21,9 +21,13 @@ export async function minhaLoja(lojaIdDoPerfil?: string | null): Promise<Loja | 
 
   const { data } = await supabase
     .from("lojas")
-    .select("id, codigo, nome, provincia_id, is_default")
+    .select("id, codigo, nome, provincia_id, is_default, prov:provincias(nome)")
     .eq("id", id)
     .maybeSingle();
 
-  return (data as Loja | null) ?? null;
+  const linha = data as (Loja & { prov: { nome: string } | null }) | null;
+  if (!linha) return null;
+
+  const { prov, ...resto } = linha;
+  return { ...resto, provincia: prov?.nome ?? null };
 }

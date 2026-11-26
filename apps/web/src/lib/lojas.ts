@@ -30,6 +30,10 @@ export interface LinhaLoja {
   provincia: string | null;
   manager_id: string | null;
   manager: string | null;
+  telefone: string | null;
+  endereco: string | null;
+  /** Nota da própria loja (distinta da nota da última correcção de valores). */
+  loja_nota: string | null;
   is_default: boolean;
   is_active: boolean;
   stock_unidades: number;
@@ -158,6 +162,9 @@ function linhaLoja(bruto: unknown): LinhaLoja {
     provincia: (o.provincia as string | null) ?? null,
     manager_id: (o.manager_id as string | null) ?? null,
     manager: (o.manager as string | null) ?? null,
+    telefone: (o.telefone as string | null) ?? null,
+    endereco: (o.endereco as string | null) ?? null,
+    loja_nota: (o.loja_nota as string | null) ?? null,
     is_default: o.is_default === true,
     is_active: o.is_active !== false,
     stock_unidades: numeroSeguro(o.stock_unidades),

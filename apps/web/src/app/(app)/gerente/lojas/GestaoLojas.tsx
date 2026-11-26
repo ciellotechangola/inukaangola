@@ -518,9 +518,9 @@ function DadosLoja({
     loja?.provincia_id ?? provinciaFixa ?? provincias[0]?.id ?? ""
   );
   const [managerId, setManagerId] = useState(loja?.manager_id ?? "");
-  const [telefone, setTelefone] = useState("");
-  const [endereco, setEndereco] = useState("");
-  const [nota, setNota] = useState("");
+  const [telefone, setTelefone] = useState(loja?.telefone ?? "");
+  const [endereco, setEndereco] = useState(loja?.endereco ?? "");
+  const [nota, setNota] = useState(loja?.loja_nota ?? "");
   const [ativo, setAtivo] = useState(loja?.is_active ?? true);
   const [aGravar, setAGravar] = useState(false);
 
