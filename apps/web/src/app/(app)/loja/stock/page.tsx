@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
+import { minhaLoja } from "@/lib/lojas-server";
 import GestorStock, { type LinhaStock } from "./GestorStock";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,7 @@ export default async function StockPage() {
 
   const supabase = await createClientServer();
   const provincia = profile.provincia_id;
+  const loja = await minhaLoja(profile.loja_id);
 
   const produtosQuery = supabase
     .from("products")
@@ -37,7 +39,14 @@ export default async function StockPage() {
     .from("inventory")
     .select("product_id, quantity, reserved_quantity, low_stock_threshold");
 
-  if (provincia) {
+  if (loja) {
+    // O stock é da loja, não da província: duas lojas do Uíge têm contagens
+    // diferentes do mesmo produto.
+    produtosQuery.or(
+      provincia ? `provincia_id.eq.${provincia},provincia_id.is.null` : "provincia_id.is.null"
+    );
+    inventarioQuery.eq("loja_id", loja.id);
+  } else if (provincia) {
     produtosQuery.or(`provincia_id.eq.${provincia},provincia_id.is.null`);
     inventarioQuery.eq("provincia_id", provincia);
   } else {

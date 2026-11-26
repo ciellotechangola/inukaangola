@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
+import { minhaLoja } from "@/lib/lojas-server";
 import { formatCurrency } from "@/lib/utils";
 import Balcao, { type ProdutoBalcao } from "./Balcao";
 
@@ -35,6 +36,7 @@ export default async function VendasPage() {
 
   const supabase = await createClientServer();
   const provincia = profile.provincia_id;
+  const loja = await minhaLoja(profile.loja_id);
 
   const produtosQuery = supabase
     .from("products")
@@ -45,7 +47,12 @@ export default async function VendasPage() {
     .from("inventory")
     .select("product_id, quantity, reserved_quantity");
 
-  if (provincia) {
+  if (loja) {
+    produtosQuery.or(
+      provincia ? `provincia_id.eq.${provincia},provincia_id.is.null` : "provincia_id.is.null"
+    );
+    inventarioQuery.eq("loja_id", loja.id);
+  } else if (provincia) {
     produtosQuery.or(`provincia_id.eq.${provincia},provincia_id.is.null`);
     inventarioQuery.eq("provincia_id", provincia);
   } else {

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
+import { minhaLoja } from "@/lib/lojas-server";
 import { formatCurrency } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -25,9 +26,10 @@ interface LinhaStock {
 /**
  * Painel do vendedor de loja.
  *
- * Tudo o que aqui aparece é da província de quem entrou. As políticas de stock
- * e de encomendas já filtram; a consulta reforça com `provincia_id` para a
- * gestão nacional não somar províncias que não são a loja em foco.
+ * Tudo o que aqui aparece é da loja de quem entrou: o stock sai por `loja_id`
+ * (não pela província inteira) e as encomendas pela mesma loja. A gestão que
+ * entra aqui vê a loja de que é responsável — a província toda fica em
+ * `/gerente/lojas`.
  */
 export default async function LojaPage() {
   const profile = await getProfile();
@@ -36,6 +38,7 @@ export default async function LojaPage() {
 
   const supabase = await createClientServer();
   const provincia = profile.provincia_id;
+  const loja = await minhaLoja(profile.loja_id);
 
   const inicioDoDia = new Date();
   inicioDoDia.setHours(0, 0, 0, 0);
@@ -48,7 +51,10 @@ export default async function LojaPage() {
     .select("id, status")
     .in("status", ["pending", "confirmed", "preparing", "ready_pickup"]);
 
-  if (provincia) {
+  if (loja) {
+    stockQuery.eq("loja_id", loja.id);
+    encomendasQuery.eq("loja_id", loja.id);
+  } else if (provincia) {
     stockQuery.eq("provincia_id", provincia);
     encomendasQuery.eq("provincia_id", provincia);
   } else {
@@ -82,11 +88,35 @@ export default async function LojaPage() {
   return (
     <main className="mx-auto max-w-6xl px-4 py-10">
       <header className="mb-8">
-        <h1 className="mb-1 text-3xl font-light text-[#F5F5F5]">Loja</h1>
-        <p className="text-[#A3A3A3]">
-          {profile.full_name.split(" ")[0]}, este é o pulso da loja
-          {provincia ? " da sua província" : " da sede"}.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="mb-1 text-3xl font-light text-[#F5F5F5]">
+              {loja ? loja.nome : "Loja"}
+            </h1>
+            <p className="text-[#A3A3A3]">
+              {profile.full_name.split(" ")[0]}, este é o pulso da loja
+              {loja ? (
+                <>
+                  {" "}
+                  <span className="font-mono text-[11px] text-[#C9A962]">{loja.codigo}</span>
+                  {loja.provincia ? ` · ${loja.provincia}` : ""}.
+                </>
+              ) : provincia ? (
+                " da sua província."
+              ) : (
+                " da sede."
+              )}
+            </p>
+          </div>
+          {profile.role === "manager" && (
+            <Link
+              href="/gerente/lojas"
+              className="rounded-lg border border-[#333] px-3 py-1.5 text-xs text-[#A3A3A3] transition hover:border-[#C9A962]/50 hover:text-[#C9A962]"
+            >
+              Gerir lojas →
+            </Link>
+          )}
+        </div>
       </header>
 
       <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

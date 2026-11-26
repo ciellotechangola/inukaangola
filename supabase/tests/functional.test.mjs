@@ -73,6 +73,7 @@ for (const rel of [
   "migrations/0022_activo_provincia.sql",
   "migrations/0023_saldo_contabilistico.sql",
   "migrations/0024_painel_financeiro.sql",
+  "migrations/0025_lojas.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -1001,18 +1002,26 @@ await expectError(
   "administração nacional"
 );
 
+const destinoAntes = await q(`
+  SELECT quantity FROM public.inventory
+  WHERE product_id = '${pNac}'
+    AND loja_id = (SELECT id FROM public.lojas WHERE codigo = 'LDA-01')`);
+
 const aprov = await asUser(MANAGER, async () =>
   q(`SELECT public.decide_stock_transfer('${trf[0].r.transfer_id}', true) AS r`)
 );
 const origemDepois = await q(`
   SELECT quantity FROM public.inventory WHERE product_id = '${pNac}' AND provincia_id = '${UIG}'`);
 const destinoDepois = await q(`
-  SELECT quantity FROM public.inventory WHERE product_id = '${pNac}' AND provincia_id = '${LDA}'`);
+  SELECT quantity FROM public.inventory
+  WHERE product_id = '${pNac}'
+    AND loja_id = (SELECT id FROM public.lojas WHERE codigo = 'LDA-01')`);
 check("administração nacional aprova a transferência", aprov[0].r.status === "approved",
   JSON.stringify(aprov[0].r));
-check("aprovação move as quantidades entre províncias",
-  origemDepois[0].quantity === 20 && destinoDepois[0].quantity === 5,
-  JSON.stringify([origemDepois[0], destinoDepois[0]]));
+check("aprovação move as quantidades entre as lojas das províncias",
+  origemDepois[0].quantity === 20
+    && destinoDepois[0].quantity === destinoAntes[0].quantity + 5,
+  JSON.stringify([origemDepois[0], destinoAntes[0], destinoDepois[0]]));
 
 // 14.13 ninguém muda a própria província
 await expectError(
@@ -4099,6 +4108,198 @@ check("a reposição também fica no histórico",
 
 // Higiene: não deixar valores nacionais pendurados.
 await asUser(MANAGER, async () => q(`SELECT public.limpar_indicadores(NULL)`));
+
+console.log("\n--- 26. LOJAS: CADA MOVIMENTO TEM UMA LOJA (0025) ---");
+
+// 26.1 a loja principal de cada província, com código nascido da província
+const lojasProv = await q(`
+  SELECT pr.codigo AS provincia_codigo, l.codigo AS loja_codigo, l.nome, l.is_default
+  FROM public.provincias pr
+  LEFT JOIN public.lojas l ON l.provincia_id = pr.id AND l.is_default
+  ORDER BY pr.codigo`);
+check("cada província tem a sua loja principal",
+  lojasProv.length === 18 && lojasProv.every((l) => l.loja_codigo && l.is_default),
+  JSON.stringify(lojasProv.filter((l) => !l.loja_codigo).map((l) => l.provincia_codigo)));
+check("o código da loja nasce do código da província",
+  lojasProv.every((l) => l.loja_codigo === `${l.provincia_codigo}-01`),
+  JSON.stringify(lojasProv.slice(0, 3).map((l) => l.loja_codigo)));
+
+// 26.2 nada do que já existia ficou sem loja
+for (const tabela of [
+  "inventory", "inventory_movements", "sales", "orders", "reservations", "despesas",
+]) {
+  const semLoja = await q(`SELECT count(*)::int n FROM public.${tabela} WHERE loja_id IS NULL`);
+  check(`todo o registo de ${tabela} tem loja`, semLoja[0].n === 0, `${semLoja[0].n} sem loja`);
+}
+const perfisSemLoja = await q(`
+  SELECT count(*)::int n FROM public.profiles
+  WHERE provincia_id IS NOT NULL AND loja_id IS NULL`);
+check("quem tem província tem loja", perfisSemLoja[0].n === 0, `${perfisSemLoja[0].n} sem loja`);
+
+const lojaUige = (await q(`SELECT id FROM public.lojas WHERE codigo = 'UIG-01'`))[0].id;
+const lojaLda = (await q(`SELECT id FROM public.lojas WHERE codigo = 'LDA-01'`))[0].id;
+const lojaVendedor = await q(`SELECT loja_id FROM public.profiles WHERE id = '${LOJA}'`);
+check("o vendedor de loja ficou na loja da sua província",
+  lojaVendedor[0].loja_id === lojaUige, String(lojaVendedor[0].loja_id));
+
+// 26.3 o vendedor de loja só vê a sua loja
+const stockDaLoja = await asUser(LOJA, async () =>
+  q(`SELECT loja_id FROM public.inventory`)
+);
+check("o vendedor de loja só vê o stock da sua loja",
+  stockDaLoja.length > 0 && stockDaLoja.every((r) => r.loja_id === lojaUige),
+  JSON.stringify([...new Set(stockDaLoja.map((r) => r.loja_id))]));
+
+const minhaLojaRpc = await asUser(LOJA, async () => q(`SELECT public.minha_loja() AS l`));
+check("a loja de quem entrou é resolvida pela base",
+  minhaLojaRpc[0].l === lojaUige, String(minhaLojaRpc[0].l));
+
+// 26.4 um registo novo cai sozinho na loja principal da província
+const pAuto = (await q(`
+  INSERT INTO public.products (name, sku, official_price, provincia_id)
+  VALUES ('Perfume Automático', 'AUTO-01', 5000, '${UIG}') RETURNING id`))[0].id;
+const autoLoja = await q(`
+  INSERT INTO public.inventory (product_id, provincia_id, quantity)
+  VALUES ('${pAuto}', '${UIG}', 3) RETURNING loja_id`);
+check("um registo novo é ligado sozinho à loja da província",
+  autoLoja[0].loja_id === lojaUige, String(autoLoja[0].loja_id));
+
+// 26.5 criar uma segunda loja na mesma província
+const nova = await asUser(M_UIGE, async () =>
+  q(`SELECT public.guardar_loja('UIG-02', 'Loja do Centro', '${UIG}') AS r`));
+const idNova = nova[0].r.id;
+check("o gestor da província cria uma segunda loja",
+  nova[0].r.codigo === "UIG-02" && nova[0].r.provincia_id === UIG,
+  JSON.stringify(nova[0].r));
+check("a segunda loja não rouba o lugar de principal",
+  nova[0].r.is_default === false, JSON.stringify(nova[0].r.is_default));
+
+const codigoRepetido = await asUser(M_UIGE, async () => {
+  try { await q(`SELECT public.guardar_loja('uig-02', 'Outra', '${UIG}')`); return null; }
+  catch (e) { return e.message; }
+});
+check("o código da loja é único (sem distinguir maiúsculas)",
+  /Já existe uma loja/i.test(codigoRepetido ?? ""), codigoRepetido ?? "não deu erro");
+
+const codigoMau = await asUser(M_UIGE, async () => {
+  try { await q(`SELECT public.guardar_loja('U!', 'Má', '${UIG}')`); return null; }
+  catch (e) { return e.message; }
+});
+check("código de loja inválido é recusado",
+  /Código inválido/i.test(codigoMau ?? ""), codigoMau ?? "não deu erro");
+
+const lojaForaDaProvincia = await asUser(M_UIGE, async () => {
+  try { await q(`SELECT public.guardar_loja('LDA-09', 'Ainda não', '${LDA}')`); return null; }
+  catch (e) { return e.message; }
+});
+check("o gestor não cria lojas fora da província que gere",
+  /província que gere/i.test(lojaForaDaProvincia ?? ""), lojaForaDaProvincia ?? "não deu erro");
+
+// 26.6 o gerente da loja é o gestor máximo daquela loja
+await asUser(M_UIGE, async () =>
+  q(`SELECT public.guardar_loja('UIG-02', 'Loja do Centro', '${UIG}', '${M_UIGE}',
+       '923000010', 'Rua do Comércio', 'Loja nova', true, '${idNova}')`));
+const perfilGerente = await q(`
+  SELECT loja_id, provincia_id FROM public.profiles WHERE id = '${M_UIGE}'`);
+check("o gerente da loja fica ligado a ela",
+  perfilGerente[0].loja_id === idNova && perfilGerente[0].provincia_id === UIG,
+  JSON.stringify(perfilGerente[0]));
+
+// 26.7 a visão por loja: stock, vendas, caixa, saldo, investimento
+const visaoLojas = await asUser(M_UIGE, async () =>
+  q(`SELECT public.lojas_overview() AS r`));
+const listaLojas = visaoLojas[0].r.lojas;
+check("a visão de lojas fica na província do gestor",
+  listaLojas.length === 2 && listaLojas.every((l) => l.provincia_id === UIG),
+  JSON.stringify(listaLojas.map((l) => l.codigo)));
+
+const lojaGerida = listaLojas.find((l) => l.id === idNova);
+const lojaPrincipal = listaLojas.find((l) => l.id === lojaUige);
+check("o gerente corrige a loja que gere e só essa",
+  lojaGerida.pode_editar === true && lojaPrincipal.pode_editar === false,
+  JSON.stringify([lojaGerida.pode_editar, lojaPrincipal.pode_editar]));
+check("cada loja mostra o automático ao lado do manual",
+  typeof lojaGerida.caixa.automatico === "number"
+  && lojaGerida.caixa.manual === null
+  && lojaGerida.caixa.origem === "automatico",
+  JSON.stringify(lojaGerida.caixa));
+check("a loja principal continua a ser gerida pela província",
+  (await asUser(M_UIGE, async () =>
+    q(`SELECT public.can_manage_loja('${lojaUige}') AS c`)))[0].c === true);
+
+// 26.8 os valores da loja: automáticos até o gerente escrever
+const valoresLoja = await asUser(M_UIGE, async () =>
+  q(`SELECT public.guardar_indicadores_loja('${idNova}',
+       '{"caixa": 150000, "saldo": 400000, "investimento": 50000,
+         "valores_a_pagar": 25000}'::jsonb, 'Contagem de abertura') AS r`));
+check("o gerente grava caixa, saldo, investimento e valores a pagar",
+  valoresLoja[0].r.alterados.length === 4, JSON.stringify(valoresLoja[0].r));
+
+const visaoDepois = await asUser(M_UIGE, async () =>
+  q(`SELECT public.lojas_overview() AS r`));
+const comManual = visaoDepois[0].r.lojas.find((l) => l.id === idNova);
+check("o valor escrito vence o automático",
+  Number(comManual.caixa.valor) === 150000
+  && comManual.caixa.origem === "gestor"
+  && Number(comManual.caixa.automatico) === 0,
+  JSON.stringify(comManual.caixa));
+check("o total da visão soma os valores das lojas",
+  Number(visaoDepois[0].r.total.caixa)
+    === 150000 + Number(lojaPrincipal.caixa.valor),
+  JSON.stringify({ total: visaoDepois[0].r.total.caixa,
+                   principal: lojaPrincipal.caixa.valor }));
+
+// 26.9 a administração nacional só corrige a sua zona (Luanda)
+const nacionalForaDaZona = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.guardar_indicadores_loja('${idNova}', '{"caixa": 1}'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("a administração nacional não corrige lojas fora da sua zona",
+  /sua zona/i.test(nacionalForaDaZona ?? ""), nacionalForaDaZona ?? "não deu erro");
+
+const nacionalNaSuaZona = await asUser(MANAGER, async () =>
+  q(`SELECT public.guardar_indicadores_loja('${lojaLda}', '{"caixa": 900000}'::jsonb) AS r`));
+check("a administração nacional corrige a loja da sua zona",
+  nacionalNaSuaZona[0].r.alterados.includes("caixa"),
+  JSON.stringify(nacionalNaSuaZona[0].r));
+
+// 26.10 o stock escreve-se na loja de quem conta, não na província toda
+const stockPorLoja = await asUser(LOJA, async () =>
+  q(`SELECT public.set_product_stock('${pAuto}', 12, 'Recontagem') AS r`));
+check("o stock é escrito na loja de quem conta",
+  stockPorLoja[0].r.loja_id === lojaUige, JSON.stringify(stockPorLoja[0].r));
+
+const outraLojaSemStock = await q(`
+  SELECT count(*)::int n FROM public.inventory
+  WHERE product_id = '${pAuto}' AND loja_id = '${idNova}'`);
+check("a outra loja da mesma província não herda o stock",
+  outraLojaSemStock[0].n === 0, `${outraLojaSemStock[0].n} linhas`);
+
+// 26.11 uma loja com movimentos não muda de província
+const mudancaProvincia = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.guardar_loja('UIG-01', 'Loja Uíge', '${LDA}', NULL,
+             NULL, NULL, NULL, true, '${lojaUige}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("uma loja com movimentos não muda de província",
+  /já tem movimentos/i.test(mudancaProvincia ?? ""), mudancaProvincia ?? "não deu erro");
+
+// 26.12 a loja do gestor da província também é o gestor máximo dela
+const papeisDaLoja = await asUser(M_UIGE, async () =>
+  q(`SELECT public.can_manage_loja('${lojaUige}') AS gere,
+            public.pode_editar_loja('${lojaUige}') AS edita,
+            public.pode_editar_loja('${idNova}') AS edita_propria`));
+check("a província gere todas as lojas, mas só corrige a sua",
+  papeisDaLoja[0].gere === true && papeisDaLoja[0].edita === false
+  && papeisDaLoja[0].edita_propria === true,
+  JSON.stringify(papeisDaLoja[0]));
+
+// Higiene: a loja de teste não fica com valores pendurados.
+await asUser(M_UIGE, async () => q(`SELECT public.limpar_indicadores_loja('${idNova}')`));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

@@ -11,6 +11,8 @@ export interface Profile {
   is_active: boolean;
   /** Província atribuída. `null` = administração nacional / por atribuir. */
   provincia_id: string | null;
+  /** Loja a que pertence. `null` = ainda por atribuir (cai na principal). */
+  loja_id: string | null;
   is_national_admin: boolean;
   /** Código único de referência, ex.: INK-UIG-00042. */
   referencia: string | null;

@@ -39,6 +39,7 @@ const PARTES = [
   { ficheiro: "migrations/0022_activo_provincia.sql", titulo: "ACTIVO DA PROVÍNCIA: O QUE SOBRA DEPOIS DAS DESPESAS" },
   { ficheiro: "migrations/0023_saldo_contabilistico.sql", titulo: "SALDO CONTABILÍSTICO (META DO GESTOR) E VISÃO DA EMPRESA" },
   { ficheiro: "migrations/0024_painel_financeiro.sql", titulo: "PAINEL FINANCEIRO: OS OITO INDICADORES NAS MÃOS DO GESTOR" },
+  { ficheiro: "migrations/0025_lojas.sql", titulo: "LOJAS: CÓDIGO, NOME, PROVÍNCIA E GERENTE EM CADA FLUXO" },
 ];
 
 const cabecalho = `-- =============================================================================

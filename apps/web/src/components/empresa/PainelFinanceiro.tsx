@@ -62,6 +62,16 @@ export default function PainelFinanceiro({
     [painel, provinciaId]
   );
 
+  /**
+   * A administração nacional só corrige a sua zona (a província-sede); as
+   * outras províncias calculam automaticamente. O painel da empresa (sem
+   * província) continua a ser dela. A base aplica a mesma regra — isto só
+   * evita mostrar campos que vão ser recusados.
+   */
+  const sedeId = provincias.find((p) => p.is_default)?.id ?? null;
+  const podeEditarPainel =
+    painel.pode_editar && (!nacional || provinciaId === "" || provinciaId === sedeId);
+
   const [valores, setValores] = useState<Record<string, string>>(() =>
     paraTexto(indicadores)
   );
@@ -346,7 +356,11 @@ export default function PainelFinanceiro({
           </p>
         </div>
         <span className="text-[11px] text-[#525252]">
-          {painel.pode_editar ? "Pode editar" : "Só leitura"}
+          {podeEditarPainel
+            ? "Pode editar"
+            : nacional && provinciaId !== ""
+              ? "Automático — fora da sua zona"
+              : "Só leitura"}
         </span>
       </div>
 
@@ -379,7 +393,7 @@ export default function PainelFinanceiro({
                 value={valores[c.chave] ?? ""}
                 onChange={(e) => definir(c.chave, e.target.value)}
                 inputMode="decimal"
-                disabled={!painel.pode_editar}
+                disabled={!podeEditarPainel}
                 placeholder={
                   auto !== null ? `Automático: ${auto}` : "Sem valor automático"
                 }
@@ -404,7 +418,7 @@ export default function PainelFinanceiro({
                   )}
                 </p>
 
-                {painel.pode_editar && (
+                {podeEditarPainel && (
                   <div className="flex gap-2">
                     {escrito && (
                       <button
@@ -432,7 +446,7 @@ export default function PainelFinanceiro({
         })}
       </div>
 
-      {painel.pode_editar && (
+      {podeEditarPainel && (
         <div className="mb-8 rounded-xl border border-[#262626] bg-[#1A1A1A] p-5">
           <label className={ROTULO} htmlFor="pf-nota">
             Nota desta alteração (opcional)
