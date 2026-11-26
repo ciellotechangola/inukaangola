@@ -72,6 +72,7 @@ for (const rel of [
   "migrations/0021_despesas_e_investimento.sql",
   "migrations/0022_activo_provincia.sql",
   "migrations/0023_saldo_contabilistico.sql",
+  "migrations/0024_painel_financeiro.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -3957,6 +3958,147 @@ const saldosFinais = await asUser(MANAGER, async () =>
 check("os saldos ficam limpos no fim",
   Array.isArray(saldosFinais[0].r) && saldosFinais[0].r.length === 0,
   JSON.stringify(saldosFinais[0].r));
+
+
+console.log("\n--- 25. PAINEL FINANCEIRO: O GESTOR MANDA NOS NÚMEROS (0024) ---");
+
+// 25.1 o gestor provincial escreve os indicadores que apurou
+const gravado = await asUser(M_UIGE, async () =>
+  q(`SELECT public.guardar_indicadores(
+       '{"activo_total": 750000, "vendas": 1200000, "activo_liquido": -5000}'::jsonb,
+       NULL, 'Fecho de Novembro') AS r`));
+check("o gestor grava os indicadores da sua província",
+  Number(gravado[0].r.valores.vendas) === 1200000
+  && Number(gravado[0].r.valores.activo_total) === 750000
+  && Number(gravado[0].r.valores.activo_liquido) === -5000,
+  JSON.stringify(gravado[0].r));
+
+// 25.2 o painel devolve o manual e o automático lado a lado
+const painelUige = await asUser(M_UIGE, async () =>
+  q(`SELECT public.painel_financeiro() AS r`));
+const linhaPainel = painelUige[0].r.linhas[0];
+check("o painel mostra o valor manual e o automático lado a lado",
+  Number(linhaPainel.indicadores.vendas.manual) === 1200000
+  && Number(linhaPainel.indicadores.vendas.automatico) === 391000
+  && Number(linhaPainel.indicadores.vendas.valor) === 1200000
+  && linhaPainel.indicadores.vendas.origem === "gestor",
+  JSON.stringify(linhaPainel.indicadores.vendas));
+
+check("a meta sem valor escrito fica vazia, não inventada",
+  linhaPainel.indicadores.meta_financeira.valor === null
+  && linhaPainel.indicadores.meta_financeira.origem === "vazio",
+  JSON.stringify(linhaPainel.indicadores.meta_financeira));
+
+check("o activo líquido escrito à mão é respeitado",
+  Number(linhaPainel.indicadores.activo_liquido.manual) === -5000
+  && Number(linhaPainel.indicadores.activo_liquido.valor) === -5000,
+  JSON.stringify(linhaPainel.indicadores.activo_liquido));
+
+// 25.3 o valor do gestor vence o automático também no activo
+const activoManual = await asUser(M_UIGE, async () =>
+  q(`SELECT public.activo_provincia() AS r`));
+check("o valor do gestor vence o automático no activo",
+  Number(activoManual[0].r.linhas[0].vendas) === 1200000
+  && Number(activoManual[0].r.linhas[0].activo_total) === 750000
+  && Number(activoManual[0].r.linhas[0].vendas_automatico) === 391000,
+  JSON.stringify({ vendas: activoManual[0].r.linhas[0].vendas,
+                   total: activoManual[0].r.linhas[0].activo_total }));
+
+// 25.4 limpar um campo devolve só esse ao automático
+await asUser(M_UIGE, async () =>
+  q(`SELECT public.guardar_indicadores('{"vendas": null}'::jsonb) AS r`));
+const painelLimpo = await asUser(M_UIGE, async () =>
+  q(`SELECT public.painel_financeiro() AS r`));
+const linhasLimpo = painelLimpo[0].r.linhas[0];
+check("limpar um campo devolve só esse ao automático",
+  Number(linhasLimpo.indicadores.vendas.valor) === 391000
+  && linhasLimpo.indicadores.vendas.manual === null
+  && Number(linhasLimpo.indicadores.activo_total.valor) === 750000,
+  JSON.stringify({ vendas: linhasLimpo.indicadores.vendas,
+                   total: linhasLimpo.indicadores.activo_total }));
+
+// 25.5 o histórico guarda o antes e o depois
+const histPainel = await asUser(M_UIGE, async () =>
+  q(`SELECT public.painel_financeiro() AS r`));
+const histVendas = (histPainel[0].r.historico ?? []).find(
+  (h) => h.campo === "vendas" && Number(h.valor_anterior) === 1200000 && h.valor_novo === null);
+check("o histórico guarda o valor anterior e o novo",
+  Boolean(histVendas) && Boolean(histVendas.quem) && Boolean(histVendas.quando),
+  JSON.stringify((histPainel[0].r.historico ?? []).slice(0, 3)));
+
+// 25.6 o histórico só cresce: duas alterações, duas linhas
+const antesHist = (histPainel[0].r.historico ?? []).filter((h) => h.campo === "activo_total").length;
+await asUser(M_UIGE, async () =>
+  q(`SELECT public.guardar_indicadores('{"activo_total": 760000}'::jsonb) AS r`));
+const histDepois = await asUser(M_UIGE, async () =>
+  q(`SELECT public.painel_financeiro() AS r`));
+const depoisHist = (histDepois[0].r.historico ?? []).filter((h) => h.campo === "activo_total").length;
+check("o histórico é append-only (não reescreve o passado)",
+  depoisHist === antesHist + 1, `${antesHist} -> ${depoisHist}`);
+
+// 25.7 o colaborador não vê nem escreve
+let painelColab = null;
+await asUser(S_DESP, async () => {
+  try { await q(`SELECT public.painel_financeiro()`); } catch (e) { painelColab = e.message; }
+});
+check("colaborador não consulta o painel financeiro",
+  /gerência/i.test(painelColab ?? ""), painelColab ?? "não deu erro");
+
+let gravarColab = null;
+await asUser(S_DESP, async () => {
+  try { await q(`SELECT public.guardar_indicadores('{"vendas": 1}'::jsonb)`); }
+  catch (e) { gravarColab = e.message; }
+});
+check("colaborador não escreve no painel financeiro",
+  /gestão/i.test(gravarColab ?? ""), gravarColab ?? "não deu erro");
+
+// 25.8 valores negativos são recusados (o activo líquido é a excepção)
+let negativo = null;
+await asUser(M_UIGE, async () => {
+  try { await q(`SELECT public.guardar_indicadores('{"activo_total": -1}'::jsonb)`); }
+  catch (e) { negativo = e.message; }
+});
+check("activo total negativo é recusado",
+  /negativo/i.test(negativo ?? ""), negativo ?? "não deu erro");
+
+// 25.9 um gestor provincial não escreve noutra província
+const forcadoPainel = await asUser(M_UIGE, async () =>
+  q(`SELECT public.guardar_indicadores('{"activo_total": 999}'::jsonb, '${LDA}') AS r`));
+check("gestor provincial fica sempre na província que gere",
+  forcadoPainel[0].r.provincia_id === UIG, JSON.stringify(forcadoPainel[0].r));
+
+// 25.10 a administração nacional escreve a meta e o total da empresa
+await asUser(MANAGER, async () =>
+  q(`SELECT public.guardar_indicadores(
+       '{"meta_financeira": 5000000, "activo_total": 4000000}'::jsonb,
+       NULL, 'Plano anual') AS r`));
+const painelNac = await asUser(MANAGER, async () =>
+  q(`SELECT public.painel_financeiro() AS r`));
+check("a meta da empresa é a que a administração escreveu",
+  Number(painelNac[0].r.total.indicadores.meta_financeira.valor) === 5000000
+  && Number(painelNac[0].r.total.indicadores.activo_total.valor) === 4000000,
+  JSON.stringify(painelNac[0].r.total.indicadores));
+check("o painel nacional continua a listar todas as províncias",
+  painelNac[0].r.scope === "nacional" && painelNac[0].r.linhas.length === 18,
+  `${painelNac[0].r.scope} / ${painelNac[0].r.linhas.length}`);
+
+// 25.11 repor tudo no automático
+const reposto = await asUser(M_UIGE, async () =>
+  q(`SELECT public.limpar_indicadores() AS r`));
+const painelReposto = await asUser(M_UIGE, async () =>
+  q(`SELECT public.painel_financeiro() AS r`));
+check("repor no automático limpa os valores escritos",
+  reposto[0].r.removido === true
+  && painelReposto[0].r.linhas[0].indicadores.activo_total.manual === null
+  && Number(painelReposto[0].r.linhas[0].indicadores.activo_total.valor) === 391000,
+  JSON.stringify({ removido: reposto[0].r.removido,
+                   total: painelReposto[0].r.linhas[0].indicadores.activo_total }));
+check("a reposição também fica no histórico",
+  (painelReposto[0].r.historico ?? []).some((h) => h.campo === "todos"),
+  JSON.stringify((painelReposto[0].r.historico ?? []).slice(0, 2)));
+
+// Higiene: não deixar valores nacionais pendurados.
+await asUser(MANAGER, async () => q(`SELECT public.limpar_indicadores(NULL)`));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

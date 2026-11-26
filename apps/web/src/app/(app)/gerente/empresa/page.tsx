@@ -29,12 +29,13 @@ export default async function EmpresaPage({
   if (profile.role !== "manager") redirect("/");
 
   const sp = await searchParams;
-  const abaInicial = sp.aba === "empresa" ? "empresa" : "saldo";
+  // `aba=saldo` era o link antigo: continua a abrir o painel financeiro.
+  const abaInicial = sp.aba === "empresa" ? "empresa" : "financeiro";
 
   const supabase = await createClientServer();
   const [
     { data: activoRaw, error: erroActivo },
-    { data: saldosRaw },
+    { data: painelRaw, error: erroPainel },
     { data: stockRaw },
     { data: statsRaw },
     { data: despesasRaw },
@@ -43,7 +44,7 @@ export default async function EmpresaPage({
     { data: provinciasRaw },
   ] = await Promise.all([
     supabase.rpc("activo_provincia"),
-    supabase.rpc("saldo_contabilistico"),
+    supabase.rpc("painel_financeiro"),
     supabase.rpc("stock_valor"),
     supabase.rpc("dashboard_stats"),
     supabase.rpc("despesas_equipa"),
@@ -98,11 +99,19 @@ export default async function EmpresaPage({
         </div>
       )}
 
+      {erroPainel && (
+        <div className="mb-6 rounded-lg border border-[#4A3F1F] bg-[#241E0E] p-3 text-sm text-[#C9A962]">
+          O painel financeiro ainda não está disponível. Cole{" "}
+          <code className="font-mono text-xs">supabase/PATCH_PAINEL_FINANCEIRO.sql</code> no SQL
+          Editor do Supabase e recarregue a página. Os indicadores aparecem a zeros até lá.
+        </div>
+      )}
+
       <VisaoEmpresa
         nacional={nacional}
         provinciaNome={activo.provincia}
         activo={activo}
-        saldos={saldosRaw ?? []}
+        painel={painelRaw ?? null}
         stock={stock}
         resumo={resumoRaw ?? null}
         categorias={despesasPorCategoria(despesas)}

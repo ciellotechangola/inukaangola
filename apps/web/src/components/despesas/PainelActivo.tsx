@@ -66,7 +66,7 @@ export default function PainelActivo({
         <p className="mb-3 text-[11px] text-[#6F6F6F]">
           O activo está a ser calculado automaticamente.{" "}
           <Link href="/gerente/empresa" className="text-[#C9A962] hover:underline">
-            Definir o saldo contabilístico →
+            Abrir o painel financeiro →
           </Link>
         </p>
       )}

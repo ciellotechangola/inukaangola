@@ -37,6 +37,8 @@ export interface LinhaActivo {
   stock_unidades: number;
   /** Stock a preço oficial — a base da análise do gestor. */
   stock_valor: number;
+  /** Bens + stock + investimento: o activo contabilístico do gestor. */
+  activo_contabilistico: number;
   /** Pagas + investimento + já coberto + por pagar. Nunca inclui anuladas. */
   despesas_total: number;
   /** Vendas + investimento pago: o que a máquina calcula sozinha. */
@@ -66,6 +68,7 @@ export interface TotalActivo {
   pendentes_count: number;
   stock_unidades: number;
   stock_valor: number;
+  activo_contabilistico: number;
   despesas_total: number;
   activo_calculado: number;
   saldo_manual: number | null;
@@ -129,6 +132,7 @@ function normalizarLinha(bruto: unknown): LinhaActivo {
     pendentes_count: num(r.pendentes_count),
     stock_unidades: num(r.stock_unidades),
     stock_valor: num(r.stock_valor),
+    activo_contabilistico: num(r.activo_contabilistico),
     despesas_total: num(r.despesas_total),
     activo_calculado: num(r.activo_calculado, num(r.activo_total)),
     saldo_manual: numOuNulo(r.saldo_manual),
@@ -154,6 +158,7 @@ function normalizarTotal(bruto: unknown): TotalActivo {
     pendentes_count: num(r.pendentes_count),
     stock_unidades: num(r.stock_unidades),
     stock_valor: num(r.stock_valor),
+    activo_contabilistico: num(r.activo_contabilistico),
     despesas_total: num(r.despesas_total),
     activo_calculado: num(r.activo_calculado, num(r.activo_total)),
     saldo_manual: numOuNulo(r.saldo_manual),
@@ -216,9 +221,9 @@ export function quantoExcedeu(a: { despesas_total: number; activo_total: number 
   return Math.max(a.despesas_total - a.activo_total, 0);
 }
 
-/** O gestor já definiu o saldo contabilístico? */
-export function temSaldoDoGestor(a: { origem: OrigemActivo; meta: number | null }): boolean {
-  return a.origem === "gestor" && a.meta !== null;
+/** O gestor já escreveu algum valor à mão (activo, vendas, despesas…)? */
+export function temSaldoDoGestor(a: { origem: OrigemActivo }): boolean {
+  return a.origem === "gestor";
 }
 
 /** Diferença entre o que o gestor declarou e o que o sistema calcula. */

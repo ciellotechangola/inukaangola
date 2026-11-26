@@ -38,6 +38,7 @@ const PARTES = [
   { ficheiro: "migrations/0021_despesas_e_investimento.sql", titulo: "DESPESAS E INVESTIMENTO: A COMISSÃO PAGA A EMPRESA" },
   { ficheiro: "migrations/0022_activo_provincia.sql", titulo: "ACTIVO DA PROVÍNCIA: O QUE SOBRA DEPOIS DAS DESPESAS" },
   { ficheiro: "migrations/0023_saldo_contabilistico.sql", titulo: "SALDO CONTABILÍSTICO (META DO GESTOR) E VISÃO DA EMPRESA" },
+  { ficheiro: "migrations/0024_painel_financeiro.sql", titulo: "PAINEL FINANCEIRO: OS OITO INDICADORES NAS MÃOS DO GESTOR" },
 ];
 
 const cabecalho = `-- =============================================================================
