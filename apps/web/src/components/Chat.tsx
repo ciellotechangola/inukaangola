@@ -17,6 +17,7 @@ import {
   Check,
   Download,
   FileText,
+  Loader2,
   MessageSquarePlus,
   Mic,
   Paperclip,
@@ -30,6 +31,7 @@ import {
   X,
 } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
+import { descarregar } from "@/lib/descarregar";
 import {
   abrirConversaDirecta,
   adicionarMembroGrupo,
@@ -91,23 +93,108 @@ const JANELA_BLOCO = 5 * 60 * 1000;
  * `next/image` não serve: os URLs são assinados e o host muda, e um host não
  * declarado rebenta a página inteira (já aconteceu com o catálogo). `<img>`
  * simples é o correcto aqui.
+ *
+ * Descarregar é um `fetch` à nossa rota — não uma ligação. O URL assinado vive
+ * noutro domínio, e aí o `download` do `<a>` é ignorado: o toque abria a
+ * fotografia numa aba nova em vez de a guardar. A rota responde sempre em anexo
+ * e **as imagens saem em PNG**.
+ *
+ * Numa fotografia o botão é explícito («Baixar PNG», no canto), porque um selo
+ * mudo não se percebe como acção — e a própria fotografia também guarda, para
+ * quem toca na imagem à espera disso. São dois botões irmãos: um dentro do
+ * outro não é HTML válido.
  */
+type EstadoAnexo = "parado" | "a-guardar" | "guardado" | "falhou";
+
 function VistaAnexo({ anexo }: { anexo: Anexo }) {
   const tipo = anexo.file_type ?? "";
+  const [estado, setEstado] = useState<EstadoAnexo>("parado");
+  const temporizador = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (temporizador.current) clearTimeout(temporizador.current);
+    },
+    []
+  );
+
+  const aGuardar = estado === "a-guardar";
+  const falhou = estado === "falhou";
+
+  const guardar = async () => {
+    if (aGuardar) return;
+    if (temporizador.current) clearTimeout(temporizador.current);
+
+    setEstado("a-guardar");
+    try {
+      await descarregar(`/api/anexos/${anexo.id}/download`, anexo.file_name);
+      setEstado("guardado");
+      temporizador.current = setTimeout(() => setEstado("parado"), 3000);
+    } catch {
+      setEstado("falhou");
+      temporizador.current = setTimeout(() => setEstado("parado"), 5000);
+    }
+  };
 
   if (tipo.startsWith("image/")) {
     if (!anexo.url) {
       return <div className="h-40 w-52 animate-pulse rounded-lg bg-black/20" />;
     }
+
+    const rotulo = aGuardar
+      ? "A guardar…"
+      : estado === "guardado"
+        ? "Guardado"
+        : falhou
+          ? "Falhou"
+          : "Baixar PNG";
+
+    const icone = aGuardar ? (
+      <Loader2 className="h-3 w-3 animate-spin" />
+    ) : estado === "guardado" ? (
+      <Check className="h-3 w-3" />
+    ) : (
+      <Download className="h-3 w-3" />
+    );
+
     return (
-      <a href={anexo.url} target="_blank" rel="noreferrer" title={anexo.file_name}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={anexo.url}
-          alt={anexo.file_name}
-          className="max-h-[22rem] w-auto max-w-full rounded-lg object-cover"
-        />
-      </a>
+      <div className="relative inline-block max-w-full">
+        <button
+          type="button"
+          onClick={guardar}
+          disabled={aGuardar}
+          title={`Baixar ${anexo.file_name} em PNG`}
+          aria-label={`Baixar ${anexo.file_name} em PNG`}
+          className={`block cursor-pointer overflow-hidden rounded-lg ${
+            aGuardar ? "cursor-progress opacity-80" : ""
+          }`}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={anexo.url}
+            alt={anexo.file_name}
+            className="max-h-[22rem] w-auto max-w-full rounded-lg object-cover"
+          />
+        </button>
+
+        <button
+          type="button"
+          onClick={guardar}
+          disabled={aGuardar}
+          title={`Baixar ${anexo.file_name} em PNG`}
+          aria-label={`Baixar ${anexo.file_name} em PNG`}
+          className={`absolute bottom-1.5 right-1.5 flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium text-white shadow-sm backdrop-blur-sm transition ${
+            falhou
+              ? "bg-[#7F1D1D]/85"
+              : estado === "guardado"
+                ? "bg-[#14532D]/85"
+                : "bg-black/65 hover:bg-black/85"
+          }`}
+        >
+          {icone}
+          {rotulo}
+        </button>
+      </div>
     );
   }
 
@@ -125,18 +212,38 @@ function VistaAnexo({ anexo }: { anexo: Anexo }) {
         {/* Um nome de ficheiro longo parte em duas linhas em vez de desaparecer
             no meio de um `truncate`. */}
         <span className="line-clamp-2 break-all text-xs font-medium">{anexo.file_name}</span>
-        <span className="block text-[10px] opacity-70">{formatarTamanho(anexo.file_size)}</span>
+        <span className="block text-[10px] opacity-70">
+          {aGuardar
+            ? "A guardar…"
+            : estado === "guardado"
+              ? "Guardado"
+              : falhou
+                ? "Falhou — toca para repetir"
+                : formatarTamanho(anexo.file_size)}
+        </span>
       </span>
-      <Download className="h-4 w-4 shrink-0 opacity-70" />
+      {aGuardar ? (
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin opacity-70" />
+      ) : estado === "guardado" ? (
+        <Check className="h-4 w-4 shrink-0 opacity-70" />
+      ) : (
+        <Download className="h-4 w-4 shrink-0 opacity-70" />
+      )}
     </>
   );
 
-  const classes = "flex items-center gap-2 rounded-lg bg-black/15 px-3 py-2.5";
+  const classes = "flex items-center gap-2 rounded-lg bg-black/15 px-3 py-2.5 text-left";
 
   return anexo.url ? (
-    <a href={anexo.url} target="_blank" rel="noreferrer" download={anexo.file_name} className={classes}>
+    <button
+      type="button"
+      onClick={guardar}
+      disabled={aGuardar}
+      title={`Descarregar ${anexo.file_name}`}
+      className={classes}
+    >
       {conteudo}
-    </a>
+    </button>
   ) : (
     <div className={classes}>{conteudo}</div>
   );

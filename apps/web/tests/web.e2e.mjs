@@ -2857,7 +2857,7 @@ if (TEM_CONTEUDOS) {
     return `${botoes} botões · texto cortado`;
   });
 
-  await check("descarregar um comunicado de texto devolve o aviso em .txt", async () => {
+  await check("descarregar um comunicado de texto devolve um cartaz PNG", async () => {
     const r = await fetch(`${APP}/api/conteudos/${COM_ID}/download`, {
       headers: { cookie: cVendedor },
     });
@@ -2865,13 +2865,23 @@ if (TEM_CONTEUDOS) {
 
     const disposicao = r.headers.get("content-disposition") ?? "";
     assert(disposicao.startsWith("attachment"), `content-disposition: ${disposicao}`);
-    assert(disposicao.includes(".txt"), `sem extensão .txt: ${disposicao}`);
+    // Sem fotografia, o comunicado passa a sair como cartaz PNG — não como
+    // `.txt`: quem reenvia um aviso no WhatsApp quer uma imagem.
+    assert(disposicao.includes(".png"), `sem extensão .png: ${disposicao}`);
     assert(/filename="e2e-+comunicado/.test(disposicao), `nome inesperado: ${disposicao}`);
 
-    const corpo = await r.text();
-    assert(corpo.includes(TITULO_COM), "o ficheiro não tem o título");
-    assert(corpo.includes("receber a ligação à sessão"), "o ficheiro não tem o texto todo");
-    return disposicao.replace(/.*filename=/, "");
+    const tipo = r.headers.get("content-type") ?? "";
+    assert(tipo.includes("image/png"), `content-type: ${tipo}`);
+
+    const bytes = Buffer.from(await r.arrayBuffer());
+    assert(
+      bytes.subarray(0, 4).toString("hex") === "89504e47",
+      `não são bytes de PNG (${bytes.subarray(0, 4).toString("hex")})`
+    );
+    // Um cartaz 1080×1350 com texto composto não cabe em poucos KB. Se o
+    // conversor falhasse, aqui chegava o `.txt` de recurso.
+    assert(bytes.length > 20_000, `cartaz com apenas ${bytes.length} bytes`);
+    return `${disposicao.replace(/.*filename=/, "")} · ${bytes.length} bytes`;
   });
 
   await check("o download de um comunicado exige sessão", async () => {

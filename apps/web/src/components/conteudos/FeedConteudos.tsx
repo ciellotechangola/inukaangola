@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { CalendarDays, Download, MapPin, Pin, Plus, X } from "lucide-react";
+import { CalendarDays, MapPin, Pin, Plus, X } from "lucide-react";
+import { BotaoDescarregar } from "@/components/BotaoDescarregar";
 import { Interacoes } from "./Interacoes";
 import { QuemReagiu } from "./QuemReagiu";
+import { nomeSeguro } from "@/lib/descarregar";
 import {
   dataConteudo,
   estadoDaPromocao,
@@ -27,7 +29,9 @@ import { formatCurrency } from "@/lib/utils";
  * abre por cima, quando se quer ler.
  *
  * Descarregar está em cada cartão e dentro do leitor: é o que se faz a seguir a
- * ler um aviso que é preciso reenviar ou guardar.
+ * ler um aviso que é preciso reenviar ou guardar. Sai sempre em PNG — a
+ * fotografia da publicação tal como está, ou um cartaz com o texto quando não
+ * há fotografia — e é guardado pela própria página, sem abrir nada.
  */
 
 export function FeedConteudos({
@@ -301,14 +305,16 @@ function Cartao({
           )}
         </div>
         {gerirReacoes && <QuemReagiu itemId={conteudo.id} total={conteudo.reacoes} />}
-        <a
+        {/* Botão, não ligação: o ficheiro é guardado aqui mesmo. Uma ligação ao
+            URL da imagem abria-a numa aba nova (o `download` não vale entre
+            domínios) e a fotografia ficava no ecrã em vez da galeria. */}
+        <BotaoDescarregar
           href={`/api/conteudos/${conteudo.id}/download`}
+          nome={nomeSeguro(conteudo.title)}
           className="ml-auto flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-[11px] text-[#A3A3A3] transition hover:bg-[#1D1D1D] hover:text-[#C9A962]"
-          title="Descarregar esta publicação"
-        >
-          <Download className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Descarregar</span>
-        </a>
+          titulo="Descarregar esta publicação em PNG"
+          esconderRotulo
+        />
       </div>
     </article>
   );
@@ -341,13 +347,13 @@ function Leitor({ conteudo, onFechar }: { conteudo: Conteudo; onFechar: () => vo
               {conteudo.provincia_nome ? ` · ${conteudo.provincia_nome}` : ""}
             </p>
           </div>
-          <a
+          <BotaoDescarregar
             href={`/api/conteudos/${conteudo.id}/download`}
+            nome={nomeSeguro(conteudo.title)}
             className="flex items-center gap-1.5 rounded-lg border border-[#333] px-2.5 py-1.5 text-[11px] text-[#C9A962] transition hover:border-[#C9A962]"
-          >
-            <Download className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Descarregar</span>
-          </a>
+            titulo="Descarregar esta publicação em PNG"
+            esconderRotulo
+          />
           <button
             type="button"
             onClick={onFechar}
