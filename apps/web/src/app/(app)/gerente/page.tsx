@@ -134,6 +134,7 @@ export default async function ManagerDashboardPage() {
           <Action href="/gerente/promocoes" title="Promoções por província" />
           <Action href="/gerente/levantamentos" title="Levantamentos de comissões" />
           <Action href="/gerente/despesas" title="Despesas e investimento" />
+          <Action href="/gerente/empresa" title="Saldo contabilístico e empresa" />
           <Action href="/loja" title="Loja (stock e balcão)" />
           <Action href="/gerente/perfis" title="Perfis e permissões" />
           <Action href="/gerente/provincias" title="Províncias e delegações" />

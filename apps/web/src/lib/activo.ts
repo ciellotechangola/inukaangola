@@ -4,14 +4,18 @@
  * O cálculo vive todo na base de dados (`activo_provincia()`); aqui só se
  * normaliza o jsonb para o ecrã nunca mostrar `undefined` nem `NaN`.
  *
- *   activo_total    = vendas + investimento pago
- *   despesas_total  = despesas pagas + investimento pago + por pagar
- *   activo_liquido  = activo_total − despesas_total
- *   excedido        = despesas_total > activo_total
+ *   activo_calculado = vendas + investimento pago
+ *   activo_total     = saldo contabilístico do gestor, ou o calculado se não houver
+ *   despesas_total   = pagas + investimento + já coberto + por pagar
+ *   activo_liquido   = activo_total − despesas_total
+ *   progresso        = activo_liquido / meta (só quando há saldo definido)
  *
- * O investimento aparece dos dois lados de propósito: comprar equipamento
- * troca dinheiro por um bem que fica, por isso não faz o activo descer.
+ * O saldo contabilístico é escrito pelo gestor a partir da análise ao stock:
+ * não é automático. O automático continua a ser devolvido em
+ * `activo_calculado`, para comparação.
  */
+
+export type OrigemActivo = "gestor" | "automatico";
 
 export interface LinhaActivo {
   id: string;
@@ -29,10 +33,23 @@ export interface LinhaActivo {
   /** Parte de despesas por pagar já coberta por comissões da equipa. */
   ja_coberto: number;
   pendentes_count: number;
-  /** Pagas + investimento pago + por pagar. Nunca inclui anuladas. */
+  /** Unidades em stock na província. */
+  stock_unidades: number;
+  /** Stock a preço oficial — a base da análise do gestor. */
+  stock_valor: number;
+  /** Pagas + investimento + já coberto + por pagar. Nunca inclui anuladas. */
   despesas_total: number;
+  /** Vendas + investimento pago: o que a máquina calcula sozinha. */
+  activo_calculado: number;
+  /** Saldo escrito pelo gestor. `null` = ainda não definido. */
+  saldo_manual: number | null;
+  /** A meta é o saldo do gestor (igual a `saldo_manual`). */
+  meta: number | null;
+  origem: OrigemActivo;
   activo_total: number;
   activo_liquido: number;
+  /** Percentagem da meta que ainda resta. `null` sem saldo definido. */
+  progresso: number | null;
   /** As despesas já ultrapassaram o activo total. */
   excedido: boolean;
   /** Activo total em percentagem das despesas. 100 = empatado. */
@@ -47,9 +64,16 @@ export interface TotalActivo {
   por_pagar: number;
   ja_coberto: number;
   pendentes_count: number;
+  stock_unidades: number;
+  stock_valor: number;
   despesas_total: number;
+  activo_calculado: number;
+  saldo_manual: number | null;
+  meta: number | null;
+  origem: OrigemActivo;
   activo_total: number;
   activo_liquido: number;
+  progresso: number | null;
   excedido: boolean;
   cobertura: number;
 }
@@ -71,12 +95,23 @@ function num(valor: unknown, omissao = 0): number {
   return Number.isFinite(n) ? n : omissao;
 }
 
+/** Números que podem ser nulos (saldo, meta, progresso). */
+function numOuNulo(valor: unknown): number | null {
+  if (valor === null || valor === undefined || valor === "") return null;
+  const n = Number(valor);
+  return Number.isFinite(n) ? n : null;
+}
+
 function texto(valor: unknown, omissao = ""): string {
   return typeof valor === "string" && valor.trim() !== "" ? valor : omissao;
 }
 
 function booleano(valor: unknown): boolean {
   return valor === true || valor === "true" || valor === 1;
+}
+
+function origemDe(valor: unknown): OrigemActivo {
+  return valor === "gestor" ? "gestor" : "automatico";
 }
 
 function normalizarLinha(bruto: unknown): LinhaActivo {
@@ -92,9 +127,16 @@ function normalizarLinha(bruto: unknown): LinhaActivo {
     por_pagar: num(r.por_pagar),
     ja_coberto: num(r.ja_coberto),
     pendentes_count: num(r.pendentes_count),
+    stock_unidades: num(r.stock_unidades),
+    stock_valor: num(r.stock_valor),
     despesas_total: num(r.despesas_total),
+    activo_calculado: num(r.activo_calculado, num(r.activo_total)),
+    saldo_manual: numOuNulo(r.saldo_manual),
+    meta: numOuNulo(r.meta ?? r.saldo_manual),
+    origem: origemDe(r.origem),
     activo_total: num(r.activo_total),
     activo_liquido: num(r.activo_liquido),
+    progresso: numOuNulo(r.progresso),
     excedido: booleano(r.excedido),
     cobertura: num(r.cobertura, 100),
   };
@@ -110,9 +152,16 @@ function normalizarTotal(bruto: unknown): TotalActivo {
     por_pagar: num(r.por_pagar),
     ja_coberto: num(r.ja_coberto),
     pendentes_count: num(r.pendentes_count),
+    stock_unidades: num(r.stock_unidades),
+    stock_valor: num(r.stock_valor),
     despesas_total: num(r.despesas_total),
+    activo_calculado: num(r.activo_calculado, num(r.activo_total)),
+    saldo_manual: numOuNulo(r.saldo_manual),
+    meta: numOuNulo(r.meta ?? r.saldo_manual),
+    origem: origemDe(r.origem),
     activo_total: num(r.activo_total),
     activo_liquido: num(r.activo_liquido),
+    progresso: numOuNulo(r.progresso),
     excedido: booleano(r.excedido),
     cobertura: num(r.cobertura, 100),
   };
@@ -165,4 +214,19 @@ export const ROTULO_TOM: Record<TomActivo, string> = {
 /** «As despesas ultrapassam o activo em X Kz.» */
 export function quantoExcedeu(a: { despesas_total: number; activo_total: number }): number {
   return Math.max(a.despesas_total - a.activo_total, 0);
+}
+
+/** O gestor já definiu o saldo contabilístico? */
+export function temSaldoDoGestor(a: { origem: OrigemActivo; meta: number | null }): boolean {
+  return a.origem === "gestor" && a.meta !== null;
+}
+
+/** Diferença entre o que o gestor declarou e o que o sistema calcula. */
+export function desvioDoCalculado(a: {
+  origem: OrigemActivo;
+  meta: number | null;
+  activo_calculado: number;
+}): number | null {
+  if (!temSaldoDoGestor(a) || a.meta === null) return null;
+  return a.meta - a.activo_calculado;
 }

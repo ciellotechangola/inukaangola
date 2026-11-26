@@ -71,6 +71,7 @@ for (const rel of [
   "migrations/0020_venda_do_gestor.sql",
   "migrations/0021_despesas_e_investimento.sql",
   "migrations/0022_activo_provincia.sql",
+  "migrations/0023_saldo_contabilistico.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -3858,6 +3859,104 @@ const activoColab = await asUser(S_DESP, async () => {
 });
 check("colaborador não consulta o activo da empresa",
   /gerência/i.test(activoColab ?? ""), activoColab ?? "não deu erro");
+
+console.log("\n--- 24. SALDO CONTABILÍSTICO: A META DEFINIDA PELO GESTOR (0023) ---");
+
+// 24.1 o gestor provincial escreve o saldo que apurou
+const saldoUige = await asUser(M_UIGE, async () =>
+  q(`SELECT public.definir_saldo_contabilistico(500000, NULL, 'Contagem do stock em Novembro') AS r`));
+check("gestor provincial define o saldo da sua província",
+  Number(saldoUige[0].r.valor) === 500000 && saldoUige[0].r.provincia_id === UIG,
+  JSON.stringify(saldoUige[0].r));
+
+// 24.2 o saldo passa a ser o activo total e a meta
+const activoComSaldo = await asUser(M_UIGE, async () =>
+  q(`SELECT public.activo_provincia() AS r`));
+const linhaSaldo = activoComSaldo[0].r.linhas[0];
+check("o saldo do gestor passa a ser o activo total (meta)",
+  Number(linhaSaldo.activo_total) === 500000
+  && linhaSaldo.origem === "gestor"
+  && Number(linhaSaldo.meta) === 500000,
+  JSON.stringify({ total: linhaSaldo.activo_total, origem: linhaSaldo.origem, meta: linhaSaldo.meta }));
+
+check("o cálculo automático continua visível para comparação",
+  Number(linhaSaldo.activo_calculado)
+    === Number(linhaSaldo.vendas) + Number(linhaSaldo.investimento_pago),
+  JSON.stringify({ calculado: linhaSaldo.activo_calculado, vendas: linhaSaldo.vendas }));
+
+check("o activo líquido desconta as despesas reais da meta",
+  Number(linhaSaldo.activo_liquido)
+    === 500000 - Number(linhaSaldo.despesas_total),
+  JSON.stringify({ liquido: linhaSaldo.activo_liquido, despesas: linhaSaldo.despesas_total }));
+
+// 24.3 valores inválidos são recusados
+let saldoNegativo = null;
+await asUser(M_UIGE, async () => {
+  try {
+    await q(`SELECT public.definir_saldo_contabilistico(-1)`);
+  } catch (e) { saldoNegativo = e.message; }
+});
+check("saldo negativo é recusado",
+  /valor válido/i.test(saldoNegativo ?? ""), saldoNegativo ?? "não deu erro");
+
+// 24.4 o colaborador não escreve o saldo
+let saldoColab = null;
+await asUser(S_DESP, async () => {
+  try {
+    await q(`SELECT public.definir_saldo_contabilistico(1000)`);
+  } catch (e) { saldoColab = e.message; }
+});
+check("colaborador não define o saldo contabilístico",
+  /gestão/i.test(saldoColab ?? ""), saldoColab ?? "não deu erro");
+
+// 24.5 o saldo da empresa toda manda no total nacional
+const saldoNacional = await asUser(MANAGER, async () =>
+  q(`SELECT public.definir_saldo_contabilistico(9000000, NULL, 'Avaliação nacional') AS r`));
+check("a administração nacional define o saldo da empresa",
+  Number(saldoNacional[0].r.valor) === 9000000 && saldoNacional[0].r.provincia_id === null,
+  JSON.stringify(saldoNacional[0].r));
+
+const activoNacSaldo = await asUser(MANAGER, async () =>
+  q(`SELECT public.activo_provincia() AS r`));
+check("o saldo da empresa manda no total nacional",
+  Number(activoNacSaldo[0].r.total.activo_total) === 9000000
+  && activoNacSaldo[0].r.total.origem === "gestor",
+  JSON.stringify(activoNacSaldo[0].r.total));
+check("as províncias mantêm o seu próprio saldo",
+  Number((activoNacSaldo[0].r.linhas ?? []).find((l) => l.id === UIG)?.activo_total) === 500000,
+  JSON.stringify((activoNacSaldo[0].r.linhas ?? []).find((l) => l.id === UIG)?.activo_total));
+
+// 24.6 o valor do stock acompanha o formulário
+const stockValorUige = await asUser(M_UIGE, async () => q(`SELECT public.stock_valor() AS r`));
+check("o stock é valorizado a preço oficial",
+  Number(stockValorUige[0].r.valor) >= 0 && Number(stockValorUige[0].r.unidades) >= 0
+  && Array.isArray(stockValorUige[0].r.top),
+  JSON.stringify(stockValorUige[0].r));
+
+// 24.7 um gestor provincial não escreve o saldo de outra província
+const saldoForcado = await asUser(M_UIGE, async () =>
+  q(`SELECT public.definir_saldo_contabilistico(123456, '${LDA}') AS r`));
+check("gestor provincial fica sempre na sua província",
+  saldoForcado[0].r.provincia_id === UIG, JSON.stringify(saldoForcado[0].r));
+
+// 24.8 remover o saldo devolve o cálculo automático
+const saldoRemovido = await asUser(M_UIGE, async () =>
+  q(`SELECT public.limpar_saldo_contabilistico() AS r`));
+const activoAuto = await asUser(M_UIGE, async () =>
+  q(`SELECT public.activo_provincia() AS r`));
+check("remover o saldo volta ao cálculo automático",
+  saldoRemovido[0].r.removido === true
+  && activoAuto[0].r.linhas[0].origem === "automatico",
+  JSON.stringify({ removido: saldoRemovido[0].r.removido,
+                   origem: activoAuto[0].r.linhas[0].origem }));
+
+// Higiene: o saldo nacional não deve ficar pendurado nos testes seguintes.
+await asUser(MANAGER, async () => q(`SELECT public.limpar_saldo_contabilistico(NULL)`));
+const saldosFinais = await asUser(MANAGER, async () =>
+  q(`SELECT public.saldo_contabilistico() AS r`));
+check("os saldos ficam limpos no fim",
+  Array.isArray(saldosFinais[0].r) && saldosFinais[0].r.length === 0,
+  JSON.stringify(saldosFinais[0].r));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

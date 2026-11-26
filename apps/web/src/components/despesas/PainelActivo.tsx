@@ -1,10 +1,13 @@
 import { formatCurrency } from "@/lib/utils";
+import Link from "next/link";
 import TabelaResponsiva from "@/components/TabelaResponsiva";
 import {
   COR_TOM,
   ROTULO_TOM,
+  desvioDoCalculado,
   quantoExcedeu,
   rotuloAmbito,
+  temSaldoDoGestor,
   tomActivo,
   type ActivoProvincia,
   type LinhaActivo,
@@ -16,6 +19,10 @@ import {
  * Sem `"use client"`: a página de despesas usa-o dentro de um componente de
  * cliente e o painel de gestão dentro de um componente de servidor. Como não
  * tem estado, serve os dois sem duplicar markup.
+ *
+ * Quando o gestor definiu o saldo contabilístico, é esse valor que manda
+ * (`origem = gestor`) e o cartão passa a chamar-se «Saldo contabilístico» —
+ * a meta. O cálculo automático fica na nota, para comparação.
  */
 export default function PainelActivo({
   activo,
@@ -29,6 +36,8 @@ export default function PainelActivo({
   const tom = tomActivo(total);
   const excedeu = quantoExcedeu(total);
   const nacional = scope === "nacional";
+  const doGestor = temSaldoDoGestor(total);
+  const desvio = desvioDoCalculado(total);
 
   return (
     <section className="mb-8">
@@ -36,7 +45,10 @@ export default function PainelActivo({
         <div>
           <h2 className="text-xl font-light text-[#F5F5F5]">Activo</h2>
           <p className="text-sm text-[#A3A3A3]">
-            O que a província gerou menos o que gastou, desde o início. {rotuloAmbito(activo)}.
+            {doGestor
+              ? "O saldo contabilístico declarado pela gestão, menos o que já foi gasto."
+              : "O que a província gerou menos o que gastou, desde o início."}{" "}
+            {rotuloAmbito(activo)}.
           </p>
         </div>
         <span
@@ -50,23 +62,38 @@ export default function PainelActivo({
         </span>
       </div>
 
+      {!doGestor && (
+        <p className="mb-3 text-[11px] text-[#6F6F6F]">
+          O activo está a ser calculado automaticamente.{" "}
+          <Link href="/gerente/empresa" className="text-[#C9A962] hover:underline">
+            Definir o saldo contabilístico →
+          </Link>
+        </p>
+      )}
+
       {total.excedido && (
         <div className="mb-3 rounded-lg border border-[#4A2020] bg-[#2A1010] p-3 text-sm text-[#F87171]">
           <strong className="font-semibold">As despesas ultrapassam o activo.</strong>{" "}
           {nacional ? "O país" : "Esta província"} já gastou{" "}
-          {formatCurrency(excedeu)} mais do que aquilo que gerou. Novas despesas
-          continuam a ser registadas — o alerta serve para travar o ritmo, não
-          para esconder o que já foi gasto.
+          {formatCurrency(excedeu)} mais do que {doGestor ? "o saldo declarado" : "aquilo que gerou"}.
+          Novas despesas continuam a ser registadas — o alerta serve para travar o
+          ritmo, não para esconder o que já foi gasto.
         </div>
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Cartao
-          rotulo="Activo total"
+          rotulo={doGestor ? "Saldo contabilístico (meta)" : "Activo total"}
           valor={formatCurrency(total.activo_total)}
-          nota={`Vendas ${formatCurrency(total.vendas)} + investimento ${formatCurrency(
-            total.investimento_pago
-          )}`}
+          nota={
+            doGestor
+              ? `Definido pela gestão · o sistema calcula ${formatCurrency(
+                  total.activo_calculado
+                )}${desvio ? ` (${desvio > 0 ? "+" : "−"}${formatCurrency(Math.abs(desvio))})` : ""}`
+              : `Vendas ${formatCurrency(total.vendas)} + investimento ${formatCurrency(
+                  total.investimento_pago
+                )}`
+          }
           cor="text-[#C9A962]"
         />
         <Cartao
@@ -87,9 +114,11 @@ export default function PainelActivo({
           nota={
             total.excedido
               ? `Falta ${formatCurrency(excedeu)} para empatar`
-              : total.cobertura >= 200
-                ? "As despesas estão cobertas com folga"
-                : `Cobre ${total.cobertura} % das despesas`
+              : doGestor && total.progresso !== null
+                ? `Resta ${total.progresso} % da meta declarada`
+                : total.cobertura >= 200
+                  ? "As despesas estão cobertas com folga"
+                  : `Cobre ${total.cobertura} % das despesas`
           }
           cor={COR_TOM[tom]}
         />
@@ -121,10 +150,11 @@ export default function PainelActivo({
       </div>
 
       <p className="mt-2 text-[11px] leading-relaxed text-[#525252]">
-        Activo total = vendas não canceladas desde o início + investimento já pago. Despesas reais
-        = pagas + investimento + tudo o que está por pagar (as anuladas não contam). O
-        investimento entra dos dois lados porque comprar um bem não é perder dinheiro — só a
-        despesa corrente e o que está por pagar fazem o activo descer.
+        {doGestor
+          ? "Saldo contabilístico = valor declarado pela gestão a partir da análise ao stock. É a meta: as despesas reais descontam dele. O cálculo automático (vendas + investimento) aparece na nota, só para comparar."
+          : "Activo total = vendas não canceladas desde o início + investimento já pago. Despesas reais = pagas + investimento + tudo o que está por pagar (as anuladas não contam). O investimento entra dos dois lados porque comprar um bem não é perder dinheiro — só a despesa corrente e o que está por pagar fazem o activo descer."}{" "}
+        Enquanto a gestão não declarar o saldo contabilístico, o activo é calculado
+        automaticamente.
       </p>
 
       {mostrarTabela && nacional && activo.linhas.length > 1 && (
@@ -135,7 +165,7 @@ export default function PainelActivo({
           <TabelaResponsiva<LinhaActivo>
             itens={activo.linhas}
             chaveDe={(l) => l.id}
-            minimo={640}
+            minimo={760}
             moldura={false}
             vazio={
               <p className="px-4 py-6 text-center text-sm text-[#525252]">
@@ -168,6 +198,16 @@ export default function PainelActivo({
                 ),
               },
               {
+                chave: "stock",
+                rotulo: "Stock",
+                alinhar: "direita",
+                celula: (l) => (
+                  <span className="text-[#8A8A8A]" title={`${l.stock_unidades} unidades`}>
+                    {formatCurrency(l.stock_valor)}
+                  </span>
+                ),
+              },
+              {
                 chave: "despesas",
                 rotulo: "Despesas",
                 alinhar: "direita",
@@ -182,7 +222,17 @@ export default function PainelActivo({
                 rotulo: "Activo total",
                 alinhar: "direita",
                 celula: (l) => (
-                  <span className="text-[#C9A962]">{formatCurrency(l.activo_total)}</span>
+                  <span className="text-[#C9A962]">
+                    {formatCurrency(l.activo_total)}
+                    {l.origem === "gestor" && (
+                      <span
+                        className="ml-1.5 rounded-full border border-[#4A3F1F] bg-[#241E0E] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[#C9A962]"
+                        title="Saldo definido pela gestão"
+                      >
+                        meta
+                      </span>
+                    )}
+                  </span>
                 ),
               },
               {
