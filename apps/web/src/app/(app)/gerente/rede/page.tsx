@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
+import { listarProvincias } from "@/lib/provincias";
 import { formatCurrency } from "@/lib/utils";
 import { normalizarRede } from "@/lib/rede";
 import RedeVendedores, { type SolicitacaoLinha } from "./RedeVendedores";
@@ -45,7 +46,7 @@ export default async function RedeDeVendedoresPage() {
 
   const supabase = await createClientServer();
 
-  const [redeRes, pedidosRes] = await Promise.all([
+  const [redeRes, pedidosRes, provincias] = await Promise.all([
     supabase.rpc("rede_revendedores"),
     supabase
       .from("revendedor_pedidos")
@@ -54,6 +55,7 @@ export default async function RedeDeVendedoresPage() {
       )
       .order("created_at", { ascending: false })
       .limit(100),
+    listarProvincias(supabase),
   ]);
 
   const rede = normalizarRede(redeRes.data);
@@ -128,7 +130,17 @@ export default async function RedeDeVendedoresPage() {
       )}
 
       {rede ? (
-        <RedeVendedores rede={rede} pedidos={pedidos} nomeProvincia={nomeProvincia} />
+        <RedeVendedores
+          rede={rede}
+          pedidos={pedidos}
+          nomeProvincia={nomeProvincia}
+          provincias={provincias.map((p) => ({ id: p.id, nome: p.nome, codigo: p.codigo }))}
+          provinciaFixa={
+            profile.is_national_admin || profile.provincia_id === null
+              ? null
+              : profile.provincia_id
+          }
+        />
       ) : (
         <p className="rounded-xl border border-[#262626] bg-[#141414] p-6 text-sm text-[#8A8A8A]">
           Sem dados da rede. Ainda não há revendedores registados — aprove uma candidatura em{" "}

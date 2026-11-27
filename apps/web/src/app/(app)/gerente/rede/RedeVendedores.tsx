@@ -21,6 +21,7 @@ import {
   type RedeRevendedor,
 } from "@/lib/rede";
 import TabelaResponsiva from "@/components/TabelaResponsiva";
+import NovoRevendedor from "@/components/revenda/NovoRevendedor";
 
 export interface SolicitacaoLinha {
   id: string;
@@ -53,10 +54,14 @@ export default function RedeVendedores({
   rede,
   pedidos,
   nomeProvincia,
+  provincias,
+  provinciaFixa,
 }: {
   rede: Rede;
   pedidos: SolicitacaoLinha[];
   nomeProvincia: string | null;
+  provincias: { id: string; nome: string; codigo: string }[];
+  provinciaFixa: string | null;
 }) {
   const [aba, setAba] = useState<Aba>("revendedores");
   const [procura, setProcura] = useState("");
@@ -139,8 +144,8 @@ export default function RedeVendedores({
       {/* ------------------------------------------------------ REVENDEDORES */}
       {aba === "revendedores" && (
         <section>
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs text-[#8A8A8A]">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <p className="flex-1 text-xs text-[#8A8A8A]">
               Todos os revendedores cadastrados
               {rede.scope === "provincial" && nomeProvincia ? ` em ${nomeProvincia}` : ""} — com
               os números do período.
@@ -154,6 +159,9 @@ export default function RedeVendedores({
                 className="w-64 rounded-lg border border-[#333] bg-[#0A0A0A] py-2 pl-9 pr-3 text-xs text-[#F5F5F5] placeholder:text-[#4A4A4A] focus:border-[#C9A962] focus:outline-none"
               />
             </label>
+            {/* Criar conta ao balcão: a pessoa aparece, combinam-se as
+                condições e a ficha nasce ali — sem passar pelo site. */}
+            <NovoRevendedor provincias={provincias} provinciaFixa={provinciaFixa} />
           </div>
 
           <TabelaResponsiva<RedeRevendedor>
@@ -165,7 +173,7 @@ export default function RedeVendedores({
                 <p className="text-sm text-[#A3A3A3]">
                   {procura
                     ? "Nenhum revendedor corresponde à procura."
-                    : "Ainda não há revendedores aprovados. Aprove uma candidatura em Revendedores e grosso."}
+                    : "Ainda não há revendedores. Crie um em «Novo revendedor» ou aprove uma candidatura na aba Solicitações."}
                 </p>
               </div>
             }
