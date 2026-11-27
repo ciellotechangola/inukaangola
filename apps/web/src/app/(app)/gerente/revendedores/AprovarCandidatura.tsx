@@ -50,7 +50,7 @@ export default function AprovarCandidatura({
   const [provincia, setProvincia] = useState(
     provinciaFixa ?? candidatura.provincia_id ?? ""
   );
-  const [desconto, setDesconto] = useState("35");
+  const [desconto, setDesconto] = useState("");
   const [minimo, setMinimo] = useState("5");
   const [ver, setVer] = useState(false);
   const [erro, setErro] = useState("");
@@ -347,18 +347,21 @@ export default function AprovarCandidatura({
         </label>
 
         <label className="block">
-          <span className="mb-1 block text-[10px] text-[#6F6F6F]">Desconto de grosso (%)</span>
+          <span className="mb-1 block text-[10px] text-[#6F6F6F]">
+            Desconto de grosso (%) — opcional
+          </span>
           <input
             type="number"
             min={0}
             max={90}
             value={desconto}
             onChange={(e) => setDesconto(e.target.value)}
-            placeholder="35"
+            placeholder="tabela"
             className="w-full rounded-lg border border-[#404040] bg-[#0A0A0A] px-2.5 py-1.5 text-sm text-[#F5F5F5] placeholder:text-[#525252] focus:border-[#C9A962] focus:outline-none"
           />
           <span className="mt-0.5 block text-[10px] text-[#525252]">
-            Sobre o preço de montra, quando o produto não tem preço próprio.
+            Em branco, o preço vem da tabela de reduções (3.500 / 4.000 / 5.000 Kz). Preencha
+            só quando houver um acordo especial com este revendedor.
           </span>
         </label>
 

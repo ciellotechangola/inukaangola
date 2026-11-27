@@ -39,7 +39,11 @@ export interface Revendedor {
   provincia_id: string | null;
   provincia: string | null;
   loja_id: string | null;
-  desconto: number;
+  /**
+   * Desconto negociado em percentagem. `null` = sem acordo próprio: o preço
+   * vem da tabela de reduções do grosso (0032).
+   */
+  desconto: number | null;
   minimo_unidades: number;
   status: "activo" | "suspenso" | "encerrado";
   nota: string | null;
@@ -53,10 +57,16 @@ export interface MinhaRevenda {
    * `minimo_unidades` é por linha; `minimo_produtos` é por pedido. São duas
    * regras diferentes e o ecrã mostra as duas — um pedido de grosso com uma
    * linha só não é um pedido de grosso.
+   *
+   * `reducoes` são as alavancas em Kwanza (3.500 / 4.000 / 5.000) e
+   * `margem_alvo` / `margem_max` a banda que a base usa para escolher uma.
    */
   regras: {
     minimo_unidades: number;
     minimo_produtos: number;
+    reducoes: number[];
+    margem_alvo: number;
+    margem_max: number;
   };
   stats: {
     pedidos: number;
@@ -77,8 +87,17 @@ export interface ProdutoGrosso {
   sku: string | null;
   categoria: string | null;
   imagem: string | null;
+  /** Preço normal para o cliente final. */
   preco_loja: number;
+  /** Preço de aquisição do revendedor. */
   preco_grosso: number;
+  /** Kwanza que saíram do preço de cliente (3.500, 4.000, 5.000…). */
+  reducao: number;
+  /** `preco_loja − preco_grosso`, por unidade. */
+  lucro_unidade: number;
+  /** Lucro sobre o preço de compra — o que se ganha por cada Kz pago. */
+  margem_pct: number;
+  /** Lucro sobre o preço de loja — o desconto que se vê na montra. */
   desconto_pct: number;
   minimo: number;
   stock: number | null;
@@ -130,18 +149,24 @@ export function normalizarMinhaRevenda(bruto: unknown): MinhaRevenda {
           provincia_id: (rev.provincia_id as string | null) ?? null,
           provincia: (rev.provincia as string | null) ?? null,
           loja_id: (rev.loja_id as string | null) ?? null,
-          desconto: numero(rev.desconto),
+          // `null` é informação: sem acordo próprio, manda a tabela.
+          desconto: rev.desconto === null || rev.desconto === undefined ? null : numero(rev.desconto),
           minimo_unidades: numero(rev.minimo_unidades) || 5,
           status:
             rev.status === "suspenso" || rev.status === "encerrado" ? rev.status : "activo",
           nota: (rev.nota as string | null) ?? null,
         }
       : null,
-    // Sem `regras` (migração 0031 por aplicar) ficam os valores antigos: só o
-    // mínimo de unidades, sem mínimo de produtos.
+    // Sem `regras` (migração 0031/0032 por aplicar) ficam os valores antigos:
+    // só o mínimo de unidades, sem mínimo de produtos nem tabela.
     regras: {
       minimo_unidades: numero(regras.minimo_unidades) || numero(rev?.minimo_unidades) || 5,
       minimo_produtos: numero(regras.minimo_produtos) || 1,
+      reducoes: Array.isArray(regras.reducoes)
+        ? (regras.reducoes as unknown[]).map(numero).filter((n) => n > 0)
+        : [],
+      margem_alvo: numero(regras.margem_alvo) || 0.2,
+      margem_max: numero(regras.margem_max) || 0.3,
     },
     stats: {
       pedidos: numero(stats.pedidos),
@@ -168,6 +193,12 @@ export function normalizarCatalogo(linhas: unknown[]): ProdutoGrosso[] {
       imagem: (l.imagem as string | null) ?? null,
       preco_loja: numero(l.preco_loja),
       preco_grosso: numero(l.preco_grosso),
+      reducao: numero(l.reducao),
+      lucro_unidade:
+        l.lucro_unidade === null || l.lucro_unidade === undefined
+          ? numero(l.preco_loja) - numero(l.preco_grosso)
+          : numero(l.lucro_unidade),
+      margem_pct: numero(l.margem_pct),
       desconto_pct: numero(l.desconto_pct),
       minimo: numero(l.minimo) || 5,
       stock: l.stock === null || l.stock === undefined ? null : numero(l.stock),

@@ -80,6 +80,7 @@ for (const rel of [
   "migrations/0029_rede_revendedores.sql",
   "migrations/0030_revendedores_grupos_e_feed.sql",
   "migrations/0031_catalogo_grosso_proprio.sql",
+  "migrations/0032_precos_grosso_por_reducao.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -4157,8 +4158,11 @@ const rvPrecoProprio = await q(
           public.preco_revendedor('${pGrosso}', NULL)   AS padrao`);
 check("o desconto do revendedor manda no preço de grosso",
   Number(rvPrecoProprio[0].p) === 6000, String(rvPrecoProprio[0].p));
-check("sem desconto próprio vale o desconto da empresa (35%)",
-  Number(rvPrecoProprio[0].padrao) === 6500, String(rvPrecoProprio[0].padrao));
+// Sem desconto negociado manda a tabela de reduções (0032). A 10.000 Kz
+// nenhuma das três alavancas cabe no tecto de 30% de margem, por isso a
+// redução encolhe até ao tecto: 10.000 × 0,30 ÷ 1,30 = 2.307,7 → 2.300.
+check("sem desconto próprio vale a tabela de reduções (10.000 → 7.700)",
+  Number(rvPrecoProprio[0].padrao) === 7700, String(rvPrecoProprio[0].padrao));
 
 await asUser(MANAGER, async () =>
   q(`SELECT public.definir_preco_revenda('${pGrosso}', 5500, 'Preço de importação')`));
@@ -5097,6 +5101,109 @@ check("o painel do revendedor traz o mínimo de produtos",
 check("o painel do revendedor traz o mínimo de unidades",
   painelRegras.regras.minimo_unidades === 5,
   JSON.stringify(painelRegras.regras));
+
+console.log("\n--- 33. PREÇO DE GROSSO POR REDUÇÃO ABSOLUTA (0032) ---");
+
+// 33.1 o exemplo da tabela do negócio: 30.000 → 25.000
+const exReducao = (await q(`SELECT public.reducao_grosso(30000) AS r`))[0].r;
+check("30.000 Kz descem 5.000 Kz — o exemplo da tabela",
+  Number(exReducao) === 5000, String(exReducao));
+check("preço de aquisição = preço de cliente − redução (30.000 → 25.000)",
+  Number((await q(`SELECT 30000 - public.reducao_grosso(30000) AS p`))[0].p) === 25000);
+
+// 33.2 a alavanca muda com o preço, sempre a mais próxima da margem-alvo
+check("num artigo de 21.900 a alavanca é a mais pequena (3.500)",
+  Number((await q(`SELECT public.reducao_grosso(21900) AS r`))[0].r) === 3500,
+  String((await q(`SELECT public.reducao_grosso(21900) AS r`))[0].r));
+check("num artigo de 32.000 a alavanca é a maior (5.000)",
+  Number((await q(`SELECT public.reducao_grosso(32000) AS r`))[0].r) === 5000);
+// `numeric` chega como texto: compara-se número a número.
+const alavancas = (await q(`SELECT public.reducoes_grosso() AS r`))[0].r.map(Number);
+check("as três alavancas vivem na configuração",
+  JSON.stringify(alavancas) === "[3500,4000,5000]",
+  JSON.stringify(alavancas));
+
+// 33.3 o tecto de margem: nenhum preço dá ao revendedor mais de 30%
+const tecto = await q(`
+  SELECT p AS preco,
+         public.reducao_grosso(p) AS reducao,
+         round(100 * public.reducao_grosso(p)
+               / NULLIF(p - public.reducao_grosso(p), 0), 1) AS margem
+  FROM unnest(ARRAY[7900, 9500, 14500, 21900, 25000, 28000, 32000, 75000]::numeric[]) AS p
+  ORDER BY p`);
+check("nenhum preço dá ao revendedor mais de 30% de margem",
+  tecto.every((l) => Number(l.margem) <= 30),
+  JSON.stringify(tecto.map((l) => [Number(l.preco), Number(l.margem)])));
+check("num artigo barato a redução encolhe até ao tecto (7.900 → 1.800)",
+  Number(tecto[0].reducao) === 1800, String(tecto[0].reducao));
+check("num artigo caro a redução é a maior das três (75.000 → 5.000)",
+  Number(tecto[tecto.length - 1].reducao) === 5000,
+  String(tecto[tecto.length - 1].reducao));
+check("um preço a zero não inventa redução",
+  Number((await q(`SELECT public.reducao_grosso(0) AS r`))[0].r) === 0);
+check("um preço nulo não inventa redução",
+  Number((await q(`SELECT public.reducao_grosso(NULL) AS r`))[0].r) === 0);
+
+// 33.4 a tabela de lucro chega ao catálogo do revendedor
+// REV2 não tem desconto negociado: é o revendedor da tabela. Os produtos
+// «Grosso N» custam 1.000 Kz → redução de 200 Kz (o tecto manda encolher).
+const linhaLucro = (await asUser(REV2, async () =>
+  q(`SELECT * FROM public.revendedor_catalogo() WHERE product_id = '${gIds[0]}'`)))[0];
+check("o catálogo traz o preço de cliente final",
+  Number(linhaLucro.preco_loja) === 1000, String(linhaLucro.preco_loja));
+check("o catálogo traz o preço de aquisição pela tabela de reduções",
+  Number(linhaLucro.preco_grosso) === 800, String(linhaLucro.preco_grosso));
+check("o catálogo traz a redução aplicada",
+  Number(linhaLucro.reducao) === 200, String(linhaLucro.reducao));
+check("o catálogo traz o lucro por unidade",
+  Number(linhaLucro.lucro_unidade) === 200, String(linhaLucro.lucro_unidade));
+check("o lucro por unidade é a diferença entre os dois preços",
+  Number(linhaLucro.lucro_unidade) ===
+    Number(linhaLucro.preco_loja) - Number(linhaLucro.preco_grosso));
+check("o catálogo traz a margem sobre o preço de compra (25%)",
+  Number(linhaLucro.margem_pct) === 25, String(linhaLucro.margem_pct));
+check("o catálogo traz o desconto sobre o preço de loja (20%)",
+  Number(linhaLucro.desconto_pct) === 20, String(linhaLucro.desconto_pct));
+
+// 33.5 os acordos continuam a vencer a tabela
+check("um desconto negociado vence a tabela (40% de 1.000 = 600)",
+  Number((await asUser(REV, async () =>
+    q(`SELECT preco_grosso FROM public.revendedor_catalogo() WHERE product_id = '${gIds[1]}'`)))[0]
+    .preco_grosso) === 600);
+
+// 33.6 o painel do revendedor diz de onde vem o preço
+const painelRv2 = (await asUser(REV2, async () =>
+  q(`SELECT public.minha_revenda() AS r`)))[0].r;
+check("sem acordo próprio o painel não inventa uma percentagem",
+  painelRv2.revendedor.desconto === null,
+  JSON.stringify(painelRv2.revendedor.desconto));
+check("o painel traz as três alavancas do grosso",
+  JSON.stringify(painelRv2.regras.reducoes.map(Number)) === "[3500,4000,5000]",
+  JSON.stringify(painelRv2.regras.reducoes));
+check("o painel traz a margem-alvo e o tecto",
+  Number(painelRv2.regras.margem_alvo) === 0.2 && Number(painelRv2.regras.margem_max) === 0.3,
+  JSON.stringify([painelRv2.regras.margem_alvo, painelRv2.regras.margem_max]));
+
+// 33.7 o pedido é cotado pela tabela, não pelo browser
+const pedidoTabela = (await asUser(REV2, async () =>
+  q(`SELECT public.registar_pedido_revendedor('${JSON.stringify(
+    gIds.map((id) => ({ product_id: id, quantidade: 5 }))
+  )}'::jsonb) AS r`)))[0].r;
+check("o pedido de grosso é cotado pela tabela de reduções",
+  pedidoTabela.total_unidades === 20 && Number(pedidoTabela.valor_estimado) === 16000,
+  JSON.stringify(pedidoTabela));
+
+// 33.8 a gestão vê a mesma conta
+const gestaoRed = (await asUser(MANAGER, async () =>
+  q(`SELECT public.catalogo_revenda_gestao() AS r`)))[0].r;
+check("o cadastro da gestão mostra as alavancas",
+  JSON.stringify(gestaoRed.reducoes.map(Number)) === "[3500,4000,5000]",
+  JSON.stringify(gestaoRed.reducoes));
+const linhaGestao = gestaoRed.produtos.find((p) => p.product_id === gIds[0]);
+check("o cadastro da gestão mostra o mesmo preço de grosso do revendedor",
+  Number(linhaGestao.preco_grosso) === 800, JSON.stringify(linhaGestao));
+check("o cadastro da gestão mostra a margem de cada produto",
+  Number(linhaGestao.margem_pct) === 25, String(linhaGestao.margem_pct));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

@@ -400,13 +400,13 @@ function FichaRevendedor({
           <label className="block">
             <span className="mb-1 flex items-center gap-1 text-[10px] text-[#6F6F6F]">
               <Percent className="h-3 w-3" />
-              Desconto
+              Desconto (%)
             </span>
             <input
               value={desconto}
               onChange={(e) => setDesconto(e.target.value)}
               inputMode="decimal"
-              placeholder="empresa"
+              placeholder="tabela"
               className="w-20 rounded-lg border border-[#333] bg-[#0A0A0A] px-2 py-1 text-xs text-[#F5F5F5] placeholder:text-[#4A4A4A] focus:border-[#C9A962] focus:outline-none"
             />
           </label>

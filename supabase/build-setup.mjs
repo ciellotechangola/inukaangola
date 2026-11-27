@@ -46,6 +46,7 @@ const PARTES = [
   { ficheiro: "migrations/0029_rede_revendedores.sql", titulo: "REDE DE VENDEDORES: VISÃO DA GESTÃO E FICHA PROFISSIONAL" },
   { ficheiro: "migrations/0030_revendedores_grupos_e_feed.sql", titulo: "REVENDEDORES: GRUPOS, MENSAGENS E O MESMO FEED INUKA" },
   { ficheiro: "migrations/0031_catalogo_grosso_proprio.sql", titulo: "CATÁLOGO DE GROSSO PRÓPRIO E MÍNIMO DE PRODUTOS POR PEDIDO" },
+  { ficheiro: "migrations/0032_precos_grosso_por_reducao.sql", titulo: "PREÇO DE GROSSO POR REDUÇÃO ABSOLUTA E TABELA DE LUCRO" },
 ];
 
 const cabecalho = `-- =============================================================================

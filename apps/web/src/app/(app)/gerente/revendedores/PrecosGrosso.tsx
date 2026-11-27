@@ -27,7 +27,8 @@ import type { CatalogoGestao, CatalogoProduto } from "./page";
  *
  * Três estados por produto, e só três:
  *   · fora do catálogo      → o revendedor não o vê;
- *   · no catálogo, preço automático → desconto do revendedor (ou da empresa);
+ *   · no catálogo, preço automático → tabela de reduções (ou o desconto
+ *     negociado do revendedor, quando existe);
  *   · no catálogo, preço escrito    → esse preço, congelado até alguém o mudar.
  *
  * «Repor» volta ao automático **sem** tirar o produto do catálogo — retirar é
@@ -77,8 +78,15 @@ export default function PrecosGrosso({
 
   const foraDoCatalogo = catalogo.produtos.filter((p) => !p.no_catalogo).length;
 
+  /**
+   * O preço que a base aplica quando o campo está vazio.
+   *
+   * Já vem calculado (`preco_grosso`): a tabela de reduções é decidida na
+   * base, produto a produto. Recalcular aqui com uma percentagem dava um
+   * número que não era o preço pago pelo revendedor.
+   */
   function precoAutomatico(p: CatalogoProduto): number {
-    return Math.round(p.preco_loja * (1 - catalogo.desconto) * 100) / 100;
+    return p.preco_grosso;
   }
 
   async function alternar(p: CatalogoProduto) {
@@ -417,9 +425,10 @@ export default function PrecosGrosso({
       )}
 
       <p className="mt-3 text-[11px] leading-relaxed text-[#525252]">
-        Preço vazio = desconto automático ({Math.round(catalogo.desconto * 100)}% sobre o preço de
-        loja, ou o desconto próprio do revendedor, quando existe). Um preço escrito à mão fica
-        congelado até alguém o mudar — não segue a política da empresa.
+        Preço vazio = tabela de reduções ({(catalogo.reducoes ?? []).join(" / ") || "3.500 / 4.000 / 5.000"}{" "}
+        Kz sobre o preço de loja, escolhida pela margem que deixa ao revendedor, ou o desconto
+        próprio dele, quando existe). Um preço escrito à mão fica congelado até alguém o mudar
+        — não segue a política da empresa.
       </p>
     </div>
   );

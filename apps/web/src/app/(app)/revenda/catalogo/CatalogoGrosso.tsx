@@ -33,7 +33,10 @@ interface LinhaCarrinho {
  *     grosso com uma linha só é uma compra ao balcão com desconto.
  *
  * O preço mostrado é o que a base devolveu. Não há cálculo de desconto no
- * browser, e o catálogo é só o que a gestão inscreveu no grosso.
+ * browser: a redução (3.500 / 4.000 / 5.000 Kz) é escolhida na base, produto a
+ * produto, e o catálogo só a mostra. O que se calcula aqui é a **conta do
+ * lucro** — compra, venda e sobra —, porque é isso que decide um pedido de
+ * grosso.
  */
 export default function CatalogoGrosso({
   produtos,
@@ -89,6 +92,13 @@ export default function CatalogoGrosso({
     (soma, l) => soma + l.produto.preco_grosso * l.quantidade,
     0
   );
+  /** Quanto o revendedor recebe se vender tudo ao preço de cliente final. */
+  const totalVenda = linhas.reduce(
+    (soma, l) => soma + l.produto.preco_loja * l.quantidade,
+    0
+  );
+  const totalLucro = totalVenda - totalValor;
+  const margemTotal = totalValor > 0 ? (totalLucro / totalValor) * 100 : 0;
   /** Quantos produtos diferentes faltam para o pedido poder seguir. */
   const faltam = Math.max(0, minimoProdutos - linhas.length);
 
@@ -205,9 +215,15 @@ export default function CatalogoGrosso({
         </Link>
         <h1 className="mt-2 text-3xl font-light text-[#F5F5F5]">Catálogo de grosso</h1>
         <p className="mt-1 max-w-2xl text-sm text-[#A3A3A3]">
-          Preços de revenda para <strong className="font-medium text-[#E5E5E5]">{revendedor}</strong>.
-          Mínimo de {minimo} unidades por produto e {minimoProdutos} produtos diferentes por
-          pedido. O preço de loja fica ao lado, para ver a margem.
+          Preços de aquisição para{" "}
+          <strong className="font-medium text-[#E5E5E5]">{revendedor}</strong>. O preço de
+          cliente final fica ao lado do seu, com o lucro por unidade já feito. Mínimo de{" "}
+          {minimo} unidades por produto e {minimoProdutos} produtos diferentes por pedido.
+        </p>
+        <p className="mt-2 max-w-2xl rounded-lg border border-[#262626] bg-[#111] px-3 py-2 text-[11.5px] leading-relaxed text-[#8A8A8A]">
+          Preço de cliente final − redução = preço de aquisição. A redução é escolhida pela
+          INUKA produto a produto, entre 3.500 e 5.000 Kz, para lhe deixar margem sem tirar
+          competitividade à tabela.
         </p>
       </header>
 
@@ -313,13 +329,20 @@ export default function CatalogoGrosso({
                 </div>
 
                 <div className="mt-3 flex items-end justify-between gap-2">
-                  <div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] uppercase tracking-wide text-[#525252]">
+                      Preço de aquisição
+                    </p>
                     <p className="text-lg font-light text-[#C9A962]">
                       {formatCurrency(p.preco_grosso)}
                     </p>
-                    <p className="text-[11px] text-[#6F6F6F]">
-                      <span className="line-through">{formatCurrency(p.preco_loja)}</span>{" "}
-                      <span className="text-[#4ADE80]">−{Math.round(p.desconto_pct)}%</span>
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-[#6F6F6F]">
+                      <span className="line-through">{formatCurrency(p.preco_loja)}</span>
+                      <span className="text-[#333]">·</span>
+                      <span className="text-[#4ADE80]">
+                        lucro {formatCurrency(p.lucro_unidade)}/un
+                      </span>
+                      <span className="text-[#4ADE80]">{Math.round(p.margem_pct)}%</span>
                     </p>
                   </div>
 
@@ -371,13 +394,93 @@ export default function CatalogoGrosso({
 
                 {noCarrinho && (
                   <p className="mt-2 text-[10px] text-[#6F6F6F]">
-                    Subtotal: {formatCurrency(p.preco_grosso * qtd)} · mínimo {p.minimo}
+                    {qtd} un. · paga {formatCurrency(p.preco_grosso * qtd)} · vende{" "}
+                    {formatCurrency(p.preco_loja * qtd)} · lucra{" "}
+                    <span className="text-[#4ADE80]">
+                      {formatCurrency(p.lucro_unidade * qtd)}
+                    </span>{" "}
+                    (mínimo {p.minimo})
                   </p>
                 )}
               </article>
             );
           })}
         </div>
+      )}
+
+      {/* ------------------------------------------------- A CONTA DO PEDIDO */}
+      {linhas.length > 0 && (
+        <section className="mt-8 rounded-xl border border-[#262626] bg-[#111] p-4 sm:p-5">
+          <h2 className="text-sm font-medium text-[#F5F5F5]">A conta do seu pedido</h2>
+          <p className="mt-1 text-[11.5px] leading-relaxed text-[#6F6F6F]">
+            O que paga hoje, o que recebe se vender ao preço de cliente final, e o que fica
+            para si. A margem é o lucro sobre aquilo que paga — não sobre o preço da loja.
+          </p>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[36rem] border-collapse text-left text-[12.5px]">
+              <thead>
+                <tr className="text-[10px] uppercase tracking-wide text-[#525252]">
+                  <th className="pb-2 pr-3 font-medium">Produto</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Cliente</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Revendedor</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Lucro/un.</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Margem</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Qtd</th>
+                  <th className="pb-2 text-right font-medium">Lucro</th>
+                </tr>
+              </thead>
+              <tbody className="text-[#D4D4D4]">
+                {linhas.map((l) => (
+                  <tr key={l.produto.product_id} className="border-t border-[#1F1F1F]">
+                    <td className="py-2 pr-3">
+                      <span className="line-clamp-1">{l.produto.nome}</span>
+                      {l.produto.reducao > 0 && (
+                        <span className="block text-[10px] text-[#525252]">
+                          −{formatCurrency(l.produto.reducao)} sobre a tabela
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-right text-[#8A8A8A]">
+                      {formatCurrency(l.produto.preco_loja)}
+                    </td>
+                    <td className="py-2 pr-3 text-right text-[#C9A962]">
+                      {formatCurrency(l.produto.preco_grosso)}
+                    </td>
+                    <td className="py-2 pr-3 text-right text-[#4ADE80]">
+                      {formatCurrency(l.produto.lucro_unidade)}
+                    </td>
+                    <td className="py-2 pr-3 text-right text-[#4ADE80]">
+                      {Math.round(l.produto.margem_pct)}%
+                    </td>
+                    <td className="py-2 pr-3 text-right">{l.quantidade}</td>
+                    <td className="py-2 text-right font-medium text-[#4ADE80]">
+                      {formatCurrency(l.produto.lucro_unidade * l.quantidade)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[
+              { rotulo: "Compra", valor: formatCurrency(totalValor), cor: "text-[#C9A962]" },
+              { rotulo: "Venda", valor: formatCurrency(totalVenda), cor: "text-[#D4D4D4]" },
+              { rotulo: "Lucro total", valor: formatCurrency(totalLucro), cor: "text-[#4ADE80]" },
+              {
+                rotulo: "Margem",
+                valor: `${Math.round(margemTotal)}%`,
+                cor: "text-[#4ADE80]",
+              },
+            ].map((c) => (
+              <div key={c.rotulo} className="rounded-lg border border-[#1F1F1F] bg-[#0A0A0A] px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-[#525252]">{c.rotulo}</p>
+                <p className={`mt-0.5 text-sm font-medium ${c.cor}`}>{c.valor}</p>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       {/* --------------------------------------------------------- BARRA FIXA */}
@@ -413,9 +516,25 @@ export default function CatalogoGrosso({
                 />
               </div>
 
-              <div className="text-right">
-                <p className="text-[10px] uppercase tracking-wide text-[#525252]">Estimativa</p>
-                <p className="text-lg font-light text-[#C9A962]">{formatCurrency(totalValor)}</p>
+              <div className="flex items-end gap-4 text-right">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-[#525252]">Compra</p>
+                  <p className="text-sm font-medium text-[#C9A962]">
+                    {formatCurrency(totalValor)}
+                  </p>
+                </div>
+                <div className="hidden sm:block">
+                  <p className="text-[10px] uppercase tracking-wide text-[#525252]">Venda</p>
+                  <p className="text-sm font-medium text-[#D4D4D4]">
+                    {formatCurrency(totalVenda)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-[#525252]">Lucro</p>
+                  <p className="text-sm font-medium text-[#4ADE80]">
+                    {formatCurrency(totalLucro)}
+                  </p>
+                </div>
               </div>
 
               <button

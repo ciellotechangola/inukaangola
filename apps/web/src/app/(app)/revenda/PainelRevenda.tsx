@@ -231,8 +231,12 @@ export default function PainelRevenda({
               preços e condições especiais.
             </p>
           </div>
+          {/* Com acordo próprio mostra-se a percentagem; sem ele, o preço vem
+              da tabela de reduções e um «35%» inventado seria mentira. */}
           <span className="rounded-full bg-[#C9A962]/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-[#C9A962]">
-            Desconto {Math.round(rev.desconto * 100)}%
+            {rev.desconto === null
+              ? "Tabela de reduções"
+              : `Desconto ${Math.round(rev.desconto * 100)}%`}
           </span>
         </div>
 

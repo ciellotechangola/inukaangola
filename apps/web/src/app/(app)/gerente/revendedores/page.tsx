@@ -71,16 +71,25 @@ export interface CatalogoProduto {
   imagem: string | null;
   preco_loja: number;
   no_catalogo: boolean;
-  /** Preço escrito à mão. `null` = desconto do revendedor / da empresa. */
+  /** Preço escrito à mão. `null` = tabela de reduções / desconto do revendedor. */
   preco_proprio: number | null;
   preco_grosso: number;
+  /** Kwanza tirados ao preço de loja (3.500 / 4.000 / 5.000). */
+  reducao: number;
+  /** Lucro do revendedor sobre o preço de compra, em percentagem. */
+  margem_pct: number;
   nota: string | null;
   stock: number | null;
 }
 
 export interface CatalogoGestao {
   minimo_produtos: number;
+  /** Legado: a percentagem da 0026. O preço passou a vir da tabela. */
   desconto: number;
+  /** As alavancas do grosso, em Kwanza. */
+  reducoes: number[];
+  margem_alvo: number;
+  margem_max: number;
   totais: { produtos: number; no_catalogo: number; com_preco: number };
   produtos: CatalogoProduto[];
 }
@@ -260,6 +269,11 @@ export default async function RevendedoresPage() {
     catalogo = {
       minimo_produtos: Number(bruto.minimo_produtos) || 4,
       desconto: Number(bruto.desconto) || descontoEmpresa,
+      reducoes: Array.isArray(bruto.reducoes)
+        ? (bruto.reducoes as unknown[]).map(Number).filter((n) => n > 0)
+        : [3500, 4000, 5000],
+      margem_alvo: Number(bruto.margem_alvo) || 0.2,
+      margem_max: Number(bruto.margem_max) || 0.3,
       totais: {
         produtos: Number(totais.produtos) || 0,
         no_catalogo: Number(totais.no_catalogo) || 0,
@@ -278,6 +292,8 @@ export default async function RevendedoresPage() {
             ? null
             : Number(p.preco_proprio),
         preco_grosso: Number(p.preco_grosso) || 0,
+        reducao: Number(p.reducao) || 0,
+        margem_pct: Number(p.margem_pct) || 0,
         nota: (p.nota as string | null) ?? null,
         stock: p.stock === null || p.stock === undefined ? null : Number(p.stock),
       })),
@@ -293,6 +309,9 @@ export default async function RevendedoresPage() {
     catalogo = {
       minimo_produtos: 1,
       desconto: descontoEmpresa,
+      reducoes: [3500, 4000, 5000],
+      margem_alvo: 0.2,
+      margem_max: 0.3,
       totais: { produtos: linhas.length, no_catalogo: linhas.length, com_preco: 0 },
       produtos: linhas.map((p) => {
         const loja = Number(p.official_price);
@@ -305,7 +324,11 @@ export default async function RevendedoresPage() {
           preco_loja: loja,
           no_catalogo: true,
           preco_proprio: null,
+          // Sem 0032 não há tabela: fica o desconto da empresa, que é o que a
+          // base antiga aplicava. É uma pré-visualização, não uma promessa.
           preco_grosso: Math.round(loja * (1 - descontoEmpresa) * 100) / 100,
+          reducao: Math.round(loja * descontoEmpresa * 100) / 100,
+          margem_pct: 0,
           nota: null,
           stock: null,
         };

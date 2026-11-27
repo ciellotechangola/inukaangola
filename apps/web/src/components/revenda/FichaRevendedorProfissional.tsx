@@ -60,9 +60,11 @@ export default function FichaRevendedorProfissional({
   const st = ficha.stats;
 
   const maxValor = Math.max(1, ...ficha.historico.map((h) => h.valor));
+  // Sem acordo próprio o preço vem da tabela de reduções (0032) — dizer
+  // «desconto da empresa» era falar de uma percentagem que já não existe.
   const desconto =
     r.desconto === null
-      ? "Desconto da empresa"
+      ? "Tabela de reduções"
       : `${Math.round(Number(r.desconto) * 100)}%`;
 
   return (
