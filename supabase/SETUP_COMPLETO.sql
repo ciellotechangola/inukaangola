@@ -40,6 +40,7 @@
 --    PARTE 25  LOJAS: CÓDIGO, NOME, PROVÍNCIA E GERENTE EM CADA FLUXO
 --    PARTE 26  REVENDEDOR: PREÇO DE GROSSO, PEDIDOS E CANDIDATURAS
 --    PARTE 27  CANDIDATURA A REVENDEDOR: DETALHE, RESPOSTA E ANTI-DUPLICADO
+--    PARTE 28  21 PROVÍNCIAS: ICOLO E BENGO, CUANDO E MOXICO LESTE
 --
 --  Gerado por supabase/build-setup.mjs — não editar à mão.
 --  A fonte são os ficheiros em supabase/migrations/.
@@ -47,7 +48,7 @@
 
 
 -- ###########################################################################
--- ##  PARTE 1 de 27 — ESQUEMA
+-- ##  PARTE 1 de 28 — ESQUEMA
 -- ###########################################################################
 
 -- =============================================================================
@@ -868,7 +869,7 @@ FOR EACH ROW EXECUTE FUNCTION public.prevent_role_escalation();
 
 
 -- ###########################################################################
--- ##  PARTE 2 de 27 — ROW LEVEL SECURITY
+-- ##  PARTE 2 de 28 — ROW LEVEL SECURITY
 -- ###########################################################################
 
 -- =============================================================================
@@ -1558,7 +1559,7 @@ END $$;
 
 
 -- ###########################################################################
--- ##  PARTE 3 de 27 — LÓGICA DE NEGÓCIO + REALTIME
+-- ##  PARTE 3 de 28 — LÓGICA DE NEGÓCIO + REALTIME
 -- ###########################################################################
 
 -- =============================================================================
@@ -2997,7 +2998,7 @@ REVOKE ALL ON FUNCTION public.promote_to_seller(text, text) FROM PUBLIC, anon, a
 
 
 -- ###########################################################################
--- ##  PARTE 4 de 27 — DESIGNER (ESTÚDIO DE DESIGN)
+-- ##  PARTE 4 de 28 — DESIGNER (ESTÚDIO DE DESIGN)
 -- ###########################################################################
 
 -- =============================================================================
@@ -3806,7 +3807,7 @@ CREATE TRIGGER design_projects_so_gestao
 
 
 -- ###########################################################################
--- ##  PARTE 5 de 27 — GESTÃO MULTIPROVINCIAL
+-- ##  PARTE 5 de 28 — GESTÃO MULTIPROVINCIAL
 -- ###########################################################################
 
 -- =============================================================================
@@ -5757,7 +5758,7 @@ END $$;
 
 
 -- ###########################################################################
--- ##  PARTE 6 de 27 — IDENTIDADE E GESTÃO DE COLABORADORES
+-- ##  PARTE 6 de 28 — IDENTIDADE E GESTÃO DE COLABORADORES
 -- ###########################################################################
 
 -- =============================================================================
@@ -7172,7 +7173,7 @@ END $$;
 
 
 -- ###########################################################################
--- ##  PARTE 7 de 27 — CONTEÚDOS PUBLICADOS E FORMAÇÃO
+-- ##  PARTE 7 de 28 — CONTEÚDOS PUBLICADOS E FORMAÇÃO
 -- ###########################################################################
 
 -- =============================================================================
@@ -8255,7 +8256,7 @@ ON CONFLICT (slug) DO NOTHING;
 
 
 -- ###########################################################################
--- ##  PARTE 8 de 27 — TAXA DE COMISSÃO, PEDIDOS E REVENDEDORES
+-- ##  PARTE 8 de 28 — TAXA DE COMISSÃO, PEDIDOS E REVENDEDORES
 -- ###########################################################################
 
 -- =============================================================================
@@ -8895,7 +8896,7 @@ END $$;
 
 
 -- ###########################################################################
--- ##  PARTE 9 de 27 — RESERVA DE CLIENTES E COMPRAS DO CLIENTE
+-- ##  PARTE 9 de 28 — RESERVA DE CLIENTES E COMPRAS DO CLIENTE
 -- ###########################################################################
 
 -- =============================================================================
@@ -9266,7 +9267,7 @@ GRANT EXECUTE ON FUNCTION public.minhas_compras(int) TO authenticated;
 
 
 -- ###########################################################################
--- ##  PARTE 10 de 27 — TAXA DE ENTREGA
+-- ##  PARTE 10 de 28 — TAXA DE ENTREGA
 -- ###########################################################################
 
 -- =============================================================================
@@ -9572,7 +9573,7 @@ GRANT EXECUTE ON FUNCTION public.place_order(jsonb, text, text, text, text, text
 
 
 -- ###########################################################################
--- ##  PARTE 11 de 27 — CHAT: CLIENTE FALA COM A GESTÃO, GRUPOS SÓ DA EQUIPA
+-- ##  PARTE 11 de 28 — CHAT: CLIENTE FALA COM A GESTÃO, GRUPOS SÓ DA EQUIPA
 -- ###########################################################################
 
 -- =============================================================================
@@ -9907,7 +9908,7 @@ GRANT EXECUTE ON FUNCTION public.remover_membro_grupo(uuid, uuid)        TO auth
 
 
 -- ###########################################################################
--- ##  PARTE 12 de 27 — DISPONIBILIDADE VISÍVEL A QUEM NÃO TEM CONTA
+-- ##  PARTE 12 de 28 — DISPONIBILIDADE VISÍVEL A QUEM NÃO TEM CONTA
 -- ###########################################################################
 
 -- =============================================================================
@@ -9959,7 +9960,7 @@ GRANT EXECUTE ON FUNCTION public.stock_produtos(uuid[]) TO anon, authenticated;
 
 
 -- ###########################################################################
--- ##  PARTE 13 de 27 — PERFIS: VENDEDOR DE LOJA, ELIMINAÇÃO DE PRODUTOS E FEED
+-- ##  PARTE 13 de 28 — PERFIS: VENDEDOR DE LOJA, ELIMINAÇÃO DE PRODUTOS E FEED
 -- ###########################################################################
 
 -- =============================================================================
@@ -11016,7 +11017,7 @@ GRANT EXECUTE ON FUNCTION public.taxa_comissao_de(uuid)      TO authenticated;
 
 
 -- ###########################################################################
--- ##  PARTE 14 de 27 — ELIMINAR PRODUTO COM O HISTÓRICO (MODO FORÇADO)
+-- ##  PARTE 14 de 28 — ELIMINAR PRODUTO COM O HISTÓRICO (MODO FORÇADO)
 -- ###########################################################################
 
 -- =============================================================================
@@ -11297,7 +11298,7 @@ GRANT EXECUTE ON FUNCTION public.eliminar_produto(uuid, boolean) TO authenticate
 
 
 -- ###########################################################################
--- ##  PARTE 15 de 27 — PROMOÇÕES POR PROVÍNCIA, COMISSÕES E LEVANTAMENTOS
+-- ##  PARTE 15 de 28 — PROMOÇÕES POR PROVÍNCIA, COMISSÕES E LEVANTAMENTOS
 -- ###########################################################################
 
 -- =============================================================================
@@ -12733,7 +12734,7 @@ COMMENT ON COLUMN public.seller_profiles.xpress_dados IS
 
 
 -- ###########################################################################
--- ##  PARTE 16 de 27 — ELIMINAR COLABORADOR E AS SUAS VENDAS
+-- ##  PARTE 16 de 28 — ELIMINAR COLABORADOR E AS SUAS VENDAS
 -- ###########################################################################
 
 -- =============================================================================
@@ -12978,7 +12979,7 @@ GRANT EXECUTE ON FUNCTION public.eliminar_colaborador(uuid, text)  TO authentica
 
 
 -- ###########################################################################
--- ##  PARTE 17 de 27 — O CLIENTE DA VENDA ENTRA SOZINHO NA CARTEIRA
+-- ##  PARTE 17 de 28 — O CLIENTE DA VENDA ENTRA SOZINHO NA CARTEIRA
 -- ###########################################################################
 
 -- =============================================================================
@@ -13405,7 +13406,7 @@ GRANT EXECUTE ON FUNCTION public.register_sale_by_phone(jsonb, text, text, publi
 
 
 -- ###########################################################################
--- ##  PARTE 18 de 27 — TAREFAS, GESTOR RESPONSÁVEL E CORRECÇÃO DE VENDAS
+-- ##  PARTE 18 de 28 — TAREFAS, GESTOR RESPONSÁVEL E CORRECÇÃO DE VENDAS
 -- ###########################################################################
 
 -- =============================================================================
@@ -13809,7 +13810,7 @@ FOR EACH ROW EXECUTE FUNCTION public.venda_com_comissao_paga_nao_muda();
 
 
 -- ###########################################################################
--- ##  PARTE 19 de 27 — FEED CLIENTES: COMUNICADOS SÓ PARA A EQUIPA
+-- ##  PARTE 19 de 28 — FEED CLIENTES: COMUNICADOS SÓ PARA A EQUIPA
 -- ###########################################################################
 
 -- =============================================================================
@@ -14123,7 +14124,7 @@ $$;
 
 
 -- ###########################################################################
--- ##  PARTE 20 de 27 — A GESTÃO REGISTA VENDAS, COM OU SEM COLABORADOR
+-- ##  PARTE 20 de 28 — A GESTÃO REGISTA VENDAS, COM OU SEM COLABORADOR
 -- ###########################################################################
 
 -- =============================================================================
@@ -14509,7 +14510,7 @@ END $$;
 
 
 -- ###########################################################################
--- ##  PARTE 21 de 27 — DESPESAS E INVESTIMENTO: A COMISSÃO PAGA A EMPRESA
+-- ##  PARTE 21 de 28 — DESPESAS E INVESTIMENTO: A COMISSÃO PAGA A EMPRESA
 -- ###########################################################################
 
 -- =============================================================================
@@ -15692,7 +15693,7 @@ END $$;
 
 
 -- ###########################################################################
--- ##  PARTE 22 de 27 — ACTIVO DA PROVÍNCIA: O QUE SOBRA DEPOIS DAS DESPESAS
+-- ##  PARTE 22 de 28 — ACTIVO DA PROVÍNCIA: O QUE SOBRA DEPOIS DAS DESPESAS
 -- ###########################################################################
 
 -- =============================================================================
@@ -15905,7 +15906,7 @@ GRANT EXECUTE ON FUNCTION public.activo_provincia(uuid) TO authenticated;
 
 
 -- ###########################################################################
--- ##  PARTE 23 de 27 — SALDO CONTABILÍSTICO (META DO GESTOR) E VISÃO DA EMPRESA
+-- ##  PARTE 23 de 28 — SALDO CONTABILÍSTICO (META DO GESTOR) E VISÃO DA EMPRESA
 -- ###########################################################################
 
 -- =============================================================================
@@ -16447,7 +16448,7 @@ GRANT EXECUTE ON FUNCTION public.activo_provincia(uuid)                         
 
 
 -- ###########################################################################
--- ##  PARTE 24 de 27 — PAINEL FINANCEIRO: OS OITO INDICADORES NAS MÃOS DO GESTOR
+-- ##  PARTE 24 de 28 — PAINEL FINANCEIRO: OS OITO INDICADORES NAS MÃOS DO GESTOR
 -- ###########################################################################
 
 -- =============================================================================
@@ -17477,7 +17478,7 @@ GRANT EXECUTE ON FUNCTION public.activo_provincia(uuid)                 TO authe
 
 
 -- ###########################################################################
--- ##  PARTE 25 de 27 — LOJAS: CÓDIGO, NOME, PROVÍNCIA E GERENTE EM CADA FLUXO
+-- ##  PARTE 25 de 28 — LOJAS: CÓDIGO, NOME, PROVÍNCIA E GERENTE EM CADA FLUXO
 -- ###########################################################################
 
 -- =============================================================================
@@ -18605,7 +18606,7 @@ GRANT EXECUTE ON FUNCTION public.decide_stock_transfer(uuid, boolean)        TO 
 
 
 -- ###########################################################################
--- ##  PARTE 26 de 27 — REVENDEDOR: PREÇO DE GROSSO, PEDIDOS E CANDIDATURAS
+-- ##  PARTE 26 de 28 — REVENDEDOR: PREÇO DE GROSSO, PEDIDOS E CANDIDATURAS
 -- ###########################################################################
 
 -- =============================================================================
@@ -19443,7 +19444,7 @@ GRANT EXECUTE ON FUNCTION public.limpar_preco_revenda(uuid)               TO aut
 
 
 -- ###########################################################################
--- ##  PARTE 27 de 27 — CANDIDATURA A REVENDEDOR: DETALHE, RESPOSTA E ANTI-DUPLICADO
+-- ##  PARTE 27 de 28 — CANDIDATURA A REVENDEDOR: DETALHE, RESPOSTA E ANTI-DUPLICADO
 -- ###########################################################################
 
 -- =============================================================================
@@ -19547,3 +19548,96 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.decidir_candidatura_revendedor(uuid, text, text) TO authenticated;
+
+
+-- ###########################################################################
+-- ##  PARTE 28 de 28 — 21 PROVÍNCIAS: ICOLO E BENGO, CUANDO E MOXICO LESTE
+-- ###########################################################################
+
+-- =============================================================================
+-- 0028 — 21 PROVÍNCIAS
+-- =============================================================================
+-- A divisão político-administrativa de 2024 passou Angola de 18 para 21
+-- províncias. As três novas nascem de desdobramentos:
+--
+--   · Icolo e Bengo  — saiu de Luanda (capital Catete)
+--   · Cuando         — saiu do Cuando Cubango (capital Mavinga)
+--   · Moxico Leste   — saiu do Moxico (capital Cazombo)
+--
+-- E o Cuando Cubango passou a chamar-se **Cubango** (mesmo código CCU, mesmo
+-- id): sem isso ficavam duas províncias com «Cuando» no nome, uma delas a
+-- designar um território que já não lhe pertence.
+--
+-- Cada província nova recebe a sua loja principal, com o código nascido do
+-- código da província (`ICB-01`, `CDO-01`, `MXL-01`), tal como as outras 18.
+-- Sem isso, os fluxos de stock, vendas e despesas dessas províncias não teriam
+-- loja a que pertencer.
+--
+-- Idempotente: pode ser executada mais do que uma vez.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- 1. AS TRÊS PROVÍNCIAS NOVAS
+-- -----------------------------------------------------------------------------
+INSERT INTO public.provincias (nome, codigo, slug, capital, delegacao_nome, is_default)
+VALUES
+  ('Icolo e Bengo', 'ICB', 'icolo-e-bengo', 'Catete',  'Delegação do Icolo e Bengo', false),
+  ('Cuando',        'CDO', 'cuando',         'Mavinga', 'Delegação do Cuando',        false),
+  ('Moxico Leste',  'MXL', 'moxico-leste',   'Cazombo', 'Delegação do Moxico Leste',  false)
+ON CONFLICT (codigo) DO NOTHING;
+
+-- -----------------------------------------------------------------------------
+-- 2. CUANDO CUBANGO PASSA A CHAMAR-SE CUBANGO
+-- -----------------------------------------------------------------------------
+-- `nome` é UNIQUE: o `NOT EXISTS` evita rebentar numa base onde já alguém
+-- tenha criado «Cubango» à mão.
+UPDATE public.provincias
+   SET nome          = 'Cubango',
+       delegacao_nome = 'Delegação do Cubango',
+       updated_at    = now()
+ WHERE codigo = 'CCU'
+   AND nome = 'Cuando Cubango'
+   AND NOT EXISTS (SELECT 1 FROM public.provincias WHERE nome = 'Cubango');
+
+-- -----------------------------------------------------------------------------
+-- 3. A LOJA PRINCIPAL DE CADA PROVÍNCIA NOVA
+-- -----------------------------------------------------------------------------
+-- Mesma regra da 0025: uma loja principal por província, código `<COD>-01`.
+INSERT INTO public.lojas (codigo, nome, provincia_id, is_default)
+SELECT pr.codigo || '-01',
+       'Loja ' || pr.nome,
+       pr.id,
+       true
+FROM public.provincias pr
+WHERE NOT EXISTS (
+        SELECT 1 FROM public.lojas l
+        WHERE l.provincia_id = pr.id AND l.is_default
+      )
+  AND NOT EXISTS (
+        SELECT 1 FROM public.lojas l
+        WHERE upper(l.codigo) = upper(pr.codigo || '-01')
+      );
+
+-- -----------------------------------------------------------------------------
+-- 4. CONFERÊNCIA
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v_total int;
+  v_sem_loja int;
+BEGIN
+  SELECT count(*) INTO v_total FROM public.provincias WHERE is_active;
+  IF v_total < 21 THEN
+    RAISE WARNING 'Só há % províncias activas (esperadas 21).', v_total;
+  END IF;
+
+  SELECT count(*) INTO v_sem_loja
+  FROM public.provincias pr
+  WHERE pr.is_active
+    AND NOT EXISTS (
+      SELECT 1 FROM public.lojas l WHERE l.provincia_id = pr.id AND l.is_default
+    );
+  IF v_sem_loja > 0 THEN
+    RAISE WARNING '% província(s) activa(s) sem loja principal.', v_sem_loja;
+  END IF;
+END $$;

@@ -76,6 +76,7 @@ for (const rel of [
   "migrations/0025_lojas.sql",
   "migrations/0026_revendedores.sql",
   "migrations/0027_candidaturas_detalhe.sql",
+  "migrations/0028_vinte_e_uma_provincias.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -773,7 +774,7 @@ console.log("\n--- 14. GESTÃO MULTIPROVINCIAL ---");
 
 // 14.1 províncias semeadas
 const provs = await q(`SELECT codigo, nome, is_default FROM public.provincias ORDER BY nome`);
-check("18 províncias semeadas", provs.length === 18, String(provs.length));
+check("21 províncias semeadas", provs.length === 21, String(provs.length));
 check("existe uma única província-sede", provs.filter((p) => p.is_default).length === 1,
   JSON.stringify(provs.filter((p) => p.is_default).map((p) => p.codigo)));
 
@@ -1069,7 +1070,7 @@ const visao = await asUser(MANAGER, async () => q(`SELECT public.province_overvi
 const linhasVisao = visao[0].r;
 const uigeVisao = linhasVisao.find((p) => p.codigo === "UIG");
 check("administração nacional compara províncias",
-  Array.isArray(linhasVisao) && linhasVisao.length === 18, String(linhasVisao.length));
+  Array.isArray(linhasVisao) && linhasVisao.length === 21, String(linhasVisao.length));
 check("comparação traz stock e vendas por província",
   uigeVisao && uigeVisao.stock_total === 23 && Number(uigeVisao.vendas_valor) === 24000,
   JSON.stringify({ stock: uigeVisao?.stock_total, vendas: uigeVisao?.vendas_valor }));
@@ -1360,7 +1361,7 @@ check("visão geral conta colaboradores activos e inactivos",
     && Number(ov[0].r.totais.colaboradores_ativos) >= 1,
   JSON.stringify(ov[0].r.totais.colaboradores));
 check("visão geral separa as províncias",
-  ov[0].r.provincias.length === 18
+  ov[0].r.provincias.length === 21
     && ov[0].r.provincias.some((p) => p.codigo === "UIG" && Number(p.vendas_valor) > 0),
   String(ov[0].r.provincias.length));
 check("visão geral traz o ranking de colaboradores",
@@ -3788,7 +3789,7 @@ const activoNac = await asUser(MANAGER, async () =>
 const aNac = activoNac[0].r;
 
 check("a administração nacional vê o activo de todas as províncias",
-  aNac.scope === "nacional" && Array.isArray(aNac.linhas) && aNac.linhas.length === 18,
+  aNac.scope === "nacional" && Array.isArray(aNac.linhas) && aNac.linhas.length === 21,
   JSON.stringify({ scope: aNac.scope, linhas: (aNac.linhas ?? []).length }));
 
 const uigeActivo = (aNac.linhas ?? []).find((l) => l.id === UIG);
@@ -4090,7 +4091,7 @@ check("a meta da empresa é a que a administração escreveu",
   && Number(painelNac[0].r.total.indicadores.activo_total.valor) === 4000000,
   JSON.stringify(painelNac[0].r.total.indicadores));
 check("o painel nacional continua a listar todas as províncias",
-  painelNac[0].r.scope === "nacional" && painelNac[0].r.linhas.length === 18,
+  painelNac[0].r.scope === "nacional" && painelNac[0].r.linhas.length === 21,
   `${painelNac[0].r.scope} / ${painelNac[0].r.linhas.length}`);
 
 // 25.11 repor tudo no automático
@@ -4483,7 +4484,7 @@ const lojasProv = await q(`
   LEFT JOIN public.lojas l ON l.provincia_id = pr.id AND l.is_default
   ORDER BY pr.codigo`);
 check("cada província tem a sua loja principal",
-  lojasProv.length === 18 && lojasProv.every((l) => l.loja_codigo && l.is_default),
+  lojasProv.length === 21 && lojasProv.every((l) => l.loja_codigo && l.is_default),
   JSON.stringify(lojasProv.filter((l) => !l.loja_codigo).map((l) => l.provincia_codigo)));
 check("o código da loja nasce do código da província",
   lojasProv.every((l) => l.loja_codigo === `${l.provincia_codigo}-01`),
@@ -4665,6 +4666,54 @@ check("a província gere todas as lojas, mas só corrige a sua",
 
 // Higiene: a loja de teste não fica com valores pendurados.
 await asUser(M_UIGE, async () => q(`SELECT public.limpar_indicadores_loja('${idNova}')`));
+
+console.log("\n--- 29. 21 PROVÍNCIAS (0028) ---");
+
+// 29.1 a divisão de 2024: 18 + 3
+const totalProv = await q(`SELECT count(*)::int n FROM public.provincias WHERE is_active`);
+check("Angola tem 21 províncias activas", totalProv[0].n === 21, String(totalProv[0].n));
+
+const novasProv = await q(`
+  SELECT codigo, nome, capital FROM public.provincias
+  WHERE codigo IN ('ICB', 'CDO', 'MXL') ORDER BY codigo`);
+check("as três províncias novas existem com capital",
+  novasProv.length === 3 &&
+  novasProv.every((p) => p.nome && p.capital),
+  JSON.stringify(novasProv));
+check("Icolo e Bengo, Cuando e Moxico Leste",
+  novasProv.map((p) => p.nome).join(" | ") === "Cuando | Icolo e Bengo | Moxico Leste",
+  novasProv.map((p) => p.nome).join(" | "));
+
+// 29.2 o Cuando Cubango passou a Cubango, sem mudar de código
+const cubango = await q(`
+  SELECT nome FROM public.provincias WHERE codigo = 'CCU'`);
+check("o Cuando Cubango passou a Cubango",
+  cubango[0].nome === "Cubango", cubango[0].nome);
+
+// 29.3 cada província nova tem loja principal, com o código dela
+const lojasNovas = await q(`
+  SELECT pr.codigo AS provincia_codigo, l.codigo AS loja_codigo, l.is_default
+  FROM public.provincias pr
+  LEFT JOIN public.lojas l ON l.provincia_id = pr.id AND l.is_default
+  WHERE pr.codigo IN ('ICB', 'CDO', 'MXL') ORDER BY pr.codigo`);
+check("as províncias novas têm loja principal",
+  lojasNovas.length === 3 &&
+  lojasNovas.every((l) => l.is_default && l.loja_codigo === `${l.provincia_codigo}-01`),
+  JSON.stringify(lojasNovas));
+
+// 29.4 nenhuma província activa ficou sem loja
+const semLoja = await q(`
+  SELECT count(*)::int n FROM public.provincias pr
+  WHERE pr.is_active
+    AND NOT EXISTS (SELECT 1 FROM public.lojas l
+                    WHERE l.provincia_id = pr.id AND l.is_default)`);
+check("nenhuma província activa ficou sem loja", semLoja[0].n === 0, String(semLoja[0].n));
+
+// 29.5 o formulário de revendedor lista as 21
+const provsFormulario = await q(`
+  SELECT count(*)::int n FROM public.provincias WHERE is_active`);
+check("o formulário público passa a oferecer 21 províncias",
+  provsFormulario[0].n === 21, String(provsFormulario[0].n));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

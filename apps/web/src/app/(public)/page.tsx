@@ -3,12 +3,12 @@ import Link from "next/link";
 import {
   ArrowRight,
   BadgeCheck,
-  Building2,
   CreditCard,
   Download,
   Headphones,
   LogIn,
   Sparkles,
+  Store,
   Truck,
   Users,
 } from "lucide-react";
@@ -187,13 +187,25 @@ export default async function HomePage() {
                 Ver catálogo
                 <ArrowRight className="h-4 w-4" />
               </Link>
-              <Link
-                href="/colaborador"
-                className="inline-flex items-center gap-2 rounded-lg border border-[#C9A962]/50 bg-[#C9A962]/5 px-6 py-3 text-sm font-medium text-[#C9A962] transition hover:bg-[#C9A962] hover:text-[#0A0A0A]"
-              >
-                <Users className="h-4 w-4" />
-                Quero ser colaborador
-              </Link>
+              {/* As duas portas de quem quer ganhar com a INUKA — uma por
+                  comissão, outra por margem. Ficam empilhadas e com o mesmo
+                  aspecto: só o ícone e o texto mudam. */}
+              <div className="flex flex-col items-stretch gap-2">
+                <Link
+                  href="/colaborador"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#C9A962]/50 bg-[#C9A962]/5 px-6 py-3 text-sm font-medium text-[#C9A962] transition hover:bg-[#C9A962] hover:text-[#0A0A0A]"
+                >
+                  <Users className="h-4 w-4" />
+                  Quero ser colaborador
+                </Link>
+                <Link
+                  href="/revendedor"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#C9A962]/50 bg-[#C9A962]/5 px-6 py-3 text-sm font-medium text-[#C9A962] transition hover:bg-[#C9A962] hover:text-[#0A0A0A]"
+                >
+                  <Store className="h-4 w-4" />
+                  Ser revendedor INUKA
+                </Link>
+              </div>
               <Link
                 href="/download"
                 className="inline-flex items-center gap-2 rounded-lg px-2 py-3 text-sm font-medium text-[#A3A3A3] transition hover:text-[#C9A962]"
@@ -202,27 +214,6 @@ export default async function HomePage() {
                 Descarregar a app
               </Link>
             </div>
-
-            {/* A porta do grosso fica logo abaixo da porta do colaborador:
-                são os dois caminhos de quem quer ganhar com a INUKA — um por
-                comissão, outro por margem. */}
-            <Link
-              href="/revendedor"
-              className="group mt-3 flex max-w-md items-center gap-3 rounded-xl border border-[#C9A962]/30 bg-[#C9A962]/5 px-4 py-3 transition hover:border-[#C9A962]/70 hover:bg-[#C9A962]/10"
-            >
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#C9A962]/10 text-[#C9A962]">
-                <Building2 className="h-4 w-4" />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-medium text-[#C9A962]">
-                  Ser revendedor INUKA
-                </span>
-                <span className="block text-[11px] leading-snug text-[#8A8A8A]">
-                  Compre ao preço de grosso, a partir de 5 unidades, e revenda em Angola.
-                </span>
-              </span>
-              <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-[#C9A962] transition group-hover:translate-x-0.5" />
-            </Link>
 
             {/* O feed é a montra viva da marca: promoções e testemunhos. Fica
                 aqui como ligação discreta — o hero já tem botões suficientes,
