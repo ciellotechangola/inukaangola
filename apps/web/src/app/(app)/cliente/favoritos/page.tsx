@@ -86,14 +86,14 @@ export default function FavoritesPage() {
                 key={row.product_id}
                 className="flex gap-4 rounded-xl border border-[#262626] bg-[#1A1A1A] p-4"
               >
-                <div className="h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-[#0A0A0A]">
+                <div className="foto-painel h-20 w-20 shrink-0 rounded-lg">
                   {image ? (
                     <ProductImage
                       src={image}
                       alt={p.name}
                       width={80}
                       height={80}
-                      className="h-full w-full object-cover"
+                      className="h-full w-full object-contain p-1.5"
                     />
                   ) : (
                     <div className="flex h-full items-center justify-center text-xs text-[#404040]">

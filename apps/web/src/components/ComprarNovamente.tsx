@@ -58,7 +58,7 @@ export default function ComprarNovamente({ produtos }: { produtos: ProdutoParaRe
             >
               <Link
                 href={`/produto/${p.id}`}
-                className="h-14 w-14 shrink-0 overflow-hidden rounded-md bg-[#0A0A0A]"
+                className="foto-painel h-14 w-14 shrink-0 rounded-md"
               >
                 {p.image ? (
                   <ProductImage
@@ -66,7 +66,7 @@ export default function ComprarNovamente({ produtos }: { produtos: ProdutoParaRe
                     alt={p.name}
                     width={56}
                     height={56}
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-contain p-1"
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center text-[10px] text-[#404040]">

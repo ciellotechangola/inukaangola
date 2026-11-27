@@ -58,6 +58,35 @@ body {
 }
 
 /* ==========================================================================
+   FOTOGRAFIA DE PRODUTO — painel branco uniforme
+   As fotografias oficiais do catálogo têm fundo branco. Num contentor escuro
+   apareciam faixas pretas em volta do frasco: a fotografia é retrato e a
+   caixa é quadrada, por isso sobrava sempre espaço vazio. Com o painel branco
+   a fotografia funde-se com o fundo, o produto fica centrado e todos os
+   cartões passam a ter o mesmo enquadramento.
+
+   `object-fit: contain` é obrigatório: garante que nenhum produto é cortado
+   nem distorcido. O espaço que sobra deixa de ser «buraco preto» e passa a
+   ser a continuação natural do fundo da fotografia.
+   ========================================================================== */
+.foto-painel {
+  position: relative;
+  overflow: hidden;
+  background-color: #ffffff;
+  /* Em vez de uma moldura pesada: 1px quase invisível que separa o painel
+     branco do cartão escuro sem parecer uma caixa. */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+.foto-painel img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+}
+
+/* ==========================================================================
    TELEMÓVEL
    A loja e a área de gestão são usadas sobretudo no telemóvel. Estas regras
    valem para todo o site e evitam os três defeitos clássicos em mobile.

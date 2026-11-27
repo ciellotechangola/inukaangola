@@ -185,7 +185,7 @@ export default function CartPage() {
               <div className="flex items-start gap-3 sm:gap-4">
                 <Link
                   href={`/produto/${item.product_id}`}
-                  className="h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-[#0A0A0A] sm:h-24 sm:w-24"
+                  className="foto-painel h-20 w-20 shrink-0 rounded-lg sm:h-24 sm:w-24"
                 >
                   {item.image ? (
                     <ProductImage
@@ -193,7 +193,7 @@ export default function CartPage() {
                       alt={item.name}
                       width={96}
                       height={96}
-                      className="h-full w-full object-cover"
+                      className="h-full w-full object-contain p-1.5"
                     />
                   ) : (
                     <div className="flex h-full items-center justify-center text-xs text-[#404040]">

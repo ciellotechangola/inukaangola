@@ -64,66 +64,72 @@ export default function ProductCard({
   return (
     <Link
       href={`/produto/${product.id}`}
-      className="group flex w-full min-w-0 flex-col overflow-hidden rounded-xl border border-[#262626] bg-[#141414] transition hover:border-[#C9A962]/50 hover:shadow-[0_0_24px_-8px_rgba(201,169,98,0.35)]"
+      className="group flex w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-[#232323] bg-[linear-gradient(180deg,#171717_0%,#101010_100%)] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_38px_-26px_rgba(0,0,0,0.95)] transition duration-300 hover:-translate-y-0.5 hover:border-[#C9A962]/45 hover:shadow-[0_1px_0_0_rgba(255,255,255,0.06)_inset,0_26px_48px_-22px_rgba(201,169,98,0.25)]"
     >
-      {/* `object-contain` e não `object-cover`: numa grelha de duas colunas o
-          cartão tem ~150 px e o `cover` cortava as laterais das fotografias
-          não quadradas — o frasco aparecia sem tampa ou sem rótulo. Assim a
-          imagem inteira cabe sempre, com uma margem curta em volta. */}
-      <div className="relative aspect-square overflow-hidden bg-[#0F0F0F]">
-        {imagem ? (
-          <ProductImage
-            src={imagem}
-            alt={product.name}
-            width={400}
-            height={400}
-            sizes="(max-width: 640px) 45vw, (max-width: 1024px) 30vw, 22vw"
-            priority={prioridade}
-            className="h-full w-full object-contain p-1.5 transition duration-500 group-hover:scale-[1.04] sm:p-2"
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_50%_40%,#1C1C1C,#0B0B0B)]">
-            <span className="text-xs tracking-[0.35em] text-[#3A3A3A]">INUKA</span>
-          </div>
-        )}
+      {/* A fotografia vive num painel branco (`foto-painel`) com uma margem
+          curta em volta. Antes o fundo era escuro e, como as fotos oficiais
+          são retrato sobre branco, sobravam faixas pretas de cada lado. Agora
+          o branco da foto continua no painel e o produto fica centrado e
+          sempre do mesmo tamanho, seja qual for a proporção da imagem.
+          `object-contain` e não `object-cover`: numa grelha de duas colunas o
+          cartão tem ~150 px e o `cover` cortava as laterais — o frasco
+          aparecia sem tampa ou sem rótulo. */}
+      <div className="p-1.5 sm:p-2">
+        <div className="foto-painel relative aspect-square overflow-hidden rounded-xl">
+          {imagem ? (
+            <ProductImage
+              src={imagem}
+              alt={product.name}
+              width={400}
+              height={400}
+              sizes="(max-width: 640px) 45vw, (max-width: 1024px) 30vw, 22vw"
+              priority={prioridade}
+              className="h-full w-full object-contain p-2 transition duration-500 group-hover:scale-[1.04] sm:p-3"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(180deg,#FFFFFF_0%,#F4F3F0_100%)]">
+              <span className="text-xs tracking-[0.35em] text-[#C9A962]/35">INUKA</span>
+            </div>
+          )}
 
-        <div className="absolute left-1.5 top-1.5 flex flex-col items-start gap-1 sm:left-2 sm:top-2">
-          {desconto > 0 && (
-            <span className="rounded-full bg-[#C9A962] px-1.5 py-0.5 text-[10px] font-bold leading-tight text-[#0A0A0A] sm:px-2 sm:text-[11px]">
-              -{desconto}%
+          <div className="absolute left-1.5 top-1.5 flex flex-col items-start gap-1 sm:left-2 sm:top-2">
+            {desconto > 0 && (
+              <span className="rounded-full bg-[#C9A962] px-1.5 py-0.5 text-[10px] font-bold leading-tight text-[#0A0A0A] shadow-sm sm:px-2 sm:text-[11px]">
+                -{desconto}%
+              </span>
+            )}
+            {product.is_new && (
+              <span className="rounded-full bg-[#0A0A0A]/85 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-[#C9A962] backdrop-blur-sm sm:px-2 sm:text-[11px]">
+                Novo
+              </span>
+            )}
+          </div>
+
+          {jaComprou && !esgotado && (
+            <span className="absolute right-1.5 top-1.5 rounded-full bg-[#0A0A0A]/85 px-1.5 py-0.5 text-[9px] font-medium leading-tight text-[#C9A962] backdrop-blur-sm sm:right-2 sm:top-2 sm:px-2 sm:text-[10px]">
+              Já comprou
             </span>
           )}
-          {product.is_new && (
-            <span className="rounded-full border border-[#C9A962]/50 bg-[#0A0A0A]/85 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-[#C9A962] sm:px-2 sm:text-[11px]">
-              Novo
+
+          {esgotado && (
+            <div className="absolute inset-0 flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
+              <span className="rounded-full bg-[#0A0A0A]/85 px-2.5 py-1 text-[11px] font-medium text-[#F5F5F5] sm:px-3 sm:text-xs">
+                Esgotado
+              </span>
+            </div>
+          )}
+
+          {/* Sinal de que há mais do que uma fotografia — a página do produto
+              desliza entre elas. */}
+          {variasFotos && (
+            <span className="absolute bottom-1.5 right-1.5 rounded-full bg-[#0A0A0A]/80 px-1.5 py-0.5 text-[9px] font-medium text-[#E5E5E5] backdrop-blur-sm sm:text-[10px]">
+              {(product.images ?? []).filter((i) => i.url).length} fotos
             </span>
           )}
         </div>
-
-        {jaComprou && !esgotado && (
-          <span className="absolute right-1.5 top-1.5 rounded-full border border-[#C9A962]/40 bg-[#0A0A0A]/85 px-1.5 py-0.5 text-[9px] font-medium leading-tight text-[#C9A962] sm:right-2 sm:top-2 sm:px-2 sm:text-[10px]">
-            Já comprou
-          </span>
-        )}
-
-        {esgotado && (
-          <div className="absolute inset-0 flex items-center justify-center bg-[#0A0A0A]/72">
-            <span className="rounded-full border border-[#4A4A4A] px-2.5 py-1 text-[11px] font-medium text-[#C9C9C9] sm:px-3 sm:text-xs">
-              Esgotado
-            </span>
-          </div>
-        )}
-
-        {/* Sinal de que há mais do que uma fotografia — a página do produto
-            desliza entre elas. */}
-        {variasFotos && (
-          <span className="absolute bottom-1.5 right-1.5 rounded-full bg-[#0A0A0A]/80 px-1.5 py-0.5 text-[9px] font-medium text-[#E5E5E5] sm:text-[10px]">
-            {(product.images ?? []).filter((i) => i.url).length} fotos
-          </span>
-        )}
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5 p-2.5 sm:gap-1 sm:p-3.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5 px-2.5 pb-2.5 pt-1 sm:px-3.5 sm:pb-3.5 sm:pt-1.5">
         {product.category?.name && (
           // Uma linha só: «PERFUMARIA FEMININA» ocupava duas linhas em letras
           // maiúsculas e empurrava o preço para fora do cartão.

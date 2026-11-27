@@ -966,7 +966,7 @@ export default function ManagerProductsPage() {
               {previews.map((src, i) => (
                 <div
                   key={src}
-                  className="relative h-24 w-24 shrink-0 overflow-hidden rounded-lg border border-[#333] bg-[#0A0A0A]"
+                  className="foto-painel relative h-24 w-24 shrink-0 rounded-lg border border-[#E5E5E5]"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={src} alt={`Pré-visualização ${i + 1}`} className="h-full w-full object-contain p-1" />
@@ -1417,7 +1417,7 @@ export default function ManagerProductsPage() {
                   {(alvo.images ?? []).map((img) => (
                     <div
                       key={img.id}
-                      className={`relative overflow-hidden rounded-lg border bg-[#0A0A0A] ${
+                      className={`foto-painel relative overflow-hidden rounded-lg border ${
                         img.is_primary ? "border-[#C9A962]" : "border-[#333]"
                       }`}
                     >
@@ -1471,7 +1471,7 @@ export default function ManagerProductsPage() {
                     {alvoPreviews.map((src, i) => (
                       <div
                         key={src}
-                        className="relative h-16 w-16 overflow-hidden rounded border border-[#333] bg-[#0A0A0A]"
+                        className="foto-painel relative h-16 w-16 rounded border border-[#E5E5E5]"
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={src} alt="" className="h-full w-full object-contain p-1" />

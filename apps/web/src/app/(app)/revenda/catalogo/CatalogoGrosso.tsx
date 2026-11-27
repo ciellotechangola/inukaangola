@@ -296,14 +296,14 @@ export default function CatalogoGrosso({
                 }`}
               >
                 <div className="flex gap-3">
-                  <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-[#262626] bg-[#0A0A0A]">
+                  <div className="foto-painel h-16 w-16 shrink-0 rounded-lg">
                     {p.imagem ? (
                       <ProductImage
                         src={p.imagem}
                         alt={p.nome}
                         width={64}
                         height={64}
-                        className="h-full w-full object-cover"
+                        className="h-full w-full object-contain p-1"
                       />
                     ) : (
                       <span className="grid h-full w-full place-items-center text-[#333]">

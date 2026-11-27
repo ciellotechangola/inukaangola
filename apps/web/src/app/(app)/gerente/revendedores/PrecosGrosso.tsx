@@ -318,14 +318,14 @@ export default function PrecosGrosso({
                   p.no_catalogo ? "bg-[#141414]" : "bg-[#0F0F0F]"
                 }`}
               >
-                <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-[#262626] bg-[#0A0A0A]">
+                <div className="foto-painel h-10 w-10 shrink-0 rounded-lg">
                   {p.imagem ? (
                     <ProductImage
                       src={p.imagem}
                       alt={p.nome}
                       width={40}
                       height={40}
-                      className="h-full w-full object-cover"
+                      className="h-full w-full object-contain p-0.5"
                     />
                   ) : (
                     <span className="grid h-full w-full place-items-center text-[#333]">
