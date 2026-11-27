@@ -44,6 +44,7 @@ const PARTES = [
   { ficheiro: "migrations/0027_candidaturas_detalhe.sql", titulo: "CANDIDATURA A REVENDEDOR: DETALHE, RESPOSTA E ANTI-DUPLICADO" },
   { ficheiro: "migrations/0028_vinte_e_uma_provincias.sql", titulo: "21 PROVÍNCIAS: ICOLO E BENGO, CUANDO E MOXICO LESTE" },
   { ficheiro: "migrations/0029_rede_revendedores.sql", titulo: "REDE DE VENDEDORES: VISÃO DA GESTÃO E FICHA PROFISSIONAL" },
+  { ficheiro: "migrations/0030_revendedores_grupos_e_feed.sql", titulo: "REVENDEDORES: GRUPOS, MENSAGENS E O MESMO FEED INUKA" },
 ];
 
 const cabecalho = `-- =============================================================================

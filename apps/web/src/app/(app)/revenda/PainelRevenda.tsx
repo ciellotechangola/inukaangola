@@ -8,6 +8,7 @@ import {
   Building2,
   ClipboardList,
   Headphones,
+  Megaphone,
   MessageSquare,
   Package,
   Percent,
@@ -130,7 +131,7 @@ export default function PainelRevenda({
       </section>
 
       {/* ------------------------------------------------------------- ACÇÕES */}
-      <section className="mt-6 grid gap-3 sm:grid-cols-2">
+      <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <Link
           href="/revenda/catalogo"
           className="group flex items-start gap-3 rounded-xl border border-[#262626] bg-[#141414] p-5 transition hover:border-[#C9A962]/50 hover:bg-[#181818]"
@@ -159,6 +160,40 @@ export default function PainelRevenda({
             <span className="block text-sm font-medium text-[#F5F5F5]">Os meus pedidos</span>
             <span className="mt-0.5 block text-xs leading-relaxed text-[#8A8A8A]">
               Estado de cada pedido, cotação e resposta da gestão.
+            </span>
+          </span>
+          <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-[#4A4A4A] transition group-hover:translate-x-0.5 group-hover:text-[#C9A962]" />
+        </Link>
+
+        {/* O Feed Inuka é o mesmo da equipa (0030): a gestão publica uma vez e
+            o aviso chega a colaboradores e revendedores ao mesmo tempo. */}
+        <Link
+          href="/revenda/comunicados"
+          className="group flex items-start gap-3 rounded-xl border border-[#262626] bg-[#141414] p-5 transition hover:border-[#C9A962]/50 hover:bg-[#181818]"
+        >
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[#C9A962]/10 text-[#C9A962]">
+            <Megaphone className="h-5 w-5" />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-[#F5F5F5]">Feed Inuka</span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-[#8A8A8A]">
+              Os mesmos comunicados que a equipa recebe — campanhas, preços e avisos da marca.
+            </span>
+          </span>
+          <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-[#4A4A4A] transition group-hover:translate-x-0.5 group-hover:text-[#C9A962]" />
+        </Link>
+
+        <Link
+          href="/conversas"
+          className="group flex items-start gap-3 rounded-xl border border-[#262626] bg-[#141414] p-5 transition hover:border-[#C9A962]/50 hover:bg-[#181818]"
+        >
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[#C9A962]/10 text-[#C9A962]">
+            <MessageSquare className="h-5 w-5" />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-[#F5F5F5]">Mensagens</span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-[#8A8A8A]">
+              Conversas directas com a gestão e os grupos da rede em que foi incluído.
             </span>
           </span>
           <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-[#4A4A4A] transition group-hover:translate-x-0.5 group-hover:text-[#C9A962]" />

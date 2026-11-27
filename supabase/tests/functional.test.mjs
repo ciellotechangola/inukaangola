@@ -78,6 +78,7 @@ for (const rel of [
   "migrations/0027_candidaturas_detalhe.sql",
   "migrations/0028_vinte_e_uma_provincias.sql",
   "migrations/0029_rede_revendedores.sql",
+  "migrations/0030_revendedores_grupos_e_feed.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -1814,7 +1815,7 @@ try {
   await asUser(M_UIGE, async () =>
     q(`SELECT public.criar_grupo_equipa('Com clientes', ARRAY['${C_UIGE}']::uuid[])`));
 } catch (e) {
-  grupoComClienteRecusado = /só para membros da empresa/i.test(e.message);
+  grupoComClienteRecusado = /cliente não entra em grupos/i.test(e.message);
 }
 check("a gestão não põe um cliente num grupo", grupoComClienteRecusado);
 
@@ -1846,7 +1847,7 @@ try {
   await asUser(M_UIGE, async () =>
     q(`SELECT public.adicionar_membro_grupo('${s17Grupo[0].id}', '${C_UIGE}')`));
 } catch (e) {
-  clienteNaoEntraNoGrupo = /só para membros da empresa/i.test(e.message);
+  clienteNaoEntraNoGrupo = /cliente não entra em grupos/i.test(e.message);
 }
 check("a gestão não acrescenta um cliente ao grupo", clienteNaoEntraNoGrupo);
 
@@ -1857,7 +1858,7 @@ try {
     INSERT INTO public.conversation_members (conversation_id, user_id)
     VALUES ('${s17Grupo[0].id}', '${C_UIGE}')`);
 } catch (e) {
-  gatilhoRecusa = /só para membros da empresa/i.test(e.message);
+  gatilhoRecusa = /cliente não entra em grupos/i.test(e.message);
 }
 check("o gatilho recusa um cliente num grupo", gatilhoRecusa);
 
@@ -4813,6 +4814,118 @@ await asUser(M_UIGE, async () =>
 check("a gestão apaga a nota da ficha",
   (await q(`SELECT nota FROM public.revendedores WHERE id = '${rvId}'`))[0].nota === null,
   String((await q(`SELECT nota FROM public.revendedores WHERE id = '${rvId}'`))[0].nota));
+
+console.log("\n--- 31. REVENDEDORES: GRUPOS, MENSAGENS E FEED INUKA (0030) ---");
+
+// Um revendedor com a conta desligada: serve para provar que a regra olha o
+// `is_active` e não só o papel.
+const REV_OFF = "cccc4444-4444-4444-8444-444444444444";
+await exec(`
+  INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
+    ('${REV_OFF}', 'revoff@inuka.ao', '{"full_name":"Revenda Inactiva","phone":"923000104"}');
+  UPDATE public.profiles SET role = 'reseller', is_active = false WHERE id = '${REV_OFF}';
+`);
+
+// 31.1 o revendedor passou a ser «gente da casa»
+check("o revendedor conta como membro da casa",
+  (await q(`SELECT public.e_membro_equipa('${REV}') AS r`))[0].r === true);
+check("o vendedor de loja também conta (aparecia na lista e não entrava)",
+  (await q(`SELECT public.e_membro_equipa('${LOJA}') AS r`))[0].r === true);
+check("o cliente continua de fora dos grupos",
+  (await q(`SELECT public.e_membro_equipa('${C1}') AS r`))[0].r === false);
+check("uma conta desactivada não conta",
+  (await q(`SELECT public.e_membro_equipa('${REV_OFF}') AS r`))[0].r === false);
+
+// 31.2 quem lê o Feed Inuka
+check("o revendedor lê o Feed Inuka",
+  (await asUser(REV, async () => q(`SELECT public.ve_feed_inuka() AS r`)))[0].r === true);
+check("o colaborador lê o Feed Inuka",
+  (await asUser(S_UIGE, async () => q(`SELECT public.ve_feed_inuka() AS r`)))[0].r === true);
+check("o cliente não lê o Feed Inuka",
+  (await asUser(C1, async () => q(`SELECT public.ve_feed_inuka() AS r`)))[0].r === false);
+
+const kindRev = await asUser(REV, async () =>
+  q(`SELECT public.pode_ver_kind('comunicado') AS comunicado,
+            public.pode_ver_kind('formacao')   AS formacao,
+            public.pode_ver_kind('promocao')   AS promocao`));
+check("o revendedor vê comunicados e formação, como o colaborador",
+  kindRev[0].comunicado === true && kindRev[0].formacao === true && kindRev[0].promocao === true,
+  JSON.stringify(kindRev[0]));
+
+// 31.3 o mesmo comunicado, no feed do revendedor
+const feedRev = await asUser(REV, async () =>
+  q(`SELECT public.conteudo_feed('comunicado') AS r`));
+check("o comunicado da equipa aparece no feed do revendedor",
+  feedRev[0].r.some((c) => c.id === comunicadoId),
+  JSON.stringify((feedRev[0].r ?? []).map((c) => c.title)));
+check("o revendedor e o colaborador vêem exactamente a mesma lista",
+  JSON.stringify((feedRev[0].r ?? []).map((c) => c.id).sort()) ===
+    JSON.stringify((feedColab[0].r ?? []).map((c) => c.id).sort()),
+  `${feedRev[0].r.length} vs ${feedColab[0].r.length}`);
+
+const feedRevCliente = await asUser(C1, async () =>
+  q(`SELECT public.conteudo_feed('comunicado') AS r`));
+check("o cliente continua sem ver o comunicado",
+  !feedRevCliente[0].r.some((c) => c.id === comunicadoId),
+  String(feedRevCliente[0].r.length));
+
+// 31.4 a gestão cria um grupo com revendedores dentro
+const grupoRev = (await asUser(MANAGER, async () =>
+  q(`SELECT public.criar_grupo_equipa('Rede de grosso', ARRAY['${REV}', '${REV2}']::uuid[]) AS id`)))[0].id;
+check("a gestão cria um grupo com revendedores", !!grupoRev, String(grupoRev));
+
+const membrosGrupo = await q(`
+  SELECT count(*)::int n FROM public.conversation_members WHERE conversation_id = '${grupoRev}'`);
+check("o grupo fica com o gestor e os dois revendedores", membrosGrupo[0].n === 3,
+  String(membrosGrupo[0].n));
+
+const grupoDoRev = (await asUser(REV, async () =>
+  q(`SELECT count(*)::int n FROM public.conversations WHERE id = '${grupoRev}'`)))[0].n;
+check("o revendedor vê o grupo na caixa de entrada", grupoDoRev === 1, String(grupoDoRev));
+
+// 31.5 o revendedor escreve no grupo e o gestor lê
+await asUser(REV, async () =>
+  q(`INSERT INTO public.messages (conversation_id, sender_id, content)
+     VALUES ('${grupoRev}', '${REV}', 'Confirmo a encomenda de segunda.')`));
+const msgNoGrupo = (await asUser(MANAGER, async () =>
+  q(`SELECT count(*)::int n FROM public.messages WHERE conversation_id = '${grupoRev}'`)))[0].n;
+check("a mensagem do revendedor chega ao grupo", msgNoGrupo === 1, String(msgNoGrupo));
+
+// 31.6 um cliente continua a não entrar num grupo
+const clienteNoGrupo = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.adicionar_membro_grupo('${grupoRev}', '${C1}')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("um cliente não é acrescentado a um grupo",
+  /cliente não entra em grupos/i.test(clienteNoGrupo ?? ""),
+  clienteNoGrupo ?? "não deu erro");
+
+// 31.7 a mensagem directa gestor ↔ revendedor não mudou
+const directRev = (await asUser(MANAGER, async () =>
+  q(`SELECT public.get_or_create_direct_conversation('${REV}') AS id`)))[0].id;
+const directOutra = (await asUser(MANAGER, async () =>
+  q(`SELECT public.get_or_create_direct_conversation('${REV}') AS id`)))[0].id;
+check("a conversa directa com um revendedor é reutilizada, não duplicada",
+  directRev === directOutra, `${directRev} vs ${directOutra}`);
+
+await asUser(MANAGER, async () =>
+  q(`INSERT INTO public.messages (conversation_id, sender_id, content)
+     VALUES ('${directRev}', '${MANAGER}', 'Bom dia. O preço novo entra em vigor amanhã.')`));
+const directDoRev = (await asUser(REV, async () =>
+  q(`SELECT count(*)::int n FROM public.messages WHERE conversation_id = '${directRev}'`)))[0].n;
+check("o revendedor recebe a mensagem individual do gestor", directDoRev === 1, String(directDoRev));
+
+const revResponde = await asUser(REV, async () => {
+  try {
+    await q(`INSERT INTO public.messages (conversation_id, sender_id, content)
+             VALUES ('${directRev}', '${REV}', 'Recebido, obrigado.')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("o revendedor responde na conversa individual", revResponde === null,
+  revResponde ?? "ok");
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

@@ -1055,7 +1055,7 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
                   </p>
                   <p className="truncate text-[11px] text-[#6F6F6F]">
                     {activa.type === "group"
-                      ? `grupo da equipa · ${activa.membros.length} ${activa.membros.length === 1 ? "membro" : "membros"}`
+                      ? `grupo · ${activa.membros.length} ${activa.membros.length === 1 ? "membro" : "membros"}`
                       : (ETIQUETA_PAPEL[activa.membros.find((m) => m.id !== eu?.id)?.role ?? ""] ??
                         "conversa directa")}
                   </p>
@@ -1369,15 +1369,15 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
                   {modal === "direct"
                     ? "Nova conversa"
                     : modal === "group"
-                      ? "Novo grupo da equipa"
+                      ? "Novo grupo"
                       : "Membros do grupo"}
                 </h2>
                 <p className="mt-0.5 text-xs leading-snug text-[#8A8A8A]">
                   {modal === "direct"
                     ? "Escolha com quem quer falar."
                     : modal === "group"
-                      ? "Dê um nome e escolha quem entra."
-                      : "Junte ou remova pessoas da equipa."}
+                      ? "Dê um nome e escolha quem entra — equipa e revendedores."
+                      : "Junte ou remova pessoas do grupo."}
                 </p>
               </div>
               <button
@@ -1450,14 +1450,42 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
                     className="w-full rounded-xl border border-[#2A2A2A] bg-[#0F0F0F] px-3.5 py-3 text-sm text-[#F5F5F5] placeholder:text-[#6F6F6F] focus:border-[#C9A962]/60 focus:outline-none"
                   />
                   <p className="mt-2 px-1 text-[11px] leading-relaxed text-[#7A7A7A]">
-                    Grupos são só para membros da empresa. Os clientes falam em privado com a
-                    gestão — não entram aqui.
+                    Grupos são para colaboradores, lojas e revendedores. Os clientes falam em
+                    privado com a gestão — não entram aqui.
                   </p>
+
+                  {/* A rede de revendedores é a lista que mais cresce: marcar
+                      um a um num grupo de trinta é trabalho escusado. */}
+                  {contactos.some((c) => c.role === "reseller") && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const revs = contactos
+                            .filter((c) => c.role === "reseller")
+                            .map((c) => c.id);
+                          const todosDentro = revs.every((id) => grupoMembros.includes(id));
+                          setGrupoMembros((prev) =>
+                            todosDentro
+                              ? prev.filter((m) => !revs.includes(m))
+                              : [...new Set([...prev, ...revs])]
+                          );
+                        }}
+                        className="rounded-full border border-[#C9A962]/40 px-2.5 py-1 text-[11px] text-[#C9A962] transition hover:bg-[#C9A962]/10"
+                      >
+                        {contactos
+                          .filter((c) => c.role === "reseller")
+                          .every((c) => grupoMembros.includes(c.id))
+                          ? "Tirar todos os revendedores"
+                          : `Juntar todos os revendedores (${contactos.filter((c) => c.role === "reseller").length})`}
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
                   {contactos.filter((c) => c.role !== "customer").length === 0 ? (
                     <p className="px-3 py-8 text-center text-sm leading-relaxed text-[#8A8A8A]">
-                      Ainda não há colaboradores activos para juntar.
+                      Ainda não há colaboradores nem revendedores activos para juntar.
                     </p>
                   ) : (
                     contactos

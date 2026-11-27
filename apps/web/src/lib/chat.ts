@@ -397,12 +397,13 @@ export async function abrirConversaDirecta(otherUserId: string): Promise<string>
 }
 
 /**
- * Cria um grupo da equipa.
+ * Cria um grupo da casa.
  *
- * Quem cria tem de ser gestão, e os membros têm de ser colaboradores ou
- * gestores activos — a função na base recusa o resto. Não se faz INSERT
- * directo em `conversations`/`conversation_members`: essas políticas passaram
- * a ser exclusivas da gestão e o caminho certo é a RPC, que valida tudo numa
+ * Quem cria tem de ser gestão, e os membros têm de ser colaboradores, vendedores
+ * de loja, gestores ou revendedores activos — a função na base recusa o resto
+ * (`e_membro_equipa`, migração 0030). Não se faz INSERT directo em
+ * `conversations`/`conversation_members`: essas políticas passaram a ser
+ * exclusivas da gestão e o caminho certo é a RPC, que valida tudo numa
  * transacção.
  */
 export async function criarGrupo(

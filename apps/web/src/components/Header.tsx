@@ -125,6 +125,9 @@ export default function Header() {
           { href: "/revenda", label: "Revenda" },
           { href: "/revenda/catalogo", label: "Catálogo de grosso" },
           { href: "/revenda/pedidos", label: "Pedidos" },
+          // O revendedor lê o mesmo Feed Inuka da equipa (0030). Publicar
+          // continua a ser só da gestão.
+          { href: "/revenda/comunicados", label: "Feed Inuka" },
           { href: "/revenda/perfil", label: "Perfil" },
         ]
       : []),
