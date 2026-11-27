@@ -17,7 +17,15 @@ export { BUCKET_ANEXOS, LIMITE_ANEXO };
  * Aqui os membros vêm por id e os nomes são juntados numa segunda consulta.
  */
 
-export type Papel = "customer" | "seller" | "manager";
+/**
+ * Os papéis que o mensageiro distingue.
+ *
+ * A lista tem de acompanhar `user_role`: o tipo antigo só conhecia três e o
+ * `Chat` fazia um `as Papel` sobre o papel real — um revendedor ou um vendedor
+ * de loja ficava tipado como outra coisa qualquer, e uma comparação como
+ * `papel === "reseller"` era recusada pelo TypeScript.
+ */
+export type Papel = "customer" | "seller" | "store_seller" | "manager" | "reseller";
 
 export interface Membro {
   id: string;

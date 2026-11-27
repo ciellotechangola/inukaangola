@@ -1415,7 +1415,9 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
                   {contactosFiltrados.length === 0 ? (
                     <p className="px-3 py-8 text-center text-sm leading-relaxed text-[#8A8A8A]">
                       {contactos.length === 0
-                        ? "Ainda não há contactos disponíveis. A gerência tem de o associar a um colaborador."
+                        ? eu?.papel === "reseller"
+                          ? "Ainda não há gestores disponíveis para a sua província. A administração nacional aparece aqui assim que estiver activa."
+                          : "Ainda não há contactos disponíveis. A gerência tem de o associar a um colaborador."
                         : "Ninguém com esse nome."}
                     </p>
                   ) : (
