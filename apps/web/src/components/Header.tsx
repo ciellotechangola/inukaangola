@@ -64,7 +64,13 @@ export default function Header() {
     // Feed Clientes logo a seguir ao catálogo, e para todos: é a montra viva
     // da marca — promoções e testemunhos — e abre **sem sessão**. Quem chega
     // de um link não pode ter de criar conta para ver o que a INUKA oferece.
-    { href: "/feed", label: "Feed Clientes" },
+    //
+    // O revendedor é a excepção: ele já tem o Feed Inuka no menu, e dois feeds
+    // lado a lado só deixavam a dúvida de qual é o dele. A página continua
+    // pública — sai do menu, não do site.
+    ...(profile?.role === "reseller"
+      ? []
+      : [{ href: "/feed", label: "Feed Clientes" }]),
     // Descarregar fica junto ao catálogo: é a segunda coisa que um visitante
     // procura depois de ver os produtos — ter a app no telemóvel.
     { href: "/download", label: "Descarregar", desde: "md" },
