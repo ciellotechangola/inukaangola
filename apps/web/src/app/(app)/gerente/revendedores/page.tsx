@@ -56,12 +56,33 @@ export interface PedidoLinha {
   provincia: string | null;
 }
 
-export interface ProdutoPreco {
-  id: string;
+/**
+ * Uma linha do cadastro do catálogo de grosso.
+ *
+ * `no_catalogo` é a pergunta que interessa: o produto está à venda a grosso?
+ * Um produto activo na loja pode não estar no grosso — são duas decisões
+ * diferentes.
+ */
+export interface CatalogoProduto {
+  product_id: string;
   nome: string;
   sku: string | null;
-  official_price: number;
-  preco_revenda: number | null;
+  categoria: string | null;
+  imagem: string | null;
+  preco_loja: number;
+  no_catalogo: boolean;
+  /** Preço escrito à mão. `null` = desconto do revendedor / da empresa. */
+  preco_proprio: number | null;
+  preco_grosso: number;
+  nota: string | null;
+  stock: number | null;
+}
+
+export interface CatalogoGestao {
+  minimo_produtos: number;
+  desconto: number;
+  totais: { produtos: number; no_catalogo: number; com_preco: number };
+  produtos: CatalogoProduto[];
 }
 
 interface CandidaturaBruta {
@@ -121,7 +142,7 @@ export default async function RevendedoresPage() {
 
   const supabase = await createClientServer();
 
-  const [provincias, candidaturasRes, revendedoresRes, pedidosRes, produtosRes, precosRes, configRes] =
+  const [provincias, candidaturasRes, revendedoresRes, pedidosRes, produtosRes, catalogoRes, configRes] =
     await Promise.all([
       listarProvincias(supabase),
       supabase
@@ -150,7 +171,10 @@ export default async function RevendedoresPage() {
         .select("id, name, sku, official_price")
         .eq("is_active", true)
         .order("name"),
-      supabase.from("precos_revenda").select("product_id, preco"),
+      // O cadastro do grosso vem inteiro da base (0031): preço de loja, preço
+      // de grosso a valer, e se o produto está inscrito. Uma chamada, uma
+      // verdade — a página não recalcula descontos.
+      supabase.rpc("catalogo_revenda_gestao"),
       supabase
         .from("platform_settings")
         .select("value")
@@ -210,24 +234,84 @@ export default async function RevendedoresPage() {
     provincia: p.provincia?.nome ?? null,
   }));
 
-  const precos = new Map<string, number>();
-  for (const linha of (precosRes.data ?? []) as { product_id: string; preco: string | number }[]) {
-    precos.set(linha.product_id, Number(linha.preco));
-  }
-
-  const produtos: ProdutoPreco[] = (
-    (produtosRes.data ?? []) as { id: string; name: string; sku: string | null; official_price: string | number }[]
-  ).map((p) => ({
-    id: p.id,
-    nome: p.name,
-    sku: p.sku,
-    official_price: Number(p.official_price),
-    preco_revenda: precos.has(p.id) ? (precos.get(p.id) as number) : null,
-  }));
-
   const config = configRes.data as { value?: { value?: number } } | null;
   const descontoEmpresa =
     typeof config?.value?.value === "number" ? config.value.value : 0.35;
+
+  /**
+   * O cadastro do catálogo de grosso.
+   *
+   * Antes da 0031 não existe `catalogo_revenda_gestao()`. Nesse caso monta-se
+   * a mesma lista a partir dos produtos activos, com tudo «no catálogo» — que
+   * é exactamente como o grosso funcionava antes. O ecrã avisa que falta o
+   * patch em vez de ficar vazio, e as acções de inscrever/retirar ficam
+   * desligadas (a base recusaria).
+   */
+  const semCatalogo =
+    !!catalogoRes.error && /PGRST202|PGRST205|does not exist/i.test(catalogoRes.error.message);
+
+  let catalogo: CatalogoGestao;
+
+  if (!semCatalogo && catalogoRes.data) {
+    const bruto = catalogoRes.data as Record<string, unknown>;
+    const totais = (bruto.totais ?? {}) as Record<string, unknown>;
+    const lista = (bruto.produtos ?? []) as Record<string, unknown>[];
+
+    catalogo = {
+      minimo_produtos: Number(bruto.minimo_produtos) || 4,
+      desconto: Number(bruto.desconto) || descontoEmpresa,
+      totais: {
+        produtos: Number(totais.produtos) || 0,
+        no_catalogo: Number(totais.no_catalogo) || 0,
+        com_preco: Number(totais.com_preco) || 0,
+      },
+      produtos: lista.map((p) => ({
+        product_id: String(p.product_id),
+        nome: String(p.nome ?? ""),
+        sku: (p.sku as string | null) ?? null,
+        categoria: (p.categoria as string | null) ?? null,
+        imagem: (p.imagem as string | null) ?? null,
+        preco_loja: Number(p.preco_loja) || 0,
+        no_catalogo: p.no_catalogo === true,
+        preco_proprio:
+          p.preco_proprio === null || p.preco_proprio === undefined
+            ? null
+            : Number(p.preco_proprio),
+        preco_grosso: Number(p.preco_grosso) || 0,
+        nota: (p.nota as string | null) ?? null,
+        stock: p.stock === null || p.stock === undefined ? null : Number(p.stock),
+      })),
+    };
+  } else {
+    const linhas = (produtosRes.data ?? []) as {
+      id: string;
+      name: string;
+      sku: string | null;
+      official_price: string | number;
+    }[];
+
+    catalogo = {
+      minimo_produtos: 1,
+      desconto: descontoEmpresa,
+      totais: { produtos: linhas.length, no_catalogo: linhas.length, com_preco: 0 },
+      produtos: linhas.map((p) => {
+        const loja = Number(p.official_price);
+        return {
+          product_id: p.id,
+          nome: p.name,
+          sku: p.sku,
+          categoria: null,
+          imagem: null,
+          preco_loja: loja,
+          no_catalogo: true,
+          preco_proprio: null,
+          preco_grosso: Math.round(loja * (1 - descontoEmpresa) * 100) / 100,
+          nota: null,
+          stock: null,
+        };
+      }),
+    };
+  }
 
   const novas = candidaturas.filter((c) => c.status === "novo");
   const pendentes = pedidos.filter((p) =>
@@ -281,10 +365,10 @@ export default async function RevendedoresPage() {
         candidaturas={candidaturas}
         revendedores={revendedores}
         pedidos={pedidos}
-        produtos={produtos}
+        catalogo={catalogo}
+        semCatalogo={semCatalogo}
         provincias={provincias.map((p) => ({ id: p.id, nome: p.nome, codigo: p.codigo }))}
         provinciaFixa={provinciaFixa}
-        descontoEmpresa={descontoEmpresa}
       />
     </main>
   );

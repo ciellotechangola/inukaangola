@@ -26,18 +26,25 @@ interface LinhaCarrinho {
 /**
  * Catálogo de grosso com carrinho.
  *
- * A quantidade nunca desce abaixo do mínimo do revendedor: o botão «−» para
- * no mínimo em vez de deixar chegar a 3 e falhar no servidor. O preço mostrado
- * é o que a base devolveu — não há cálculo de desconto no browser.
+ * Duas regras, ambas vindas da base (`minha_revenda().regras`):
+ *   · `minimo` unidades por linha — o botão «−» para no mínimo em vez de
+ *     deixar chegar a 3 e falhar no servidor;
+ *   · `minimoProdutos` produtos **diferentes** por pedido — um pedido de
+ *     grosso com uma linha só é uma compra ao balcão com desconto.
+ *
+ * O preço mostrado é o que a base devolveu. Não há cálculo de desconto no
+ * browser, e o catálogo é só o que a gestão inscreveu no grosso.
  */
 export default function CatalogoGrosso({
   produtos,
   minimo,
+  minimoProdutos,
   revendedor,
   semMigracao,
 }: {
   produtos: ProdutoGrosso[];
   minimo: number;
+  minimoProdutos: number;
   revendedor: string;
   semMigracao: boolean;
 }) {
@@ -82,6 +89,8 @@ export default function CatalogoGrosso({
     (soma, l) => soma + l.produto.preco_grosso * l.quantidade,
     0
   );
+  /** Quantos produtos diferentes faltam para o pedido poder seguir. */
+  const faltam = Math.max(0, minimoProdutos - linhas.length);
 
   function quantidadeDe(p: ProdutoGrosso): number {
     return carrinho[p.product_id] ?? 0;
@@ -118,6 +127,12 @@ export default function CatalogoGrosso({
     setErro("");
     if (linhas.length === 0) {
       setErro("Adicione pelo menos um produto ao pedido.");
+      return;
+    }
+    if (linhas.length < minimoProdutos) {
+      setErro(
+        `O pedido de grosso exige pelo menos ${minimoProdutos} produtos diferentes. Tem ${linhas.length}.`
+      );
       return;
     }
 
@@ -191,7 +206,8 @@ export default function CatalogoGrosso({
         <h1 className="mt-2 text-3xl font-light text-[#F5F5F5]">Catálogo de grosso</h1>
         <p className="mt-1 max-w-2xl text-sm text-[#A3A3A3]">
           Preços de revenda para <strong className="font-medium text-[#E5E5E5]">{revendedor}</strong>.
-          Mínimo de {minimo} unidades por produto. O preço de loja fica ao lado, para ver a margem.
+          Mínimo de {minimo} unidades por produto e {minimoProdutos} produtos diferentes por
+          pedido. O preço de loja fica ao lado, para ver a margem.
         </p>
       </header>
 
@@ -239,9 +255,15 @@ export default function CatalogoGrosso({
           <Package className="mx-auto mb-3 h-6 w-6 text-[#3A3A3A]" />
           <p className="text-sm text-[#A3A3A3]">
             {produtos.length === 0
-              ? "Ainda não há produtos disponíveis para revenda."
+              ? "A gestão ainda não inscreveu produtos no catálogo de grosso."
               : "Nenhum produto corresponde à procura."}
           </p>
+          {produtos.length === 0 && (
+            <p className="mx-auto mt-1 max-w-sm text-xs text-[#5F5F5F]">
+              O catálogo de grosso é escolhido pela administração — não é o mesmo da loja. Quando
+              houver produtos inscritos, eles aparecem aqui.
+            </p>
+          )}
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -366,8 +388,7 @@ export default function CatalogoGrosso({
               <div className="min-w-0 flex-1">
                 <p className="flex items-center gap-2 text-xs text-[#A3A3A3]">
                   <ShoppingCart className="h-3.5 w-3.5 text-[#C9A962]" />
-                  {linhas.length} produto{linhas.length === 1 ? "" : "s"} · {totalUnidades}{" "}
-                  unidades
+                  {linhas.length} de {minimoProdutos} produtos · {totalUnidades} unidades
                   <button
                     type="button"
                     onClick={() => setCarrinho({})}
@@ -377,6 +398,12 @@ export default function CatalogoGrosso({
                     limpar
                   </button>
                 </p>
+                {faltam > 0 && (
+                  <p className="mt-1 text-[11px] text-[#E3D5A7]">
+                    Faltam {faltam} {faltam === 1 ? "produto" : "produtos"} para poder enviar o
+                    pedido.
+                  </p>
+                )}
                 <input
                   value={mensagem}
                   onChange={(e) => setMensagem(e.target.value)}
@@ -394,7 +421,7 @@ export default function CatalogoGrosso({
               <button
                 type="button"
                 onClick={enviarPedido}
-                disabled={aEnviar}
+                disabled={aEnviar || faltam > 0}
                 className="inline-flex items-center gap-2 rounded-lg bg-[#C9A962] px-5 py-2.5 text-sm font-semibold text-[#0A0A0A] transition hover:bg-[#D8BC7A] disabled:opacity-50"
               >
                 {aEnviar ? "A enviar…" : "Enviar pedido"}

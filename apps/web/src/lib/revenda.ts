@@ -47,6 +47,17 @@ export interface Revendedor {
 
 export interface MinhaRevenda {
   revendedor: Revendedor | null;
+  /**
+   * As regras do grosso, calculadas na base.
+   *
+   * `minimo_unidades` é por linha; `minimo_produtos` é por pedido. São duas
+   * regras diferentes e o ecrã mostra as duas — um pedido de grosso com uma
+   * linha só não é um pedido de grosso.
+   */
+  regras: {
+    minimo_unidades: number;
+    minimo_produtos: number;
+  };
   stats: {
     pedidos: number;
     em_curso: number;
@@ -105,6 +116,7 @@ export function normalizarMinhaRevenda(bruto: unknown): MinhaRevenda {
   const rev = (r.revendedor ?? null) as Record<string, unknown> | null;
   const stats = (r.stats ?? {}) as Record<string, unknown>;
   const gestores = (r.gestores ?? {}) as Record<string, unknown>;
+  const regras = (r.regras ?? {}) as Record<string, unknown>;
 
   return {
     revendedor: rev
@@ -125,6 +137,12 @@ export function normalizarMinhaRevenda(bruto: unknown): MinhaRevenda {
           nota: (rev.nota as string | null) ?? null,
         }
       : null,
+    // Sem `regras` (migração 0031 por aplicar) ficam os valores antigos: só o
+    // mínimo de unidades, sem mínimo de produtos.
+    regras: {
+      minimo_unidades: numero(regras.minimo_unidades) || numero(rev?.minimo_unidades) || 5,
+      minimo_produtos: numero(regras.minimo_produtos) || 1,
+    },
     stats: {
       pedidos: numero(stats.pedidos),
       em_curso: numero(stats.em_curso),

@@ -20,8 +20,8 @@ import AcoesPedido from "./AcoesPedido";
 import PrecosGrosso from "./PrecosGrosso";
 import type {
   CandidaturaRev,
+  CatalogoGestao,
   PedidoLinha,
-  ProdutoPreco,
   ProvinciaOpcao,
   RevendedorLinha,
 } from "./page";
@@ -52,18 +52,19 @@ export default function GestaoRevendedores({
   candidaturas,
   revendedores,
   pedidos,
-  produtos,
+  catalogo,
+  semCatalogo,
   provincias,
   provinciaFixa,
-  descontoEmpresa,
 }: {
   candidaturas: CandidaturaRev[];
   revendedores: RevendedorLinha[];
   pedidos: PedidoLinha[];
-  produtos: ProdutoPreco[];
+  catalogo: CatalogoGestao;
+  /** Falta a migração 0031: o cadastro fica em leitura. */
+  semCatalogo: boolean;
   provincias: ProvinciaOpcao[];
   provinciaFixa: string | null;
-  descontoEmpresa: number;
 }) {
   const router = useRouter();
   const [aba, setAba] = useState<Aba>("candidaturas");
@@ -120,8 +121,9 @@ export default function GestaoRevendedores({
           ativo={aba === "precos"}
           onClick={() => setAba("precos")}
           icone={<Tags className="h-3.5 w-3.5" />}
+          contagem={catalogo.totais.no_catalogo}
         >
-          Preços de grosso
+          Catálogo de grosso
         </Separador>
       </div>
 
@@ -310,7 +312,7 @@ export default function GestaoRevendedores({
 
       {/* -------------------------------------------------------------- PREÇOS */}
       {aba === "precos" && (
-        <PrecosGrosso produtos={produtos} descontoEmpresa={descontoEmpresa} />
+        <PrecosGrosso catalogo={catalogo} semCatalogo={semCatalogo} />
       )}
     </div>
   );

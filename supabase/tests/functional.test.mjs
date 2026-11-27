@@ -79,6 +79,7 @@ for (const rel of [
   "migrations/0028_vinte_e_uma_provincias.sql",
   "migrations/0029_rede_revendedores.sql",
   "migrations/0030_revendedores_grupos_e_feed.sql",
+  "migrations/0031_catalogo_grosso_proprio.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -4191,6 +4192,12 @@ check("o catálogo de grosso está fechado a clientes",
   /reservado a revendedores/i.test(catCliente ?? ""), catCliente ?? "não deu erro");
 
 // 27.3 pedidos e mínimo de unidades
+// A 0031 passou a exigir 4 produtos diferentes por pedido. Aqui baixa-se para
+// 1 para isolar a regra do mínimo de **unidades**; a regra dos 4 produtos tem
+// secção própria (32), com o valor real.
+await exec(`UPDATE public.platform_settings SET value = '{"value": 1}'::jsonb
+            WHERE key = 'revenda_minimo_produtos'`);
+
 const rvPedido = await asUser(REV, async () =>
   q(`SELECT public.registar_pedido_revendedor(
        '[{"product_id":"${pGrosso}","quantidade":5}]'::jsonb, 'Primeiro pedido') AS r`));
@@ -4926,6 +4933,170 @@ const revResponde = await asUser(REV, async () => {
 });
 check("o revendedor responde na conversa individual", revResponde === null,
   revResponde ?? "ok");
+
+console.log("\n--- 32. CATÁLOGO DE GROSSO PRÓPRIO E MÍNIMO DE PRODUTOS (0031) ---");
+
+// A secção 27 baixou o mínimo para 1. Aqui volta ao valor real.
+await exec(`UPDATE public.platform_settings SET value = '{"value": 4}'::jsonb
+            WHERE key = 'revenda_minimo_produtos'`);
+
+// Quatro produtos de grosso, criados agora: nenhum deles foi apanhado pela
+// semente da migração, por isso o catálogo começa vazio para eles.
+const gIds = [];
+for (const n of [1, 2, 3, 4]) {
+  const id = (await q(`
+    INSERT INTO public.products (name, sku, official_price, is_active)
+    VALUES ('Grosso ${n}', 'GRS-3${n}', 1000, true) RETURNING id`))[0].id;
+  gIds.push(id);
+}
+
+// Um quinto produto que fica de fora do catálogo até à inscrição em massa.
+const pFora = (await q(`
+  INSERT INTO public.products (name, sku, official_price, is_active)
+  VALUES ('Grosso fora', 'GRS-3X', 1000, true) RETURNING id`))[0].id;
+
+// 32.1 um produto fora do catálogo não chega ao revendedor
+const catAntes = await asUser(REV, async () =>
+  q(`SELECT product_id FROM public.revendedor_catalogo()`));
+check("um produto activo mas não inscrito não aparece no catálogo do revendedor",
+  !catAntes.some((l) => l.product_id === gIds[0]),
+  String(catAntes.length));
+
+// 32.2 o cadastro da gestão
+const gestaoCat = (await asUser(MANAGER, async () =>
+  q(`SELECT public.catalogo_revenda_gestao() AS r`)))[0].r;
+check("o cadastro da gestão lista todos os produtos activos, inscritos ou não",
+  gestaoCat.totais.produtos >= 4 &&
+  gestaoCat.produtos.some((p) => p.product_id === gIds[0] && p.no_catalogo === false),
+  JSON.stringify(gestaoCat.totais));
+check("o cadastro diz quantos produtos estão no grosso",
+  typeof gestaoCat.totais.no_catalogo === "number" &&
+  gestaoCat.totais.no_catalogo >= 1,
+  String(gestaoCat.totais.no_catalogo));
+
+const catClienteGestao = await asUser(C1, async () => {
+  try { await q(`SELECT public.catalogo_revenda_gestao()`); return null; }
+  catch (e) { return e.message; }
+});
+check("um cliente não abre o cadastro do grosso",
+  /Só a gestão/i.test(catClienteGestao ?? ""), catClienteGestao ?? "não deu erro");
+
+// 32.3 inscrever e retirar
+for (const id of gIds) {
+  await asUser(MANAGER, async () => q(`SELECT public.adicionar_produto_catalogo('${id}')`));
+}
+const catDepois = await asUser(REV, async () =>
+  q(`SELECT product_id FROM public.revendedor_catalogo()`));
+check("inscrever um produto põe-no à vista do revendedor",
+  gIds.slice(0, 3).every((id) => catDepois.some((l) => l.product_id === id)),
+  String(catDepois.length));
+
+await asUser(MANAGER, async () => q(`SELECT public.remover_produto_catalogo('${gIds[2]}')`));
+const catRetirado = await asUser(REV, async () =>
+  q(`SELECT product_id FROM public.revendedor_catalogo()`));
+check("retirar um produto tira-o do catálogo do revendedor",
+  !catRetirado.some((l) => l.product_id === gIds[2]),
+  String(catRetirado.length));
+
+// 32.4 o mínimo de produtos diferentes
+const tresProdutos = await asUser(REV, async () => {
+  try {
+    await q(`SELECT public.registar_pedido_revendedor('${JSON.stringify(
+      gIds.slice(0, 3).map((id) => ({ product_id: id, quantidade: 5 }))
+    )}'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("um pedido com 3 produtos diferentes é recusado",
+  /pelo menos 4 produtos diferentes/i.test(tresProdutos ?? ""),
+  tresProdutos ?? "não deu erro");
+
+await asUser(MANAGER, async () => q(`SELECT public.adicionar_produto_catalogo('${gIds[2]}')`));
+
+const pedido4 = (await asUser(REV, async () =>
+  q(`SELECT public.registar_pedido_revendedor('${JSON.stringify(
+    gIds.map((id) => ({ product_id: id, quantidade: 5 }))
+  )}'::jsonb) AS r`)))[0].r;
+check("um pedido com 4 produtos diferentes é aceite",
+  /^RV-\d{4}-\d{4}$/.test(pedido4.numero ?? ""), JSON.stringify(pedido4));
+check("o pedido soma as quatro linhas",
+  pedido4.total_unidades === 20 && Number(pedido4.valor_estimado) > 0,
+  JSON.stringify(pedido4));
+
+const repetido = await asUser(REV, async () => {
+  try {
+    await q(`SELECT public.registar_pedido_revendedor('${JSON.stringify([
+      { product_id: gIds[0], quantidade: 5 },
+      { product_id: gIds[1], quantidade: 5 },
+      { product_id: gIds[2], quantidade: 5 },
+      { product_id: gIds[2], quantidade: 5 },
+    ])}'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("o mesmo produto repetido em duas linhas é recusado",
+  /produtos repetidos/i.test(repetido ?? ""), repetido ?? "não deu erro");
+
+// 32.5 um produto fora do catálogo não entra num pedido, mesmo por dentro
+const foraDoCatalogo = await asUser(REV, async () => {
+  try {
+    await q(`SELECT public.registar_pedido_revendedor('${JSON.stringify([
+      { product_id: gIds[0], quantidade: 5 },
+      { product_id: gIds[1], quantidade: 5 },
+      { product_id: gIds[2], quantidade: 5 },
+      { product_id: pFora, quantidade: 5 },
+    ])}'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("a base recusa um produto que não está no catálogo",
+  /não está no catálogo de grosso/i.test(foraDoCatalogo ?? ""),
+  foraDoCatalogo ?? "não deu erro");
+
+// 32.6 «Repor» limpa o preço mas mantém o produto no catálogo
+await asUser(MANAGER, async () =>
+  q(`SELECT public.definir_preco_revenda('${gIds[0]}', 700, 'Promoção de grosso')`));
+check("o preço escrito pela gestão vale no grosso",
+  Number((await asUser(REV, async () =>
+    q(`SELECT preco_grosso FROM public.revendedor_catalogo() WHERE product_id = '${gIds[0]}'`)))[0]
+    .preco_grosso) === 700);
+
+// O desconto próprio do revendedor foi limpo num teste anterior («limpar
+// desconto»). Repõe-se aqui para provar que «Repor» volta ao desconto **dele**,
+// não ao da empresa.
+await asUser(MANAGER, async () =>
+  q(`SELECT public.actualizar_revendedor('${rvId}', 0.4)`));
+
+await asUser(MANAGER, async () => q(`SELECT public.limpar_preco_revenda('${gIds[0]}')`));
+const depoisDeRepor = (await asUser(REV, async () =>
+  q(`SELECT preco_grosso FROM public.revendedor_catalogo() WHERE product_id = '${gIds[0]}'`)));
+check("«Repor» não retira o produto do catálogo",
+  depoisDeRepor.length === 1, String(depoisDeRepor.length));
+check("«Repor» devolve o produto ao desconto do revendedor",
+  Number(depoisDeRepor[0].preco_grosso) === 600, String(depoisDeRepor[0].preco_grosso));
+
+// 32.7 inscrever o catálogo inteiro
+const inscritosAgora = (await asUser(MANAGER, async () =>
+  q(`SELECT public.adicionar_todos_catalogo() AS n`)))[0].n;
+check("a gestão inscreve o catálogo inteiro de uma vez",
+  typeof inscritosAgora === "number" && inscritosAgora >= 0, String(inscritosAgora));
+
+const todosAtivos = (await q(`
+  SELECT count(*)::int n FROM public.products WHERE is_active`))[0].n;
+const todosCatalogo = (await q(`
+  SELECT count(*)::int n FROM public.precos_revenda`))[0].n;
+check("depois disso todos os produtos activos estão no grosso",
+  todosCatalogo >= todosAtivos, `${todosCatalogo} / ${todosAtivos}`);
+
+// 32.8 as regras chegam ao ecrã do revendedor
+const painelRegras = (await asUser(REV, async () =>
+  q(`SELECT public.minha_revenda() AS r`)))[0].r;
+check("o painel do revendedor traz o mínimo de produtos",
+  painelRegras.regras.minimo_produtos === 4,
+  JSON.stringify(painelRegras.regras));
+check("o painel do revendedor traz o mínimo de unidades",
+  painelRegras.regras.minimo_unidades === 5,
+  JSON.stringify(painelRegras.regras));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);
