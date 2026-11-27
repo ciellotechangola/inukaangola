@@ -20,9 +20,12 @@ export interface CandidaturaRev {
   telefone: string;
   email: string | null;
   nif: string | null;
+  area_atuacao: string | null;
+  representante: string | null;
   provincia_id: string | null;
   provincia: string | null;
   mensagem: string | null;
+  resposta: string | null;
   status: string;
   created_at: string;
 }
@@ -68,8 +71,11 @@ interface CandidaturaBruta {
   telefone: string;
   email: string | null;
   nif: string | null;
+  area_atuacao: string | null;
+  representante: string | null;
   provincia_id: string | null;
   mensagem: string | null;
+  resposta: string | null;
   status: string;
   created_at: string;
   provincia: { nome: string } | null;
@@ -121,7 +127,7 @@ export default async function RevendedoresPage() {
       supabase
         .from("revendedor_candidaturas")
         .select(
-          "id, tipo, nome, telefone, email, nif, provincia_id, mensagem, status, created_at, provincia:provincias(nome)"
+          "id, tipo, nome, telefone, email, nif, area_atuacao, representante, provincia_id, mensagem, resposta, status, created_at, provincia:provincias(nome)"
         )
         .order("created_at", { ascending: false })
         .limit(200),
@@ -152,9 +158,10 @@ export default async function RevendedoresPage() {
         .maybeSingle(),
     ]);
 
-  const emFalta =
-    /PGRST205|PGRST202|does not exist/i.test(candidaturasRes.error?.message ?? "") ||
-    /PGRST205|PGRST202|does not exist/i.test(revendedoresRes.error?.message ?? "");
+  const emFalta = [
+    candidaturasRes.error?.message,
+    revendedoresRes.error?.message,
+  ].some((m) => /PGRST205|PGRST202|PGRST204|42703|does not exist/i.test(m ?? ""));
 
   const candidaturas: CandidaturaRev[] = ((candidaturasRes.data ?? []) as unknown as CandidaturaBruta[]).map(
     (c) => ({
@@ -164,9 +171,12 @@ export default async function RevendedoresPage() {
       telefone: c.telefone,
       email: c.email,
       nif: c.nif,
+      area_atuacao: c.area_atuacao,
+      representante: c.representante,
       provincia_id: c.provincia_id,
       provincia: c.provincia?.nome ?? null,
       mensagem: c.mensagem,
+      resposta: c.resposta,
       status: c.status,
       created_at: c.created_at,
     })
@@ -261,8 +271,9 @@ export default async function RevendedoresPage() {
 
       {emFalta && (
         <div className="mb-6 rounded-xl border border-[#C9A962]/40 bg-[#C9A962]/10 p-4 text-sm text-[#E3D5A7]">
-          Falta aplicar a migração 0026 — cole <code>supabase/PATCH_REVENDEDORES.sql</code> no SQL
-          Editor do Supabase. Até lá esta página fica vazia.
+          Falta aplicar a migração 0026/0027 — cole <code>supabase/PATCH_REVENDEDORES.sql</code> e
+          depois <code>supabase/PATCH_CANDIDATURAS_DETALHE.sql</code> no SQL Editor do Supabase. Até
+          lá esta página fica vazia.
         </div>
       )}
 

@@ -116,8 +116,10 @@ export default async function SerRevendedorPage() {
               Como funciona
             </p>
             <ol className="mt-3 space-y-2 text-xs leading-relaxed text-[#8A8A8A]">
-              <Passo n="1" titulo="Envia a candidatura">
-                Nome da empresa ou seu, telefone, província e o que pretende revender.
+              <Passo n="1" titulo="Envia a solicitação">
+                Escolhe <strong className="font-medium text-[#A3A3A3]">Individual</strong> ou{" "}
+                <strong className="font-medium text-[#A3A3A3]">Empresarial</strong> e preenche os
+                dados. A província decide quem a recebe.
               </Passo>
               <Passo n="2" titulo="A gestão analisa">
                 O gerente da sua província recebe os dados e entra em contacto.

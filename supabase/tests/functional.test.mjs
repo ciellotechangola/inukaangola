@@ -75,6 +75,7 @@ for (const rel of [
   "migrations/0024_painel_financeiro.sql",
   "migrations/0025_lojas.sql",
   "migrations/0026_revendedores.sql",
+  "migrations/0027_candidaturas_detalhe.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -4337,6 +4338,141 @@ check("a gestão devolve o revendedor ao desconto da empresa",
 
 // Higiene: não deixar valores nacionais pendurados.
 await asUser(MANAGER, async () => q(`SELECT public.limpar_indicadores(NULL)`));
+
+console.log("\n--- 28. CANDIDATURA: INDIVIDUAL E EMPRESARIAL (0027) ---");
+
+// 28.1 o detalhe que o formulário novo passou a recolher
+const colunasCand = await q(`
+  SELECT column_name FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name = 'revendedor_candidaturas'`);
+const nomesCol = colunasCand.map((c) => c.column_name);
+check("a candidatura guarda área de atuação, representante e resposta",
+  ["area_atuacao", "representante", "resposta"].every((c) => nomesCol.includes(c)),
+  JSON.stringify(nomesCol));
+
+const indicesCand = await q(`
+  SELECT indexname FROM pg_indexes
+  WHERE schemaname = 'public' AND tablename = 'revendedor_candidaturas'`);
+check("há um índice para travar candidaturas em aberto do mesmo número",
+  indicesCand.some((i) => i.indexname === "revendedor_candidaturas_abertas_idx"),
+  JSON.stringify(indicesCand.map((i) => i.indexname)));
+
+// 28.2 percurso EMPRESARIAL
+const candEmp = (await q(`
+  INSERT INTO public.revendedor_candidaturas
+    (tipo, nome, telefone, nif, email, area_atuacao, representante, provincia_id, mensagem, origem)
+  VALUES ('empresa', 'Kianda Comércio Lda', '+244923000301', '5417000123',
+          'compras@kianda.ao', 'retalho', 'Ana Manuel', '${UIG}',
+          'Queremos revender perfumes.', 'site')
+  RETURNING id`))[0].id;
+
+const candEmpresa = await asUser(M_UIGE, async () =>
+  q(`SELECT tipo, nif, area_atuacao, representante, status, created_at
+     FROM public.revendedor_candidaturas WHERE id = '${candEmp}'`));
+check("a candidatura empresarial chega completa ao gestor da província",
+  candEmpresa[0].tipo === "empresa" &&
+  candEmpresa[0].nif === "5417000123" &&
+  candEmpresa[0].area_atuacao === "retalho" &&
+  candEmpresa[0].representante === "Ana Manuel",
+  JSON.stringify(candEmpresa[0]));
+check("a candidatura nasce com data e estado «novo»",
+  candEmpresa[0].status === "novo" && !!candEmpresa[0].created_at,
+  JSON.stringify({ estado: candEmpresa[0].status, data: candEmpresa[0].created_at }));
+
+// 28.3 percurso INDIVIDUAL
+const candInd = (await q(`
+  INSERT INTO public.revendedor_candidaturas
+    (tipo, nome, telefone, nif, provincia_id)
+  VALUES ('pessoa', 'Joana Bengui', '+244923000302', '004512789LA041', '${UIG}')
+  RETURNING id`))[0].id;
+const candPessoa = await q(`
+  SELECT tipo, area_atuacao, representante FROM public.revendedor_candidaturas
+  WHERE id = '${candInd}'`);
+check("a candidatura individual dispensa empresa, área e representante",
+  candPessoa[0].tipo === "pessoa" &&
+  candPessoa[0].area_atuacao === null &&
+  candPessoa[0].representante === null,
+  JSON.stringify(candPessoa[0]));
+
+// 28.4 responder e mudar de estado na mesma acção
+await asUser(M_UIGE, async () =>
+  q(`SELECT public.decidir_candidatura_revendedor(
+       '${candEmp}', 'em_contacto', 'Ligámos; pediu o catálogo.')`));
+const candResposta = await q(`
+  SELECT status, resposta, handled_at, handled_by
+  FROM public.revendedor_candidaturas WHERE id = '${candEmp}'`);
+check("o gestor registra resposta, estado, data e autor",
+  candResposta[0].status === "em_contacto" &&
+  candResposta[0].resposta === "Ligámos; pediu o catálogo." &&
+  !!candResposta[0].handled_at &&
+  candResposta[0].handled_by === M_UIGE,
+  JSON.stringify(candResposta[0]));
+
+// 28.5 a assinatura antiga (dois argumentos) continua a valer
+await asUser(M_UIGE, async () =>
+  q(`SELECT public.decidir_candidatura_revendedor('${candEmp}', 'aprovado')`));
+const candMantem = await q(
+  `SELECT status, resposta FROM public.revendedor_candidaturas WHERE id = '${candEmp}'`);
+check("mudar só o estado não apaga a resposta já registada",
+  candMantem[0].status === "aprovado" &&
+  candMantem[0].resposta === "Ligámos; pediu o catálogo.",
+  JSON.stringify(candMantem[0]));
+
+// 28.6 resposta em branco limpa o campo
+await asUser(M_UIGE, async () =>
+  q(`SELECT public.decidir_candidatura_revendedor('${candInd}', 'em_contacto', '   ')`));
+check("resposta em branco limpa o campo",
+  (await q(`SELECT resposta FROM public.revendedor_candidaturas WHERE id = '${candInd}'`))[0]
+    .resposta === null);
+
+// 28.7 isolamento por província
+const candForaResp = await asUser(M_LDA, async () => {
+  try {
+    await q(`SELECT public.decidir_candidatura_revendedor('${candInd}', 'recusado', 'x')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("outra província não responde a esta candidatura",
+  /não é da província que gere/i.test(candForaResp ?? ""), candForaResp ?? "não deu erro");
+
+// 28.8 o gestor máximo vê e trata tudo, mesmo sem província
+const candSemProv = (await q(`
+  INSERT INTO public.revendedor_candidaturas (tipo, nome, telefone)
+  VALUES ('pessoa', 'Sem Província', '+244923000303') RETURNING id`))[0].id;
+
+const nacionalVe = await asUser(MANAGER, async () =>
+  q(`SELECT count(*)::int n FROM public.revendedor_candidaturas
+     WHERE id IN ('${candEmp}', '${candInd}', '${candSemProv}')`));
+check("o gestor máximo vê as candidaturas de todo o país",
+  nacionalVe[0].n === 3, `${nacionalVe[0].n}`);
+
+const nacionalTrata = await asUser(MANAGER, async () => {
+  try {
+    await q(`SELECT public.decidir_candidatura_revendedor('${candSemProv}', 'recusado', 'Falta província.')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("o gestor máximo trata uma candidatura sem província",
+  nacionalTrata === null, nacionalTrata ?? "ok");
+
+const provSemProv = await asUser(M_UIGE, async () => {
+  try {
+    await q(`SELECT public.decidir_candidatura_revendedor('${candSemProv}', 'aprovado')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("uma candidatura sem província não pertence ao gestor provincial",
+  /não é da província que gere/i.test(provSemProv ?? ""), provSemProv ?? "não deu erro");
+
+// 28.9 um cliente não trata candidaturas
+const clienteTrata = await asUser(C1, async () => {
+  try {
+    await q(`SELECT public.decidir_candidatura_revendedor('${candInd}', 'recusado')`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("um cliente não mexe em candidaturas",
+  /Só a gestão/i.test(clienteTrata ?? ""), clienteTrata ?? "não deu erro");
 
 console.log("\n--- 26. LOJAS: CADA MOVIMENTO TEM UMA LOJA (0025) ---");
 

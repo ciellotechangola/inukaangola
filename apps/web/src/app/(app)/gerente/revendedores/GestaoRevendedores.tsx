@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Building2,
   ClipboardList,
+  MessageSquare,
   Percent,
   Phone,
   Tags,
@@ -32,6 +33,13 @@ const COR_CANDIDATURA: Record<string, string> = {
   em_contacto: "bg-blue-950/60 text-blue-200",
   aprovado: "bg-green-950/60 text-green-200",
   recusado: "bg-red-950/60 text-red-200",
+};
+
+const ROTULO_CANDIDATURA: Record<string, string> = {
+  novo: "nova",
+  em_contacto: "em contacto",
+  aprovado: "aprovada",
+  recusado: "recusada",
 };
 
 const COR_REVENDEDOR: Record<string, string> = {
@@ -141,15 +149,15 @@ export default function GestaoRevendedores({
                       <User className="h-4 w-4 text-[#C9A962]" />
                     )}
                     <p className="font-medium text-[#F5F5F5]">{c.nome}</p>
-                    <span className="rounded-full bg-[#262626] px-2 py-0.5 text-[10px] uppercase tracking-wide text-[#8A8A8A]">
-                      {c.tipo}
+                    <span className="rounded-full border border-[#C9A962]/30 bg-[#C9A962]/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.12em] text-[#E3D5A7]">
+                      {c.tipo === "empresa" ? "Empresarial" : "Individual"}
                     </span>
                     <span
                       className={`rounded-full px-2 py-0.5 text-[10px] ${
                         COR_CANDIDATURA[c.status] ?? "bg-[#262626] text-[#A3A3A3]"
                       }`}
                     >
-                      {c.status === "em_contacto" ? "em contacto" : c.status}
+                      {ROTULO_CANDIDATURA[c.status] ?? c.status}
                     </span>
                   </div>
 
@@ -167,31 +175,57 @@ export default function GestaoRevendedores({
                     <span>· {new Date(c.created_at).toLocaleString("pt-PT")}</span>
                   </p>
 
+                  {(c.area_atuacao || c.representante) && (
+                    <p className="mt-2 flex flex-wrap gap-2 text-[11px]">
+                      {c.area_atuacao && (
+                        <span className="rounded-md bg-[#141414] px-2 py-1 text-[#A3A3A3]">
+                          <span className="text-[#6F6F6F]">Área: </span>
+                          {c.area_atuacao}
+                        </span>
+                      )}
+                      {c.representante && (
+                        <span className="rounded-md bg-[#141414] px-2 py-1 text-[#A3A3A3]">
+                          <span className="text-[#6F6F6F]">Representante: </span>
+                          {c.representante}
+                        </span>
+                      )}
+                    </p>
+                  )}
+
                   {c.mensagem && (
                     <p className="mt-2 max-w-xl whitespace-pre-line rounded-lg bg-[#141414] p-3 text-xs leading-relaxed text-[#A3A3A3]">
                       {c.mensagem}
+                    </p>
+                  )}
+
+                  {c.resposta && (
+                    <p className="mt-2 max-w-xl whitespace-pre-line rounded-lg border-l-2 border-[#C9A962]/50 bg-[#141414] p-3 text-xs leading-relaxed text-[#C9A962]">
+                      <span className="mb-1 block text-[9px] uppercase tracking-[0.12em] text-[#6F6F6F]">
+                        Resposta registada
+                      </span>
+                      {c.resposta}
                     </p>
                   )}
                 </div>
 
                 <div className="flex flex-wrap items-start gap-2">
                   {c.status === "novo" && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => decidir(c.id, "em_contacto")}
-                        className="rounded-lg border border-[#333] px-3 py-1.5 text-xs text-[#A3A3A3] transition hover:border-[#C9A962]/50 hover:text-[#C9A962]"
-                      >
-                        Em contacto
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => decidir(c.id, "recusado")}
-                        className="rounded-lg border border-[#4A2020] px-3 py-1.5 text-xs text-[#F87171] transition hover:bg-[#2A1010]"
-                      >
-                        Recusar
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      onClick={() => decidir(c.id, "em_contacto")}
+                      className="rounded-lg border border-[#333] px-3 py-1.5 text-xs text-[#A3A3A3] transition hover:border-[#C9A962]/50 hover:text-[#C9A962]"
+                    >
+                      Em contacto
+                    </button>
+                  )}
+                  {c.status !== "recusado" && (
+                    <button
+                      type="button"
+                      onClick={() => decidir(c.id, "recusado")}
+                      className="rounded-lg border border-[#4A2020] px-3 py-1.5 text-xs text-[#F87171] transition hover:bg-[#2A1010]"
+                    >
+                      Recusar
+                    </button>
                   )}
 
                   {c.status !== "aprovado" && c.status !== "recusado" && (
@@ -211,6 +245,8 @@ export default function GestaoRevendedores({
                   )}
                 </div>
               </div>
+
+              <RespostaCandidatura id={c.id} status={c.status} resposta={c.resposta} onErro={setErro} />
             </article>
           ))}
         </div>
@@ -420,6 +456,117 @@ function FichaRevendedor({
         </p>
       )}
     </article>
+  );
+}
+
+/**
+ * Resposta/nota da gestão a uma candidatura.
+ *
+ * Fica guardada na própria candidatura (com data e autor) para que «em
+ * contacto» signifique alguma coisa a quem pegar no processo duas semanas
+ * depois. Fechado por omissão — a lista mostra dados, não formulários.
+ */
+function RespostaCandidatura({
+  id,
+  status,
+  resposta,
+  onErro,
+}: {
+  id: string;
+  status: string;
+  resposta: string | null;
+  onErro: (m: string) => void;
+}) {
+  const router = useRouter();
+  const [aberto, setAberto] = useState(false);
+  const [texto, setTexto] = useState(resposta ?? "");
+  const [estado, setEstado] = useState(status === "novo" ? "em_contacto" : status);
+  const [aGuardar, setAGuardar] = useState(false);
+
+  async function guardar() {
+    onErro("");
+    setAGuardar(true);
+    try {
+      const supabase = createClientBrowser();
+      const { error } = await supabase.rpc("decidir_candidatura_revendedor", {
+        p_id: id,
+        p_estado: estado,
+        // String vazia limpa a resposta; `null` significaria «não mexer».
+        p_resposta: texto.trim(),
+      });
+      if (error) throw new Error(error.message);
+      setAberto(false);
+      router.refresh();
+    } catch (e) {
+      onErro(e instanceof Error ? e.message : "Não foi possível guardar a resposta.");
+    } finally {
+      setAGuardar(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 border-t border-[#242424] pt-3">
+      {!aberto ? (
+        <button
+          type="button"
+          onClick={() => setAberto(true)}
+          className="inline-flex items-center gap-1.5 text-[11px] text-[#8A8A8A] transition hover:text-[#C9A962]"
+        >
+          <MessageSquare className="h-3 w-3" />
+          {resposta ? "Editar resposta" : "Responder / registar nota"}
+        </button>
+      ) : (
+        <div className="fade-in">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <label htmlFor={`estado-${id}`} className="text-[10px] uppercase tracking-wide text-[#6F6F6F]">
+              Estado
+            </label>
+            <select
+              id={`estado-${id}`}
+              value={estado}
+              onChange={(e) => setEstado(e.target.value)}
+              className="rounded-lg border border-[#333] bg-[#0A0A0A] px-2 py-1 text-xs text-[#F5F5F5] focus:border-[#C9A962] focus:outline-none"
+            >
+              <option value="novo">nova</option>
+              <option value="em_contacto">em contacto</option>
+              <option value="aprovado">aprovada</option>
+              <option value="recusado">recusada</option>
+            </select>
+          </div>
+
+          <textarea
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+            rows={2}
+            maxLength={1000}
+            placeholder="O que foi dito ao candidato. Fica registado com data e autor."
+            className="w-full resize-y rounded-lg border border-[#333] bg-[#0A0A0A] px-3 py-2 text-xs text-[#F5F5F5] placeholder:text-[#4A4A4A] focus:border-[#C9A962] focus:outline-none"
+          />
+
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={guardar}
+              disabled={aGuardar}
+              className="rounded-lg bg-[#C9A962] px-3 py-1.5 text-xs font-semibold text-[#0A0A0A] transition hover:bg-[#D8BC7A] disabled:opacity-50"
+            >
+              {aGuardar ? "…" : "Registar"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTexto(resposta ?? "");
+                setEstado(status === "novo" ? "em_contacto" : status);
+                setAberto(false);
+              }}
+              className="rounded-lg border border-[#333] px-3 py-1.5 text-xs text-[#A3A3A3] transition hover:text-[#F5F5F5]"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
