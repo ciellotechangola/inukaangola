@@ -43,6 +43,7 @@ const PARTES = [
   { ficheiro: "migrations/0026_revendedores.sql", titulo: "REVENDEDOR: PREÇO DE GROSSO, PEDIDOS E CANDIDATURAS" },
   { ficheiro: "migrations/0027_candidaturas_detalhe.sql", titulo: "CANDIDATURA A REVENDEDOR: DETALHE, RESPOSTA E ANTI-DUPLICADO" },
   { ficheiro: "migrations/0028_vinte_e_uma_provincias.sql", titulo: "21 PROVÍNCIAS: ICOLO E BENGO, CUANDO E MOXICO LESTE" },
+  { ficheiro: "migrations/0029_rede_revendedores.sql", titulo: "REDE DE VENDEDORES: VISÃO DA GESTÃO E FICHA PROFISSIONAL" },
 ];
 
 const cabecalho = `-- =============================================================================

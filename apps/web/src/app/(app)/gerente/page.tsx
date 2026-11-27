@@ -5,6 +5,7 @@ import { getProfile } from "@/lib/auth";
 import { formatCurrency } from "@/lib/utils";
 import { numero, iniciais, type OverviewColaboradores } from "@/lib/colaborador";
 import { normalizarActivo } from "@/lib/activo";
+import { normalizarRede } from "@/lib/rede";
 import PainelActivo from "@/components/despesas/PainelActivo";
 import TabelaResponsiva from "@/components/TabelaResponsiva";
 
@@ -50,14 +51,17 @@ export default async function ManagerDashboardPage() {
     { data, error },
     { data: redeRaw },
     { data: activoRaw, error: activoError },
+    { data: redeVendedoresRaw },
   ] = await Promise.all([
     supabase.rpc("dashboard_stats"),
     supabase.rpc("colaboradores_overview"),
     supabase.rpc("activo_provincia"),
+    supabase.rpc("rede_revendedores"),
   ]);
 
   const rede = (redeRaw ?? null) as OverviewColaboradores | null;
   const activo = normalizarActivo(activoRaw);
+  const redeVendedores = normalizarRede(redeVendedoresRaw);
 
   const stats = (data ?? {
     sales_total_value: 0,
@@ -146,6 +150,7 @@ export default async function ManagerDashboardPage() {
           <Action href="/gerente/colaboradores" title="Colaboradores" />
           <Action href="/gerente/candidaturas" title="Candidaturas a colaborador" />
           <Action href="/gerente/revendedores" title="Revendedores e grosso" />
+          <Action href="/gerente/rede" title="Rede de vendedores" />
           <Action href="/gerente/conversas" title="Mensagens" />
           <Action href="/gerente/relatorios" title="Relatórios" />
           <Action href="/gerente/conteudos" title="Conteúdos publicados" />
@@ -293,6 +298,92 @@ export default async function ManagerDashboardPage() {
                   </ul>
                 )}
               </Panel>
+            </div>
+          </section>
+        )}
+
+        {redeVendedores && (
+          <section className="mb-8">
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <h2 className="text-xl font-light text-[#F5F5F5]">Rede de vendedores</h2>
+                <p className="text-sm text-[#A3A3A3]">
+                  {redeVendedores.scope === "nacional" ? "Todas as províncias" : "A sua província"}{" "}
+                  · mês corrente
+                </p>
+              </div>
+              <Link
+                href="/gerente/rede"
+                className="rounded-lg border border-[#333] px-3 py-1.5 text-xs text-[#A3A3A3] transition hover:border-[#C9A962]/50 hover:text-[#C9A962]"
+              >
+                Rede e solicitações →
+              </Link>
+            </div>
+
+            <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Stat
+                label="Revendedores"
+                value={`${redeVendedores.totais.activos} / ${redeVendedores.totais.revendedores}`}
+              />
+              <Stat label="Pedidos no mês" value={String(redeVendedores.totais.pedidos)} />
+              <Stat label="Valor no mês" value={formatCurrency(redeVendedores.totais.valor)} />
+              <Stat
+                label="Candidaturas por contactar"
+                value={String(redeVendedores.totais.candidaturas)}
+              />
+            </div>
+
+            <div className="overflow-hidden rounded-xl border border-[#262626]">
+              <div className="border-b border-[#1F1F1F] bg-[#141414] px-4 py-3 text-sm font-medium text-[#F5F5F5]">
+                Revendedores cadastrados
+              </div>
+              <TabelaResponsiva
+                itens={redeVendedores.revendedores.slice(0, 8)}
+                chaveDe={(r) => r.id}
+                minimo={560}
+                moldura={false}
+                vazio={
+                  <p className="px-4 py-6 text-center text-sm text-[#525252]">
+                    Ainda não há revendedores aprovados.
+                  </p>
+                }
+                colunas={[
+                  {
+                    chave: "nome",
+                    rotulo: "Revendedor",
+                    titulo: true,
+                    celula: (r) => (
+                      <Link
+                        href={`/gerente/rede/${r.id}`}
+                        className="text-[#F5F5F5] hover:text-[#C9A962]"
+                      >
+                        {r.nome}
+                      </Link>
+                    ),
+                  },
+                  {
+                    chave: "provincia",
+                    rotulo: "Província",
+                    celula: (r) => <span className="text-[#A3A3A3]">{r.provincia ?? "—"}</span>,
+                  },
+                  {
+                    chave: "pedidos",
+                    rotulo: "Pedidos",
+                    alinhar: "direita",
+                    celula: (r) => <span className="text-[#A3A3A3]">{r.pedidos}</span>,
+                  },
+                  {
+                    chave: "valor",
+                    rotulo: "Valor no mês",
+                    alinhar: "direita",
+                    celula: (r) => (
+                      <span className={r.valor > 0 ? "text-[#C9A962]" : "text-[#525252]"}>
+                        {formatCurrency(r.valor)}
+                      </span>
+                    ),
+                  },
+                ]}
+              />
             </div>
           </section>
         )}

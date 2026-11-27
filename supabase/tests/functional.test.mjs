@@ -77,6 +77,7 @@ for (const rel of [
   "migrations/0026_revendedores.sql",
   "migrations/0027_candidaturas_detalhe.sql",
   "migrations/0028_vinte_e_uma_provincias.sql",
+  "migrations/0029_rede_revendedores.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -4714,6 +4715,104 @@ const provsFormulario = await q(`
   SELECT count(*)::int n FROM public.provincias WHERE is_active`);
 check("o formulário público passa a oferecer 21 províncias",
   provsFormulario[0].n === 21, String(provsFormulario[0].n));
+
+console.log("\n--- 30. REDE DE VENDEDORES E FICHA DO REVENDEDOR (0029) ---");
+
+// 30.1 a rede nacional vê tudo
+const redeNac = (await asUser(MANAGER, async () =>
+  q(`SELECT public.rede_revendedores() AS r`)))[0].r;
+check("a rede nacional abrange todas as províncias",
+  redeNac.scope === "nacional" && redeNac.totais.revendedores >= 1,
+  JSON.stringify({ scope: redeNac.scope, total: redeNac.totais.revendedores }));
+check("a rede lista os revendedores cadastrados com os números do mês",
+  redeNac.revendedores.some((r) => r.id === rvId && Number(r.valor) >= 0),
+  JSON.stringify((redeNac.revendedores ?? []).map((r) => r.nome)));
+check("a rede traz a tabela por província",
+  Array.isArray(redeNac.provincias) && redeNac.provincias.length === 21,
+  String((redeNac.provincias ?? []).length));
+check("a rede conta as candidaturas por contactar",
+  typeof redeNac.totais.candidaturas === "number",
+  String(redeNac.totais.candidaturas));
+
+// 30.2 a rede provincial fica presa à província
+const redeUige = (await asUser(M_UIGE, async () =>
+  q(`SELECT public.rede_revendedores() AS r`)))[0].r;
+check("o gestor provincial vê a rede da sua província",
+  redeUige.scope === "provincial" &&
+  redeUige.revendedores.every((r) => r.provincia === "Uíge"),
+  JSON.stringify({ scope: redeUige.scope, prov: redeUige.revendedores.map((r) => r.provincia) }));
+
+const redeLuanda = (await asUser(M_LDA, async () =>
+  q(`SELECT public.rede_revendedores() AS r`)))[0].r;
+check("uma província sem revendedores vê a rede vazia",
+  redeLuanda.revendedores.length === 0 && redeLuanda.totais.revendedores === 0,
+  JSON.stringify({ n: redeLuanda.revendedores.length }));
+
+// 30.3 um cliente não vê a rede
+const redeCliente = await asUser(C1, async () => {
+  try { await q(`SELECT public.rede_revendedores()`); return null; }
+  catch (e) { return e.message; }
+});
+check("um cliente não vê a rede de vendedores",
+  /Apenas a gestão/i.test(redeCliente ?? ""), redeCliente ?? "não deu erro");
+
+// 30.4 a ficha profissional
+const ficha = (await asUser(MANAGER, async () =>
+  q(`SELECT public.revendedor_ficha('${rvId}') AS r`)))[0].r;
+check("a ficha traz a identidade e as condições do revendedor",
+  ficha.revendedor.nome === "Kianda Grosso Lda" &&
+  ficha.revendedor.tipo === "empresa" &&
+  ficha.revendedor.provincia === "Uíge" &&
+  Number(ficha.revendedor.minimo_unidades) === 5 &&
+  ficha.revendedor.status === "activo",
+  JSON.stringify({
+    nome: ficha.revendedor.nome,
+    prov: ficha.revendedor.provincia,
+    min: ficha.revendedor.minimo_unidades,
+    estado: ficha.revendedor.status,
+  }));
+check("a ficha traz os números do revendedor",
+  ficha.stats.pedidos >= 1 && Number(ficha.stats.valor) > 0,
+  JSON.stringify(ficha.stats));
+check("a ficha traz seis meses de histórico",
+  Array.isArray(ficha.historico) && ficha.historico.length === 6,
+  String((ficha.historico ?? []).length));
+check("a ficha traz os pedidos com os itens",
+  ficha.pedidos.length >= 1 && Array.isArray(ficha.pedidos[0].itens),
+  JSON.stringify({ pedidos: ficha.pedidos.length }));
+
+// 30.5 quem pode abrir a ficha
+const fichaDono = (await asUser(REV, async () =>
+  q(`SELECT public.revendedor_ficha('${rvId}') AS r`)))[0].r;
+check("o próprio revendedor abre a sua ficha",
+  fichaDono.revendedor.id === rvId, fichaDono.revendedor.nome);
+
+const fichaFora = await asUser(M_LDA, async () => {
+  try { await q(`SELECT public.revendedor_ficha('${rvId}')`); return null; }
+  catch (e) { return e.message; }
+});
+check("outra província não abre esta ficha",
+  /Sem acesso a esta ficha/i.test(fichaFora ?? ""), fichaFora ?? "não deu erro");
+
+const fichaCliente = await asUser(C1, async () => {
+  try { await q(`SELECT public.revendedor_ficha('${rvId}')`); return null; }
+  catch (e) { return e.message; }
+});
+check("um cliente não abre a ficha de um revendedor",
+  /Sem acesso a esta ficha/i.test(fichaCliente ?? ""), fichaCliente ?? "não deu erro");
+
+// 30.6 a nota da ficha escreve-se e apaga-se
+await asUser(M_UIGE, async () =>
+  q(`SELECT public.actualizar_revendedor('${rvId}', NULL, NULL, NULL, 'Bom pagador.')`));
+check("a gestão escreve a nota da ficha",
+  (await q(`SELECT nota FROM public.revendedores WHERE id = '${rvId}'`))[0].nota === "Bom pagador.",
+  String((await q(`SELECT nota FROM public.revendedores WHERE id = '${rvId}'`))[0].nota));
+
+await asUser(M_UIGE, async () =>
+  q(`SELECT public.actualizar_revendedor('${rvId}', NULL, NULL, NULL, NULL, false, true)`));
+check("a gestão apaga a nota da ficha",
+  (await q(`SELECT nota FROM public.revendedores WHERE id = '${rvId}'`))[0].nota === null,
+  String((await q(`SELECT nota FROM public.revendedores WHERE id = '${rvId}'`))[0].nota));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

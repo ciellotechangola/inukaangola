@@ -125,6 +125,7 @@ export default function Header() {
           { href: "/revenda", label: "Revenda" },
           { href: "/revenda/catalogo", label: "Catálogo de grosso" },
           { href: "/revenda/pedidos", label: "Pedidos" },
+          { href: "/revenda/perfil", label: "Perfil" },
         ]
       : []),
     // O colaborador vê a referência no cartão de identidade da Área de

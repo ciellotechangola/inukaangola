@@ -13,6 +13,7 @@ import {
   Percent,
   ShoppingCart,
   User,
+  UserRound,
 } from "lucide-react";
 import { abrirConversaDirecta } from "@/lib/chat";
 import { formatCurrency } from "@/lib/utils";
@@ -162,9 +163,27 @@ export default function PainelRevenda({
           </span>
           <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-[#4A4A4A] transition group-hover:translate-x-0.5 group-hover:text-[#C9A962]" />
         </Link>
-      </section>
 
-      {/* --------------------------------------------------------- CONVERSAS */}
+        {/* O perfil é a prova do trabalho: condições de grosso, histórico de
+            seis meses e todos os pedidos com os itens. */}
+        <Link
+          href="/revenda/perfil"
+          className="group flex items-start gap-3 rounded-xl border border-[#262626] bg-[#141414] p-5 transition hover:border-[#C9A962]/50 hover:bg-[#181818]"
+        >
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[#C9A962]/10 text-[#C9A962]">
+            <UserRound className="h-5 w-5" />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-[#F5F5F5]">
+              O meu perfil de revendedor
+            </span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-[#8A8A8A]">
+              A sua ficha profissional: condições, números, histórico e pedidos.
+            </span>
+          </span>
+          <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-[#4A4A4A] transition group-hover:translate-x-0.5 group-hover:text-[#C9A962]" />
+        </Link>
+      </section>
       <section className="mt-6 rounded-xl border border-[#262626] bg-[#141414] p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
