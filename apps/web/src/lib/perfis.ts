@@ -66,6 +66,24 @@ export const PERFIS: Perfil[] = [
     ],
   },
   {
+    papel: "reseller",
+    etiqueta: "Revendedor (grosso)",
+    missao: "Compra ao preço de grosso e revende em Angola com a margem que definir.",
+    area: "/revenda",
+    cor: "#D9A05B",
+    regalias: [
+      "Catálogo de grosso com o preço de revenda ao lado do preço de loja",
+      "Compra a partir do mínimo de unidades acordado com a gestão",
+      "Pedidos com número, cotação e estado até à entrega",
+      "Conversa directa com o gerente da província e com a administração nacional",
+    ],
+    limites: [
+      "Não tem comissão nem carteira de clientes — ganha na margem",
+      "Não vê stock interno nem dados de outros revendedores",
+      "Preço de grosso e mínimo de unidades são definidos pela gestão",
+    ],
+  },
+  {
     papel: "store_seller",
     etiqueta: "Vendedor de loja",
     missao: "Tem a loja a funcionar: stock contado, balcão atendido e encomendas prontas.",
@@ -117,9 +135,10 @@ export function areaDoPapel(papel: string | null | undefined): string {
 
 /** Áreas privadas de cada papel. Usado pelo proxy e pelo menu. */
 export const AREAS: Record<Papel, string[]> = {
-  manager: ["/gerente", "/designer", "/vendedor", "/loja", "/cliente"],
+  manager: ["/gerente", "/designer", "/vendedor", "/loja", "/cliente", "/revenda"],
   seller: ["/vendedor"],
   store_seller: ["/loja"],
+  reseller: ["/revenda"],
   customer: ["/cliente"],
 };
 
@@ -144,7 +163,9 @@ export type Competencia =
   | "relatorios"
   | "definicoes"
   | "conversa_privada"
-  | "grupos_equipa";
+  | "grupos_equipa"
+  | "grosso"
+  | "pedidos_grosso";
 
 interface LinhaMatriz {
   competencia: Competencia;
@@ -268,7 +289,19 @@ export const MATRIZ: LinhaMatriz[] = [
     competencia: "conversa_privada",
     rotulo: "Conversa privada",
     descricao: "Cliente fala directamente com a gestão.",
-    quem: ["manager", "seller", "store_seller", "customer"],
+    quem: ["manager", "seller", "store_seller", "reseller", "customer"],
+  },
+  {
+    competencia: "grosso",
+    rotulo: "Catálogo de grosso",
+    descricao: "Preço de revenda por unidade, com o preço de loja ao lado.",
+    quem: ["manager", "reseller"],
+  },
+  {
+    competencia: "pedidos_grosso",
+    rotulo: "Pedidos de grosso",
+    descricao: "Solicitações de compra em quantidade, com cotação e estado.",
+    quem: ["manager", "reseller"],
   },
   {
     competencia: "grupos_equipa",

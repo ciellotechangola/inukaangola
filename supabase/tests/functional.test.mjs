@@ -74,6 +74,7 @@ for (const rel of [
   "migrations/0023_saldo_contabilistico.sql",
   "migrations/0024_painel_financeiro.sql",
   "migrations/0025_lojas.sql",
+  "migrations/0026_revendedores.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -4105,6 +4106,234 @@ check("repor no automático limpa os valores escritos",
 check("a reposição também fica no histórico",
   (painelReposto[0].r.historico ?? []).some((h) => h.campo === "todos"),
   JSON.stringify((painelReposto[0].r.historico ?? []).slice(0, 2)));
+
+console.log("\n--- 27. REVENDEDOR: PREÇO DE GROSSO, PEDIDOS E CANDIDATURAS (0026) ---");
+
+const REV = "cccc1111-1111-4111-8111-111111111111";
+const REV2 = "cccc2222-2222-4222-8222-222222222222";
+const M_LDA = "cccc3333-3333-4333-8333-333333333333";
+
+await exec(`
+  INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
+    ('${REV}',  'rev1@inuka.ao', '{"full_name":"Revenda Kianda","phone":"923000101"}'),
+    ('${REV2}', 'rv2Id@inuka.ao', '{"full_name":"Revenda Mbanza","phone":"923000102"}'),
+    ('${M_LDA}','mlda@inuka.ao', '{"full_name":"Gestor Luanda","phone":"923000103"}');
+  UPDATE public.profiles SET role = 'manager',  provincia_id = '${LDA}' WHERE id = '${M_LDA}';
+  UPDATE public.profiles SET role = 'reseller', provincia_id = '${UIG}' WHERE id = '${REV}';
+  UPDATE public.profiles SET role = 'reseller', provincia_id = '${UIG}' WHERE id = '${REV2}';
+`);
+
+const papelRev = await q(`SELECT role::text r FROM public.profiles WHERE id = '${REV}'`);
+check("o papel `reseller` existe e é atribuível", papelRev[0].r === "reseller", papelRev[0].r);
+
+check("um revendedor reconhece-se pela base",
+  (await asUser(REV, async () => q(`SELECT public.is_reseller() AS r`)))[0].r === true);
+
+const rvId = (await asUser(MANAGER, async () => q(`
+  INSERT INTO public.revendedores
+    (user_id, tipo, nome, telefone, provincia_id, desconto, minimo_unidades)
+  VALUES ('${REV}', 'empresa', 'Kianda Grosso Lda', '+244923000101', '${UIG}', 0.4, 5)
+  RETURNING id`)))[0].id;
+check("a gestão cria a ficha de revendedor", !!rvId, String(rvId));
+
+const rv2Id = (await asUser(MANAGER, async () => q(`
+  INSERT INTO public.revendedores
+    (user_id, tipo, nome, telefone, provincia_id, desconto, minimo_unidades)
+  VALUES ('${REV2}', 'pessoa', 'Mbanza Revende', '+244923000102', '${UIG}', NULL, 5)
+  RETURNING id`)))[0].id;
+
+// 27.1 preço de grosso
+const pGrosso = (await q(`
+  INSERT INTO public.products (name, sku, official_price, is_active)
+  VALUES ('Perfume de Grosso', 'GRS-01', 10000, true) RETURNING id`))[0].id;
+
+const rvPrecoProprio = await q(
+  `SELECT public.preco_revendedor('${pGrosso}', '${rvId}') AS p,
+          public.preco_revendedor('${pGrosso}', NULL)   AS padrao`);
+check("o desconto do revendedor manda no preço de grosso",
+  Number(rvPrecoProprio[0].p) === 6000, String(rvPrecoProprio[0].p));
+check("sem desconto próprio vale o desconto da empresa (35%)",
+  Number(rvPrecoProprio[0].padrao) === 6500, String(rvPrecoProprio[0].padrao));
+
+await asUser(MANAGER, async () =>
+  q(`SELECT public.definir_preco_revenda('${pGrosso}', 5500, 'Preço de importação')`));
+const rvPrecoEscrito = await q(`SELECT public.preco_revendedor('${pGrosso}', '${rvId}') AS p`);
+check("o preço escrito pela gestão vence o desconto",
+  Number(rvPrecoEscrito[0].p) === 5500, String(rvPrecoEscrito[0].p));
+
+const precoMau = await asUser(C1, async () => {
+  try { await q(`SELECT public.definir_preco_revenda('${pGrosso}', 1)`); return null; }
+  catch (e) { return e.message; }
+});
+check("um cliente não define preços de grosso",
+  /Só a gestão/i.test(precoMau ?? ""), precoMau ?? "não deu erro");
+
+// 27.2 o catálogo de grosso
+const rvCat = await asUser(REV, async () =>
+  q(`SELECT * FROM public.revendedor_catalogo() WHERE product_id = '${pGrosso}'`));
+check("o catálogo de grosso mostra o preço de montra ao lado",
+  rvCat.length === 1 && Number(rvCat[0].preco_loja) === 10000 && Number(rvCat[0].preco_grosso) === 5500,
+  JSON.stringify(rvCat[0]));
+check("o catálogo traz o mínimo de unidades do revendedor",
+  rvCat[0].minimo === 5, String(rvCat[0].minimo));
+check("o catálogo mostra a margem em percentagem",
+  Number(rvCat[0].desconto_pct) === 45, String(rvCat[0].desconto_pct));
+
+const catCliente = await asUser(C1, async () => {
+  try { await q(`SELECT * FROM public.revendedor_catalogo()`); return null; }
+  catch (e) { return e.message; }
+});
+check("o catálogo de grosso está fechado a clientes",
+  /reservado a revendedores/i.test(catCliente ?? ""), catCliente ?? "não deu erro");
+
+// 27.3 pedidos e mínimo de unidades
+const rvPedido = await asUser(REV, async () =>
+  q(`SELECT public.registar_pedido_revendedor(
+       '[{"product_id":"${pGrosso}","quantidade":5}]'::jsonb, 'Primeiro pedido') AS r`));
+const rvPedidoId = rvPedido[0].r.id;
+check("o revendedor regista um pedido de grosso",
+  /^RV-\d{4}-\d{4}$/.test(rvPedido[0].r.numero), JSON.stringify(rvPedido[0].r));
+check("o pedido soma unidades e valor",
+  rvPedido[0].r.total_unidades === 5 && Number(rvPedido[0].r.valor_estimado) === 27500,
+  JSON.stringify(rvPedido[0].r));
+
+const abaixoDoMinimo = await asUser(REV, async () => {
+  try {
+    await q(`SELECT public.registar_pedido_revendedor(
+      '[{"product_id":"${pGrosso}","quantidade":3}]'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("menos de 5 unidades é recusado",
+  /pelo menos 5 unidades/i.test(abaixoDoMinimo ?? ""), abaixoDoMinimo ?? "não deu erro");
+
+const clienteCompraGrosso = await asUser(C1, async () => {
+  try {
+    await q(`SELECT public.registar_pedido_revendedor(
+      '[{"product_id":"${pGrosso}","quantidade":10}]'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("um cliente não faz pedidos de grosso",
+  /Só revendedores activos/i.test(clienteCompraGrosso ?? ""), clienteCompraGrosso ?? "não deu erro");
+
+// 27.4 o preço fica congelado no pedido
+await asUser(MANAGER, async () =>
+  q(`SELECT public.definir_preco_revenda('${pGrosso}', 5000)`));
+const rvItemCongelado = await q(`
+  SELECT preco_unitario, subtotal FROM public.revendedor_pedido_itens
+  WHERE pedido_id = '${rvPedidoId}'`);
+check("mudar o preço hoje não reescreve o pedido de ontem",
+  Number(rvItemCongelado[0].preco_unitario) === 5500 && Number(rvItemCongelado[0].subtotal) === 27500,
+  JSON.stringify(rvItemCongelado[0]));
+
+// 27.5 quem vê o quê
+const pedidosDoOutro = await asUser(REV2, async () =>
+  q(`SELECT count(*)::int n FROM public.revendedor_pedidos`));
+check("um revendedor não vê os pedidos do outro",
+  pedidosDoOutro[0].n === 0, `${pedidosDoOutro[0].n} pedidos`);
+
+const pedidosUige = await asUser(M_UIGE, async () =>
+  q(`SELECT count(*)::int n FROM public.revendedor_pedidos WHERE id = '${rvPedidoId}'`));
+check("o gestor da província vê o pedido", pedidosUige[0].n === 1, `${pedidosUige[0].n}`);
+
+const pedidosLda = await asUser(M_LDA, async () =>
+  q(`SELECT count(*)::int n FROM public.revendedor_pedidos WHERE id = '${rvPedidoId}'`));
+check("o gestor de outra província não vê o pedido",
+  pedidosLda[0].n === 0, `${pedidosLda[0].n}`);
+
+const precosCliente = await asUser(C1, async () =>
+  q(`SELECT count(*)::int n FROM public.precos_revenda`));
+check("o preço de grosso nunca chega a um cliente",
+  precosCliente[0].n === 0, `${precosCliente[0].n} linhas`);
+
+const rvPrecos = await asUser(REV, async () =>
+  q(`SELECT count(*)::int n FROM public.precos_revenda`));
+check("o revendedor lê o preço de grosso", rvPrecos[0].n === 1, `${rvPrecos[0].n}`);
+
+// 27.6 a gestão responde
+const rvResposta = await asUser(M_UIGE, async () =>
+  q(`SELECT public.responder_pedido_revendedor('${rvPedidoId}', 'cotado', 'Cotação enviada') AS r`));
+const rvEstadoPedido = await q(
+  `SELECT status, resposta FROM public.revendedor_pedidos WHERE id = '${rvPedidoId}'`);
+check("o gestor da província responde ao pedido",
+  rvResposta[0].r.ok === true && rvEstadoPedido[0].status === "cotado",
+  JSON.stringify(rvEstadoPedido[0]));
+
+const rvRespostaFora = await asUser(M_LDA, async () => {
+  try { await q(`SELECT public.responder_pedido_revendedor('${rvPedidoId}', 'aprovado')`); return null; }
+  catch (e) { return e.message; }
+});
+check("outra província não responde por este pedido",
+  /não é da província que gere/i.test(rvRespostaFora ?? ""), rvRespostaFora ?? "não deu erro");
+
+// 27.7 candidaturas
+const rvCand = (await q(`
+  INSERT INTO public.revendedor_candidaturas
+    (tipo, nome, telefone, provincia_id, mensagem, origem)
+  VALUES ('empresa', 'Loja do Mercado', '+244923000201', '${UIG}',
+          'Quero comprar 20 perfumes por mês.', 'site')
+  RETURNING id`))[0].id;
+
+const candVisivel = await asUser(M_UIGE, async () =>
+  q(`SELECT count(*)::int n FROM public.revendedor_candidaturas WHERE id = '${rvCand}'`));
+check("o gestor da província recebe a candidatura", candVisivel[0].n === 1, `${candVisivel[0].n}`);
+
+const candOutra = await asUser(M_LDA, async () =>
+  q(`SELECT count(*)::int n FROM public.revendedor_candidaturas WHERE id = '${rvCand}'`));
+check("a candidatura não aparece a outra província", candOutra[0].n === 0, `${candOutra[0].n}`);
+
+await asUser(M_UIGE, async () =>
+  q(`SELECT public.decidir_candidatura_revendedor('${rvCand}', 'em_contacto')`));
+const candEstado = await q(`SELECT status FROM public.revendedor_candidaturas WHERE id = '${rvCand}'`);
+check("o gestor marca a candidatura como em contacto",
+  candEstado[0].status === "em_contacto", candEstado[0].status);
+
+const candFora = await asUser(M_LDA, async () => {
+  try { await q(`SELECT public.decidir_candidatura_revendedor('${rvCand}', 'recusado')`); return null; }
+  catch (e) { return e.message; }
+});
+check("outra província não decide esta candidatura",
+  /não é da província que gere/i.test(candFora ?? ""), candFora ?? "não deu erro");
+
+// 27.8 o painel do revendedor
+const painelRev = await asUser(REV, async () => q(`SELECT public.minha_revenda() AS r`));
+check("o painel devolve a ficha e os números do revendedor",
+  painelRev[0].r.revendedor.nome === "Kianda Grosso Lda" &&
+  painelRev[0].r.stats.pedidos === 1 &&
+  painelRev[0].r.stats.em_curso === 1,
+  JSON.stringify(painelRev[0].r.stats));
+check("o painel diz com quem falar na província",
+  painelRev[0].r.gestores.provincia?.id === M_UIGE,
+  JSON.stringify(painelRev[0].r.gestores));
+
+const painelCliente = await asUser(C1, async () => q(`SELECT public.minha_revenda() AS r`));
+check("quem não é revendedor não tem ficha",
+  painelCliente[0].r.revendedor === null, JSON.stringify(painelCliente[0].r));
+
+// 27.9 um revendedor suspenso deixa de comprar
+await asUser(MANAGER, async () =>
+  q(`SELECT public.actualizar_revendedor('${rvId}', NULL, NULL, 'suspenso')`));
+const suspenso = await asUser(REV, async () => {
+  try {
+    await q(`SELECT public.registar_pedido_revendedor(
+      '[{"product_id":"${pGrosso}","quantidade":5}]'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("um revendedor suspenso não faz pedidos",
+  /Só revendedores activos/i.test(suspenso ?? ""), suspenso ?? "não deu erro");
+
+await asUser(MANAGER, async () =>
+  q(`SELECT public.actualizar_revendedor('${rvId}', NULL, NULL, 'activo')`));
+
+// 27.10 voltar ao desconto da empresa
+await asUser(MANAGER, async () =>
+  q(`SELECT public.actualizar_revendedor('${rvId}', NULL, NULL, NULL, NULL, true)`));
+const descontoLimpo = await q(
+  `SELECT desconto FROM public.revendedores WHERE id = '${rvId}'`);
+check("a gestão devolve o revendedor ao desconto da empresa",
+  descontoLimpo[0].desconto === null, String(descontoLimpo[0].desconto));
 
 // Higiene: não deixar valores nacionais pendurados.
 await asUser(MANAGER, async () => q(`SELECT public.limpar_indicadores(NULL)`));

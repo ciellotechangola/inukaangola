@@ -1,58 +1,232 @@
-import { redirect } from "next/navigation";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
-import { telHref } from "@/lib/contactos";
-import AcoesCandidatura from "./AcoesCandidatura";
+import { listarProvincias } from "@/lib/provincias";
+import GestaoRevendedores from "./GestaoRevendedores";
 
 export const dynamic = "force-dynamic";
 
-interface Candidatura {
+export interface ProvinciaOpcao {
   id: string;
-  full_name: string;
-  phone: string;
-  message: string | null;
-  source: string | null;
+  nome: string;
+  codigo: string;
+}
+
+export interface CandidaturaRev {
+  id: string;
+  tipo: string;
+  nome: string;
+  telefone: string;
+  email: string | null;
+  nif: string | null;
+  provincia_id: string | null;
+  provincia: string | null;
+  mensagem: string | null;
   status: string;
   created_at: string;
-  handled_at: string | null;
+}
+
+export interface RevendedorLinha {
+  id: string;
+  nome: string;
+  tipo: string;
+  telefone: string;
+  email: string | null;
+  provincia: string | null;
+  desconto: number | null;
+  minimo_unidades: number;
+  status: string;
+  nota: string | null;
+}
+
+export interface PedidoLinha {
+  id: string;
+  numero: string;
+  status: string;
+  total_unidades: number;
+  valor_estimado: number;
+  mensagem: string | null;
+  resposta: string | null;
+  created_at: string;
+  revendedor: string | null;
+  provincia: string | null;
+}
+
+export interface ProdutoPreco {
+  id: string;
+  nome: string;
+  sku: string | null;
+  official_price: number;
+  preco_revenda: number | null;
+}
+
+interface CandidaturaBruta {
+  id: string;
+  tipo: string;
+  nome: string;
+  telefone: string;
+  email: string | null;
+  nif: string | null;
+  provincia_id: string | null;
+  mensagem: string | null;
+  status: string;
+  created_at: string;
   provincia: { nome: string } | null;
 }
 
-const COR: Record<string, string> = {
-  novo: "bg-[#2A2410] text-[#E3D5A7]",
-  em_contacto: "bg-blue-950/60 text-blue-200",
-  aprovado: "bg-green-950/60 text-green-200",
-  recusado: "bg-red-950/60 text-red-200",
-};
+interface RevendedorBruto {
+  id: string;
+  nome: string;
+  tipo: string;
+  telefone: string;
+  email: string | null;
+  desconto: string | number | null;
+  minimo_unidades: number;
+  status: string;
+  nota: string | null;
+  provincia: { nome: string } | null;
+}
+
+interface PedidoBruto {
+  id: string;
+  numero: string;
+  status: string;
+  total_unidades: number;
+  valor_estimado: string | number;
+  mensagem: string | null;
+  resposta: string | null;
+  created_at: string;
+  revendedor: { nome: string } | null;
+  provincia: { nome: string } | null;
+}
 
 /**
- * Candidaturas a colaborador.
+ * Revendedores (grosso).
  *
- * Chegam do formulário público `/revendedor`. A gestão vê, contacta e marca o
- * estado — e o estado diz às outras pessoas da equipa quem já falou com a
- * pessoa, para não a chamarem três vezes.
+ * Junta três coisas que antes viviam separadas: quem se candidatou, quem já
+ * compra ao grosso e o que está pendente de resposta. A gestão provincial vê
+ * a sua província; a administração nacional vê o país — o RLS trata disso, a
+ * página não repete a regra.
  */
 export default async function RevendedoresPage() {
   const profile = await getProfile();
   if (!profile || profile.role !== "manager") redirect("/");
 
   const supabase = await createClientServer();
-  const { data, error } = await supabase
-    .from("reseller_applications")
-    .select(
-      "id, full_name, phone, message, source, status, created_at, handled_at, provincia:provincias(nome)"
-    )
-    .order("created_at", { ascending: false })
-    .limit(200);
 
-  const candidaturas = (data ?? []) as unknown as Candidatura[];
+  const [provincias, candidaturasRes, revendedoresRes, pedidosRes, produtosRes, precosRes, configRes] =
+    await Promise.all([
+      listarProvincias(supabase),
+      supabase
+        .from("revendedor_candidaturas")
+        .select(
+          "id, tipo, nome, telefone, email, nif, provincia_id, mensagem, status, created_at, provincia:provincias(nome)"
+        )
+        .order("created_at", { ascending: false })
+        .limit(200),
+      supabase
+        .from("revendedores")
+        .select(
+          "id, nome, tipo, telefone, email, desconto, minimo_unidades, status, nota, provincia:provincias(nome)"
+        )
+        .order("created_at", { ascending: false })
+        .limit(300),
+      supabase
+        .from("revendedor_pedidos")
+        .select(
+          "id, numero, status, total_unidades, valor_estimado, mensagem, resposta, created_at, revendedor:revendedores(nome), provincia:provincias(nome)"
+        )
+        .order("created_at", { ascending: false })
+        .limit(200),
+      supabase
+        .from("products")
+        .select("id, name, sku, official_price")
+        .eq("is_active", true)
+        .order("name"),
+      supabase.from("precos_revenda").select("product_id, preco"),
+      supabase
+        .from("platform_settings")
+        .select("value")
+        .eq("key", "revenda_desconto")
+        .maybeSingle(),
+    ]);
 
-  const novos = candidaturas.filter((c) => c.status === "novo");
-  const emCurso = candidaturas.filter((c) => c.status === "em_contacto");
-  const fechadas = candidaturas.filter((c) => c.status === "aprovado" || c.status === "recusado");
+  const emFalta =
+    /PGRST205|PGRST202|does not exist/i.test(candidaturasRes.error?.message ?? "") ||
+    /PGRST205|PGRST202|does not exist/i.test(revendedoresRes.error?.message ?? "");
 
-  const semTabela = error && /PGRST205|does not exist/i.test(error.message);
+  const candidaturas: CandidaturaRev[] = ((candidaturasRes.data ?? []) as unknown as CandidaturaBruta[]).map(
+    (c) => ({
+      id: c.id,
+      tipo: c.tipo,
+      nome: c.nome,
+      telefone: c.telefone,
+      email: c.email,
+      nif: c.nif,
+      provincia_id: c.provincia_id,
+      provincia: c.provincia?.nome ?? null,
+      mensagem: c.mensagem,
+      status: c.status,
+      created_at: c.created_at,
+    })
+  );
+
+  const revendedores: RevendedorLinha[] = ((revendedoresRes.data ?? []) as unknown as RevendedorBruto[]).map(
+    (r) => ({
+      id: r.id,
+      nome: r.nome,
+      tipo: r.tipo,
+      telefone: r.telefone,
+      email: r.email,
+      provincia: r.provincia?.nome ?? null,
+      desconto: r.desconto === null ? null : Number(r.desconto),
+      minimo_unidades: r.minimo_unidades,
+      status: r.status,
+      nota: r.nota,
+    })
+  );
+
+  const pedidos: PedidoLinha[] = ((pedidosRes.data ?? []) as unknown as PedidoBruto[]).map((p) => ({
+    id: p.id,
+    numero: p.numero,
+    status: p.status,
+    total_unidades: p.total_unidades,
+    valor_estimado: Number(p.valor_estimado),
+    mensagem: p.mensagem,
+    resposta: p.resposta,
+    created_at: p.created_at,
+    revendedor: p.revendedor?.nome ?? null,
+    provincia: p.provincia?.nome ?? null,
+  }));
+
+  const precos = new Map<string, number>();
+  for (const linha of (precosRes.data ?? []) as { product_id: string; preco: string | number }[]) {
+    precos.set(linha.product_id, Number(linha.preco));
+  }
+
+  const produtos: ProdutoPreco[] = (
+    (produtosRes.data ?? []) as { id: string; name: string; sku: string | null; official_price: string | number }[]
+  ).map((p) => ({
+    id: p.id,
+    nome: p.name,
+    sku: p.sku,
+    official_price: Number(p.official_price),
+    preco_revenda: precos.has(p.id) ? (precos.get(p.id) as number) : null,
+  }));
+
+  const config = configRes.data as { value?: { value?: number } } | null;
+  const descontoEmpresa =
+    typeof config?.value?.value === "number" ? config.value.value : 0.35;
+
+  const novas = candidaturas.filter((c) => c.status === "novo");
+  const pendentes = pedidos.filter((p) =>
+    ["novo", "em_analise", "cotado", "aprovado"].includes(p.status)
+  );
+  const activos = revendedores.filter((r) => r.status === "activo");
+
+  const provinciaFixa =
+    profile.is_national_admin || profile.provincia_id === null ? null : profile.provincia_id;
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-10">
@@ -60,90 +234,47 @@ export default async function RevendedoresPage() {
         ← Painel de gestão
       </Link>
 
-      <h1 className="text-3xl font-light text-[#F5F5F5]">Candidaturas a colaborador</h1>
-      <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[#A3A3A3]">
-        Pedidos enviados pelo formulário público. Contacte a pessoa pelo telefone e marque o
-        estado — a equipa inteira vê quem já tratou do assunto.
-      </p>
+      <header className="mb-6">
+        <p className="text-[10px] uppercase tracking-[0.22em] text-[#C9A962]">
+          INUKA Angola · grosso e revenda
+        </p>
+        <h1 className="mt-2 text-3xl font-light text-[#F5F5F5]">Revendedores</h1>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[#A3A3A3]">
+          Candidaturas do site, contas aprovadas e pedidos de grosso. Aprovar cria a conta e a
+          ficha; a partir daí o revendedor compra sozinho ao preço de grosso.
+        </p>
+      </header>
 
-      {semTabela && (
-        <div className="mt-6 rounded-xl border border-[#C9A962]/40 bg-[#C9A962]/10 p-4 text-sm text-[#E3D5A7]">
-          Falta aplicar a migração 0008 (`PATCH_TAXAS_PEDIDOS.sql`) — a tabela das candidaturas
-          ainda não existe nesta base.
-        </div>
-      )}
-
-      {error && !semTabela && (
-        <div className="mt-6 rounded-xl border border-[#4A2020] bg-[#2A1010] p-4 text-sm text-[#F87171]">
-          {error.message}
-        </div>
-      )}
-
-      {!error && (
-        <div className="mt-6 grid gap-3 sm:grid-cols-3">
-          <Indicador rotulo="Por contactar" valor={String(novos.length)} destaque={novos.length > 0} />
-          <Indicador rotulo="Em contacto" valor={String(emCurso.length)} />
-          <Indicador rotulo="Fechadas" valor={String(fechadas.length)} />
-        </div>
-      )}
-
-      {!error && candidaturas.length === 0 && (
-        <div className="mt-8 rounded-xl border border-dashed border-[#2A2A2A] bg-[#111] px-6 py-16 text-center">
-          <p className="text-sm text-[#A3A3A3]">
-            Ainda não há candidaturas. O formulário está em{" "}
-            <Link href="/revendedor" className="text-[#C9A962] hover:underline">
-              /revendedor
-            </Link>
-            .
-          </p>
-        </div>
-      )}
-
-      <div className="mt-6 space-y-3">
-        {candidaturas.map((c) => (
-          <div
-            key={c.id}
-            className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-5"
-          >
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-medium text-[#F5F5F5]">{c.full_name}</p>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] ${COR[c.status] ?? "bg-[#262626] text-[#A3A3A3]"}`}>
-                    {c.status === "em_contacto" ? "em contacto" : c.status}
-                  </span>
-                </div>
-
-                <p className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-[#8A8A8A]">
-                  <a href={telHref(c.phone)} className="text-[#C9A962] hover:underline">
-                    {c.phone}
-                  </a>
-                  {c.provincia?.nome && <span>· {c.provincia.nome}</span>}
-                  <span>· {new Date(c.created_at).toLocaleString("pt-PT")}</span>
-                  {c.source && <span className="text-[#525252]">· {c.source}</span>}
-                </p>
-
-                {c.message && (
-                  <p className="mt-3 max-w-xl whitespace-pre-line rounded-lg bg-[#141414] p-3 text-xs leading-relaxed text-[#A3A3A3]">
-                    {c.message}
-                  </p>
-                )}
-              </div>
-
-              <AcoesCandidatura id={c.id} estado={c.status} tratado={c.handled_at !== null} />
-            </div>
-          </div>
-        ))}
+      <div className="mb-6 grid gap-3 sm:grid-cols-4">
+        <Indicador rotulo="Por contactar" valor={String(novas.length)} destaque={novas.length > 0} />
+        <Indicador rotulo="Revendedores activos" valor={String(activos.length)} />
+        <Indicador rotulo="Pedidos em curso" valor={String(pendentes.length)} />
+        <Indicador
+          rotulo="Valor em curso"
+          valor={new Intl.NumberFormat("pt-AO", {
+            style: "currency",
+            currency: "AOA",
+            maximumFractionDigits: 0,
+          }).format(pendentes.reduce((soma, p) => soma + p.valor_estimado, 0))}
+        />
       </div>
 
-      <p className="mt-8 text-[11px] leading-relaxed text-[#525252]">
-        Aprovar aqui <strong className="text-[#6F6F6F]">não</strong> cria a conta. Para tornar
-        alguém colaborador use{" "}
-        <Link href="/gerente/colaboradores" className="text-[#C9A962] hover:underline">
-          Colaboradores
-        </Link>{" "}
-        — conta nova ou promoção de um cliente existente.
-      </p>
+      {emFalta && (
+        <div className="mb-6 rounded-xl border border-[#C9A962]/40 bg-[#C9A962]/10 p-4 text-sm text-[#E3D5A7]">
+          Falta aplicar a migração 0026 — cole <code>supabase/PATCH_REVENDEDORES.sql</code> no SQL
+          Editor do Supabase. Até lá esta página fica vazia.
+        </div>
+      )}
+
+      <GestaoRevendedores
+        candidaturas={candidaturas}
+        revendedores={revendedores}
+        pedidos={pedidos}
+        produtos={produtos}
+        provincias={provincias.map((p) => ({ id: p.id, nome: p.nome, codigo: p.codigo }))}
+        provinciaFixa={provinciaFixa}
+        descontoEmpresa={descontoEmpresa}
+      />
     </main>
   );
 }

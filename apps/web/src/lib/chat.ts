@@ -442,6 +442,8 @@ export async function removerMembroGrupo(conversationId: string, userId: string)
 export const ETIQUETA_PAPEL: Record<string, string> = {
   manager: "gestor",
   seller: "colaborador",
+  store_seller: "vendedor de loja",
+  reseller: "revendedor",
   customer: "cliente",
 };
 

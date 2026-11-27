@@ -119,17 +119,32 @@ export default function Header() {
           { href: "/vendedor/comunicados", label: "Feed Inuka" },
         ]
       : []),
+    // O revendedor tem o seu próprio menu: catálogo de grosso e pedidos.
+    ...(profile?.role === "reseller"
+      ? [
+          { href: "/revenda", label: "Revenda" },
+          { href: "/revenda/catalogo", label: "Catálogo de grosso" },
+          { href: "/revenda/pedidos", label: "Pedidos" },
+        ]
+      : []),
     // O colaborador vê a referência no cartão de identidade da Área de
     // Colaborador — uma vez, e com o botão de copiar. A aba «Referência» fica
     // para clientes e gestão, que não têm esse cartão.
     ...(profile && profile.role !== "seller" ? [{ href: "/referencia", label: "Referência" }] : []),
     ...(profile ? [{ href: "/conversas", label: "Mensagens" }] : []),
     { href: "/sobre", label: "Sobre", desde: "lg" },
-    // «Ser colaborador» é a porta de quem ainda não trabalha na INUKA. Quem já
-    // é colaborador, loja ou gestão não precisa dela — e não a vê.
-    ...(profile?.role === "seller" || profile?.role === "store_seller" || profile?.role === "manager"
+    // «Ser colaborador» e «Ser revendedor» são as portas de quem ainda não
+    // trabalha com a INUKA: uma por comissão, outra por margem. Quem já é da
+    // casa não precisa delas — e não as vê.
+    ...(profile?.role === "seller" ||
+    profile?.role === "store_seller" ||
+    profile?.role === "manager" ||
+    profile?.role === "reseller"
       ? []
-      : [{ href: "/revendedor", label: "Ser colaborador", desde: "md" as const }]),
+      : [
+          { href: "/colaborador", label: "Ser colaborador", desde: "md" as const },
+          { href: "/revendedor", label: "Ser revendedor", desde: "lg" as const },
+        ]),
     { href: "/contactos", label: "Contactos", desde: "lg" },
   ];
 
@@ -140,7 +155,9 @@ export default function Header() {
         ? "/loja"
         : profile.role === "seller"
           ? "/vendedor"
-          : "/cliente"
+          : profile.role === "reseller"
+            ? "/revenda"
+            : "/cliente"
     : "/login";
 
   return (

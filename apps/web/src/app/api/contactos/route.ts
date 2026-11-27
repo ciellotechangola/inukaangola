@@ -52,6 +52,33 @@ export async function GET() {
       .neq("id", user.id)
       .neq("is_active", false);
     for (const p of data ?? []) ids.add((p as { id: string }).id);
+  } else if (papel === "reseller") {
+    // O revendedor fala com a gestão: o gerente da sua província e a
+    // administração nacional. Não precisa de ver os gestores das outras
+    // províncias — cada um responde pelo seu território.
+    const { data: euRev } = await supabaseAdmin
+      .from("revendedores")
+      .select("provincia_id, manager_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    const minhaProvincia = (euRev as { provincia_id: string | null } | null)?.provincia_id ?? null;
+    const gerenteDirecto = (euRev as { manager_id: string | null } | null)?.manager_id ?? null;
+
+    const { data: gestores } = await supabaseAdmin
+      .from("profiles")
+      .select("id, provincia_id, is_national_admin")
+      .eq("role", "manager")
+      .neq("id", user.id)
+      .neq("is_active", false);
+
+    for (const g of gestores ?? []) {
+      const linha = g as { id: string; provincia_id: string | null; is_national_admin: boolean };
+      const nacional = linha.is_national_admin || linha.provincia_id === null;
+      if (nacional || linha.id === gerenteDirecto || linha.provincia_id === minhaProvincia) {
+        ids.add(linha.id);
+      }
+    }
   } else {
     // A gerência está sempre disponível para todos.
     const { data: gestores } = await supabaseAdmin

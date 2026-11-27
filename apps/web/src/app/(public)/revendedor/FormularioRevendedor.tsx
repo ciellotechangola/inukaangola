@@ -1,20 +1,24 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Send } from "lucide-react";
+import { Building2, Check, Send, User } from "lucide-react";
 import { normalizePhone } from "@/lib/utils";
 import type { Provincia } from "@/lib/provincias";
 
 /**
- * Formulário público de candidatura a revendedor.
+ * Formulário público «Ser revendedor INUKA».
  *
- * Três campos obrigatórios e nada mais: cada campo a mais é uma pessoa que
- * desiste. O telefone é normalizado antes de sair daqui, para a gestão não
- * receber "+244 923 111 444" e "923111444" como duas pessoas diferentes.
+ * Empresa ou pessoa — o mesmo formulário, com o rótulo do nome a mudar. Os
+ * campos a mais custam candidaturas: NIF e e-mail são opcionais e ficam para
+ * quem quiser acelerar a aprovação. O telefone é normalizado antes de sair
+ * daqui para a gestão não receber o mesmo número em duas grafias.
  */
 export default function FormularioRevendedor({ provincias }: { provincias: Provincia[] }) {
+  const [tipo, setTipo] = useState<"pessoa" | "empresa">("empresa");
   const [nome, setNome] = useState("");
   const [telefone, setTelefone] = useState("");
+  const [email, setEmail] = useState("");
+  const [nif, setNif] = useState("");
   const [provincia, setProvincia] = useState("");
   const [mensagem, setMensagem] = useState("");
   const [erro, setErro] = useState("");
@@ -26,7 +30,11 @@ export default function FormularioRevendedor({ provincias }: { provincias: Provi
     setErro("");
 
     if (nome.trim().length < 2) {
-      setErro("Indique o seu nome completo.");
+      setErro(
+        tipo === "empresa"
+          ? "Indique o nome da empresa."
+          : "Indique o seu nome completo."
+      );
       return;
     }
 
@@ -42,11 +50,14 @@ export default function FormularioRevendedor({ provincias }: { provincias: Provi
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          tipo,
           full_name: nome.trim(),
           phone: numero,
+          email: email.trim() || null,
+          nif: nif.trim() || null,
           provincia_id: provincia || null,
           message: mensagem.trim() || null,
-          source: "loja",
+          source: "site",
         }),
       });
 
@@ -69,13 +80,16 @@ export default function FormularioRevendedor({ provincias }: { provincias: Provi
         </span>
         <h3 className="text-lg font-medium text-[#F5F5F5]">Candidatura recebida</h3>
         <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-[#A3A3A3]">
-          A gestão INUKA vai analisar os seus dados e entrar em contacto pelo número que deixou.
+          O gerente da sua província vai analisar os dados e entrar em contacto pelo número que
+          deixou. Se for aprovado, recebe acesso ao catálogo de grosso.
         </p>
         <button
           onClick={() => {
             setEnviado(false);
             setNome("");
             setTelefone("");
+            setEmail("");
+            setNif("");
             setProvincia("");
             setMensagem("");
           }}
@@ -92,20 +106,48 @@ export default function FormularioRevendedor({ provincias }: { provincias: Provi
       onSubmit={enviar}
       className="rounded-2xl border border-[#262626] bg-[#141414] p-6 sm:p-8"
     >
-      <h2 className="text-lg font-medium text-[#F5F5F5]">Quero ser colaborador INUKA</h2>
+      <h2 className="text-lg font-medium text-[#F5F5F5]">Ser revendedor INUKA</h2>
       <p className="mt-1 text-xs text-[#6F6F6F]">
-        Deixe o seu contacto. A gestão recebe a candidatura e responde.
+        Deixe os seus dados. A gestão da sua província recebe a candidatura e responde.
       </p>
 
-      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+      {/* Empresa ou pessoa: muda o rótulo do nome e pede NIF só à empresa. */}
+      <div className="mt-5 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => setTipo("empresa")}
+          className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs transition ${
+            tipo === "empresa"
+              ? "border-[#C9A962]/60 bg-[#C9A962]/10 text-[#C9A962]"
+              : "border-[#333] text-[#A3A3A3] hover:border-[#C9A962]/40 hover:text-[#C9A962]"
+          }`}
+        >
+          <Building2 className="h-3.5 w-3.5" />
+          Empresa
+        </button>
+        <button
+          type="button"
+          onClick={() => setTipo("pessoa")}
+          className={`inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs transition ${
+            tipo === "pessoa"
+              ? "border-[#C9A962]/60 bg-[#C9A962]/10 text-[#C9A962]"
+              : "border-[#333] text-[#A3A3A3] hover:border-[#C9A962]/40 hover:text-[#C9A962]"
+          }`}
+        >
+          <User className="h-3.5 w-3.5" />
+          Pessoa
+        </button>
+      </div>
+
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <label className="block sm:col-span-2">
           <span className="mb-1 block text-[11px] uppercase tracking-wide text-[#6F6F6F]">
-            Nome completo *
+            {tipo === "empresa" ? "Nome da empresa *" : "Nome completo *"}
           </span>
           <input
             value={nome}
             onChange={(e) => setNome(e.target.value)}
-            placeholder="Ex.: Ana Manuel"
+            placeholder={tipo === "empresa" ? "Ex.: Kianda Comércio Lda" : "Ex.: Ana Manuel"}
             className="w-full rounded-lg border border-[#333] bg-[#0A0A0A] px-3 py-2.5 text-sm text-[#F5F5F5] placeholder:text-[#4A4A4A] focus:border-[#C9A962] focus:outline-none"
           />
         </label>
@@ -141,16 +183,41 @@ export default function FormularioRevendedor({ provincias }: { provincias: Provi
           </select>
         </label>
 
+        <label className="block">
+          <span className="mb-1 block text-[11px] uppercase tracking-wide text-[#6F6F6F]">
+            E-mail
+          </span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="opcional"
+            className="w-full rounded-lg border border-[#333] bg-[#0A0A0A] px-3 py-2.5 text-sm text-[#F5F5F5] placeholder:text-[#4A4A4A] focus:border-[#C9A962] focus:outline-none"
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-[11px] uppercase tracking-wide text-[#6F6F6F]">
+            {tipo === "empresa" ? "NIF" : "Nº do BI"}
+          </span>
+          <input
+            value={nif}
+            onChange={(e) => setNif(e.target.value)}
+            placeholder="opcional"
+            className="w-full rounded-lg border border-[#333] bg-[#0A0A0A] px-3 py-2.5 text-sm text-[#F5F5F5] placeholder:text-[#4A4A4A] focus:border-[#C9A962] focus:outline-none"
+          />
+        </label>
+
         <label className="block sm:col-span-2">
           <span className="mb-1 block text-[11px] uppercase tracking-wide text-[#6F6F6F]">
-            Mensagem (opcional)
+            O que pretende revender?
           </span>
           <textarea
             value={mensagem}
             onChange={(e) => setMensagem(e.target.value)}
             rows={3}
             maxLength={800}
-            placeholder="Conte-nos onde vende, que produtos lhe interessam, ou o que precisar."
+            placeholder="Ex.: perfumes e óleos, cerca de 30 unidades por mês, venda em loja física no Uíge."
             className="w-full resize-y rounded-lg border border-[#333] bg-[#0A0A0A] px-3 py-2.5 text-sm text-[#F5F5F5] placeholder:text-[#4A4A4A] focus:border-[#C9A962] focus:outline-none"
           />
         </label>

@@ -16,8 +16,10 @@ const PUBLIC_ROUTES = [
   "/sobre",
   "/contactos",
   "/privacidade",
-  // Candidatura a revendedor: quem chega aqui pode nem ter conta — é o
-  // formulário que a própria pessoa preenche antes de ser colaborador.
+  // Candidatura a colaborador: quem chega aqui pode nem ter conta — é o
+  // formulário que a própria pessoa preenche antes de trabalhar na INUKA.
+  "/colaborador",
+  // Candidatura a revendedor (grosso): mesma lógica, outra porta.
   "/revendedor",
   // Área de download: quem quer a aplicação ainda não é cliente. Pedir sessão
   // aqui era o mesmo que fechar a porta a quem chega pela primeira vez.
@@ -114,11 +116,17 @@ export default async function proxy(request: NextRequest) {
       customer: "/cliente",
       seller: "/vendedor",
       store_seller: "/loja",
+      reseller: "/revenda",
       manager: "/gerente",
     };
     const destino = AREA[role] ?? "/";
 
     if (pathname.startsWith("/cliente") && role !== "customer" && role !== "manager") {
+      return NextResponse.redirect(new URL(destino, request.url));
+    }
+    // A revenda é de quem compra ao grosso. Nem cliente, nem colaborador, nem
+    // loja entram aqui — são negócios diferentes.
+    if (pathname.startsWith("/revenda") && role !== "reseller" && role !== "manager") {
       return NextResponse.redirect(new URL(destino, request.url));
     }
     if (pathname.startsWith("/vendedor") && role !== "seller" && role !== "manager") {

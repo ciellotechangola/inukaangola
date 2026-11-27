@@ -40,6 +40,7 @@ const PARTES = [
   { ficheiro: "migrations/0023_saldo_contabilistico.sql", titulo: "SALDO CONTABILÍSTICO (META DO GESTOR) E VISÃO DA EMPRESA" },
   { ficheiro: "migrations/0024_painel_financeiro.sql", titulo: "PAINEL FINANCEIRO: OS OITO INDICADORES NAS MÃOS DO GESTOR" },
   { ficheiro: "migrations/0025_lojas.sql", titulo: "LOJAS: CÓDIGO, NOME, PROVÍNCIA E GERENTE EM CADA FLUXO" },
+  { ficheiro: "migrations/0026_revendedores.sql", titulo: "REVENDEDOR: PREÇO DE GROSSO, PEDIDOS E CANDIDATURAS" },
 ];
 
 const cabecalho = `-- =============================================================================

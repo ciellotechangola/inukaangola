@@ -15,7 +15,9 @@ export default async function ConversasPage() {
         ? { href: "/loja", label: "Loja" }
         : profile.role === "seller"
           ? { href: "/vendedor", label: "Área de colaborador" }
-          : { href: "/cliente", label: "Área de cliente" };
+          : profile.role === "reseller"
+            ? { href: "/revenda", label: "Área de revenda" }
+            : { href: "/cliente", label: "Área de cliente" };
 
   return <Chat voltarHref={voltar.href} voltarLabel={voltar.label} />;
 }

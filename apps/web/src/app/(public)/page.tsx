@@ -3,6 +3,7 @@ import Link from "next/link";
 import {
   ArrowRight,
   BadgeCheck,
+  Building2,
   CreditCard,
   Download,
   Headphones,
@@ -86,6 +87,7 @@ function areaDaConta(papel: string): string {
   if (papel === "manager") return "/gerente";
   if (papel === "store_seller") return "/loja";
   if (papel === "seller") return "/vendedor";
+  if (papel === "reseller") return "/revenda";
   return "/cliente";
 }
 
@@ -186,7 +188,7 @@ export default async function HomePage() {
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
-                href="/revendedor"
+                href="/colaborador"
                 className="inline-flex items-center gap-2 rounded-lg border border-[#C9A962]/50 bg-[#C9A962]/5 px-6 py-3 text-sm font-medium text-[#C9A962] transition hover:bg-[#C9A962] hover:text-[#0A0A0A]"
               >
                 <Users className="h-4 w-4" />
@@ -200,6 +202,27 @@ export default async function HomePage() {
                 Descarregar a app
               </Link>
             </div>
+
+            {/* A porta do grosso fica logo abaixo da porta do colaborador:
+                são os dois caminhos de quem quer ganhar com a INUKA — um por
+                comissão, outro por margem. */}
+            <Link
+              href="/revendedor"
+              className="group mt-3 flex max-w-md items-center gap-3 rounded-xl border border-[#C9A962]/30 bg-[#C9A962]/5 px-4 py-3 transition hover:border-[#C9A962]/70 hover:bg-[#C9A962]/10"
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#C9A962]/10 text-[#C9A962]">
+                <Building2 className="h-4 w-4" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-[#C9A962]">
+                  Ser revendedor INUKA
+                </span>
+                <span className="block text-[11px] leading-snug text-[#8A8A8A]">
+                  Compre ao preço de grosso, a partir de 5 unidades, e revenda em Angola.
+                </span>
+              </span>
+              <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-[#C9A962] transition group-hover:translate-x-0.5" />
+            </Link>
 
             {/* O feed é a montra viva da marca: promoções e testemunhos. Fica
                 aqui como ligação discreta — o hero já tem botões suficientes,
