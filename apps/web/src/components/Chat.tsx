@@ -21,6 +21,7 @@ import {
   MessageSquarePlus,
   Mic,
   Paperclip,
+  Play,
   Search,
   Send,
   Square,
@@ -32,6 +33,7 @@ import {
 } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
 import { descarregar } from "@/lib/descarregar";
+import VisualizadorAnexo from "@/components/chat/VisualizadorAnexo";
 import {
   abrirConversaDirecta,
   adicionarMembroGrupo,
@@ -94,19 +96,50 @@ const JANELA_BLOCO = 5 * 60 * 1000;
  * declarado rebenta a página inteira (já aconteceu com o catálogo). `<img>`
  * simples é o correcto aqui.
  *
+ * **Tocar abre, não guarda.** Antes, o toque na fotografia descarregava o
+ * ficheiro: no telemóvel isso atirava a pessoa para a galeria do sistema, ou
+ * pedia uma aplicação para abrir aquilo que acabou de descer. Ver e guardar
+ * são acções diferentes — ver abre o visualizador em ecrã inteiro, guardar é
+ * um botão lá dentro (e o ícone de descarga nos documentos).
+ *
  * Descarregar é um `fetch` à nossa rota — não uma ligação. O URL assinado vive
  * noutro domínio, e aí o `download` do `<a>` é ignorado: o toque abria a
  * fotografia numa aba nova em vez de a guardar. A rota responde sempre em anexo
  * e **as imagens saem em PNG**.
- *
- * Numa fotografia o botão é explícito («Baixar PNG», no canto), porque um selo
- * mudo não se percebe como acção — e a própria fotografia também guarda, para
- * quem toca na imagem à espera disso. São dois botões irmãos: um dentro do
- * outro não é HTML válido.
  */
 type EstadoAnexo = "parado" | "a-guardar" | "guardado" | "falhou";
 
-function VistaAnexo({ anexo }: { anexo: Anexo }) {
+/** O que o dispositivo sabe abrir sem passar por uma loja de aplicações. */
+function abreNoDispositivo(anexo: Anexo) {
+  if (!anexo.url) return;
+  window.open(anexo.url, "_blank", "noopener,noreferrer");
+}
+
+/**
+ * Tipos que o browser mostra sozinho.
+ *
+ * Um Word ou um Excel «aberto» num separador novo não mostra nada — fica um
+ * ecrã vazio e, logo a seguir, o pedido de uma aplicação para abrir o ficheiro.
+ * Esses só fazem sentido a guardar.
+ */
+function abreNoBrowser(tipo: string) {
+  return (
+    tipo === "application/pdf" ||
+    tipo.startsWith("text/") ||
+    tipo.startsWith("image/") ||
+    tipo.startsWith("video/") ||
+    tipo.startsWith("audio/")
+  );
+}
+
+function VistaAnexo({
+  anexo,
+  onAbrir,
+}: {
+  anexo: Anexo;
+  /** Abre o visualizador em ecrã inteiro (fotografias e vídeos). */
+  onAbrir?: (anexo: Anexo) => void;
+}) {
   const tipo = anexo.file_type ?? "";
   const [estado, setEstado] = useState<EstadoAnexo>("parado");
   const temporizador = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -136,38 +169,21 @@ function VistaAnexo({ anexo }: { anexo: Anexo }) {
     }
   };
 
+  const abrir = () => (onAbrir ? onAbrir(anexo) : abreNoDispositivo(anexo));
+
   if (tipo.startsWith("image/")) {
     if (!anexo.url) {
       return <div className="h-40 w-52 animate-pulse rounded-lg bg-black/20" />;
     }
 
-    const rotulo = aGuardar
-      ? "A guardar…"
-      : estado === "guardado"
-        ? "Guardado"
-        : falhou
-          ? "Falhou"
-          : "Baixar PNG";
-
-    const icone = aGuardar ? (
-      <Loader2 className="h-3 w-3 animate-spin" />
-    ) : estado === "guardado" ? (
-      <Check className="h-3 w-3" />
-    ) : (
-      <Download className="h-3 w-3" />
-    );
-
     return (
       <div className="relative inline-block max-w-full">
         <button
           type="button"
-          onClick={guardar}
-          disabled={aGuardar}
-          title={`Baixar ${anexo.file_name} em PNG`}
-          aria-label={`Baixar ${anexo.file_name} em PNG`}
-          className={`block cursor-pointer overflow-hidden rounded-lg ${
-            aGuardar ? "cursor-progress opacity-80" : ""
-          }`}
+          onClick={abrir}
+          title={`Ver ${anexo.file_name}`}
+          aria-label={`Ver ${anexo.file_name}`}
+          className="block cursor-zoom-in overflow-hidden rounded-lg"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -177,23 +193,44 @@ function VistaAnexo({ anexo }: { anexo: Anexo }) {
           />
         </button>
 
+        {/* Só o tamanho: é informação, não uma acção — quem age é a imagem. */}
+        <span className="pointer-events-none absolute bottom-1.5 right-1.5 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+          {formatarTamanho(anexo.file_size)}
+        </span>
+      </div>
+    );
+  }
+
+  if (tipo.startsWith("video/")) {
+    if (!anexo.url) {
+      return <div className="h-40 w-52 animate-pulse rounded-lg bg-black/20" />;
+    }
+
+    // O fotograma fica por baixo e o botão por cima: `<video>` dentro de
+    // `<button>` não é conteúdo permitido.
+    return (
+      <div className="relative h-40 w-52 overflow-hidden rounded-lg bg-black/40">
+        <video
+          src={anexo.url}
+          muted
+          playsInline
+          preload="metadata"
+          className="absolute inset-0 h-full w-full object-cover opacity-80"
+        />
         <button
           type="button"
-          onClick={guardar}
-          disabled={aGuardar}
-          title={`Baixar ${anexo.file_name} em PNG`}
-          aria-label={`Baixar ${anexo.file_name} em PNG`}
-          className={`absolute bottom-1.5 right-1.5 flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium text-white shadow-sm backdrop-blur-sm transition ${
-            falhou
-              ? "bg-[#7F1D1D]/85"
-              : estado === "guardado"
-                ? "bg-[#14532D]/85"
-                : "bg-black/65 hover:bg-black/85"
-          }`}
+          onClick={abrir}
+          title={`Ver ${anexo.file_name}`}
+          aria-label={`Ver ${anexo.file_name}`}
+          className="group absolute inset-0 flex items-center justify-center"
         >
-          {icone}
-          {rotulo}
+          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/60 text-white transition group-hover:bg-black/80">
+            <Play className="h-5 w-5" />
+          </span>
         </button>
+        <span className="pointer-events-none absolute bottom-1.5 right-1.5 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+          {formatarTamanho(anexo.file_size)}
+        </span>
       </div>
     );
   }
@@ -205,6 +242,14 @@ function VistaAnexo({ anexo }: { anexo: Anexo }) {
     return <audio controls src={anexo.url} className="h-11 w-72 max-w-full" />;
   }
 
+  const rotuloEstado = aGuardar
+    ? "A guardar…"
+    : estado === "guardado"
+      ? "Guardado"
+      : falhou
+        ? "Falhou — tenta outra vez"
+        : formatarTamanho(anexo.file_size);
+
   const conteudo = (
     <>
       <FileText className="h-5 w-5 shrink-0 opacity-80" />
@@ -212,40 +257,69 @@ function VistaAnexo({ anexo }: { anexo: Anexo }) {
         {/* Um nome de ficheiro longo parte em duas linhas em vez de desaparecer
             no meio de um `truncate`. */}
         <span className="line-clamp-2 break-all text-xs font-medium">{anexo.file_name}</span>
-        <span className="block text-[10px] opacity-70">
-          {aGuardar
-            ? "A guardar…"
-            : estado === "guardado"
-              ? "Guardado"
-              : falhou
-                ? "Falhou — toca para repetir"
-                : formatarTamanho(anexo.file_size)}
-        </span>
+        <span className="block text-[10px] opacity-70">{rotuloEstado}</span>
       </span>
-      {aGuardar ? (
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin opacity-70" />
-      ) : estado === "guardado" ? (
-        <Check className="h-4 w-4 shrink-0 opacity-70" />
-      ) : (
-        <Download className="h-4 w-4 shrink-0 opacity-70" />
-      )}
     </>
   );
 
   const classes = "flex items-center gap-2 rounded-lg bg-black/15 px-3 py-2.5 text-left";
 
-  return anexo.url ? (
-    <button
-      type="button"
-      onClick={guardar}
-      disabled={aGuardar}
-      title={`Descarregar ${anexo.file_name}`}
-      className={classes}
-    >
-      {conteudo}
-    </button>
+  const icone = aGuardar ? (
+    <Loader2 className="h-4 w-4 shrink-0 animate-spin opacity-70" />
+  ) : estado === "guardado" ? (
+    <Check className="h-4 w-4 shrink-0 opacity-70" />
   ) : (
-    <div className={classes}>{conteudo}</div>
+    <Download className="h-4 w-4 shrink-0 opacity-70" />
+  );
+
+  // Sem URL assinado não há nada para abrir: fica só a informação.
+  if (!anexo.url) return <div className={classes}>{conteudo}</div>;
+
+  // O browser não mostra isto (Word, Excel, ZIP…): abrir só dava um separador
+  // vazio. Aqui o toque guarda, e o rótulo diz isso mesmo.
+  if (!abreNoBrowser(tipo)) {
+    return (
+      <button
+        type="button"
+        onClick={guardar}
+        disabled={aGuardar}
+        title={`Guardar ${anexo.file_name}`}
+        aria-label={`Guardar ${anexo.file_name}`}
+        className={`${classes} w-full`}
+      >
+        {conteudo}
+        {icone}
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1 rounded-lg bg-black/15 pr-1.5">
+      <button
+        type="button"
+        onClick={() => abreNoDispositivo(anexo)}
+        title={`Abrir ${anexo.file_name}`}
+        aria-label={`Abrir ${anexo.file_name}`}
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-lg py-2.5 pl-3 pr-1 text-left"
+      >
+        {conteudo}
+      </button>
+
+      {/* Guardar continua a existir, mas como ícone à parte — já não é o que
+          acontece quando se toca no ficheiro. */}
+      <button
+        type="button"
+        onClick={guardar}
+        disabled={aGuardar}
+        title={`Guardar ${anexo.file_name}`}
+        aria-label={`Guardar ${anexo.file_name}`}
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition hover:bg-black/25 ${
+          falhou ? "text-red-300" : "opacity-70 hover:opacity-100"
+        }`}
+      >
+        {icone}
+      </button>
+    </div>
   );
 }
 
@@ -289,6 +363,39 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
 
   const activa = conversas.find((c) => c.id === activeId) ?? null;
   const titulo = activa ? nomeConversa(activa, eu?.id ?? null) : "";
+
+  /**
+   * O visualizador de anexos.
+   *
+   * Tocar numa fotografia abre-a em ecrã inteiro — e as setas passam às
+   * fotografias seguintes **desta conversa**, como no WhatsApp. Guardamos a
+   * lista no momento do toque para as setas não dependerem de re-renders.
+   */
+  const [visualizador, setVisualizador] = useState<{
+    anexos: Anexo[];
+    indice: number;
+  } | null>(null);
+
+  /** Fotografias e vídeos da conversa aberta, por ordem de chegada. */
+  const navegaveis = useMemo(
+    () =>
+      mensagens.flatMap((m) =>
+        (m.anexos ?? []).filter((a) => {
+          const t = a.file_type ?? "";
+          return !!a.url && (t.startsWith("image/") || t.startsWith("video/"));
+        })
+      ),
+    [mensagens]
+  );
+
+  const abrirAnexo = useCallback(
+    (alvo: Anexo) => {
+      const lista = navegaveis.some((a) => a.id === alvo.id) ? navegaveis : [alvo];
+      const indice = lista.findIndex((a) => a.id === alvo.id);
+      setVisualizador({ anexos: lista, indice: indice < 0 ? 0 : indice });
+    },
+    [navegaveis]
+  );
 
   /** Junta sem duplicar e mantém ordem cronológica (o realtime pode chegar fora de ordem). */
   const juntarMensagem = useCallback((entrante: Mensagem, substituirId?: string) => {
@@ -1171,7 +1278,7 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
                             {m.anexos && m.anexos.length > 0 && (
                               <div className="mb-1 space-y-1.5">
                                 {m.anexos.map((a) => (
-                                  <VistaAnexo key={a.id} anexo={a} />
+                                  <VistaAnexo key={a.id} anexo={a} onAbrir={abrirAnexo} />
                                 ))}
                               </div>
                             )}
@@ -1352,6 +1459,16 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
           )}
         </section>
       </div>
+
+      {/* ---------------- Visualizador de anexos ---------------- */}
+      {visualizador && (
+        <VisualizadorAnexo
+          anexos={visualizador.anexos}
+          indice={visualizador.indice}
+          onFechar={() => setVisualizador(null)}
+          onMudar={(i) => setVisualizador((v) => (v ? { ...v, indice: i } : v))}
+        />
+      )}
 
       {/* ---------------- Modais ---------------- */}
       {modal && (
