@@ -407,7 +407,7 @@ export default function CatalogoGrosso({
           )}
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2">
           {filtrados.map((p) => {
             const qtd = quantidadeDe(p);
             const noCarrinho = qtd > 0;
@@ -419,184 +419,193 @@ export default function CatalogoGrosso({
             return (
               <article
                 key={p.product_id}
-                className={`flex min-w-0 flex-col overflow-hidden rounded-2xl border bg-[#141414] transition ${
+                className={`flex min-w-0 flex-col rounded-2xl border p-5 transition sm:p-6 ${
                   noCarrinho
-                    ? "border-[#C9A962]/60 shadow-[0_0_0_1px_rgba(201,169,98,0.15)]"
-                    : "border-[#262626] hover:border-[#3A3A3A]"
+                    ? "border-[#C9A962]/70 bg-[#17150F] shadow-[0_0_30px_-12px_rgba(201,169,98,0.65)]"
+                    : "border-[#2A2A2A] bg-[#161616] hover:border-[#3D3D3D]"
                 }`}
               >
-                {/* Fotografia: painel branco quadrado, a mesma regra em todo o sistema. */}
-                <div className="relative">
+                {/* ---- cabeçalho: nome, referência e a fotografia discreta ---- */}
+                <div className="flex items-start gap-4">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-lg font-bold leading-snug text-[#F5F5F5] sm:text-xl">
+                      {p.nome}
+                    </h3>
+                    <p className="mt-2.5 truncate text-[13px] text-[#8A8A8A]">
+                      {p.sku ?? "sem SKU"}
+                      {p.categoria ? ` · ${p.categoria}` : ""}
+                    </p>
+                    <p
+                      className={`mt-1 text-[11px] ${
+                        semStock ? "text-[#F87171]" : "text-[#5F5F5F]"
+                      }`}
+                    >
+                      {p.stock === null
+                        ? "Stock sob consulta"
+                        : semStock
+                          ? "Sem stock nesta província"
+                          : `${p.stock} un. disponíveis`}
+                    </p>
+                  </div>
                   <FotoProduto
                     src={p.imagem}
                     alt={p.nome}
-                    raio="nenhum"
-                    respiro="amplo"
-                    vazio={<Package className="h-8 w-8 text-[#B8B8B8]" />}
+                    lado={72}
+                    raio="lg"
+                    respiro="curto"
+                    className="shrink-0"
+                    vazio={<Package className="h-5 w-5 text-[#B8B8B8]" />}
                   />
-                  <span
-                    className={`absolute right-2 top-2 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                      semStock
-                        ? "bg-[#2A1010] text-[#F87171]"
-                        : "bg-[#0A0A0A]/85 text-[#A3A3A3]"
-                    }`}
-                  >
-                    {p.stock === null
-                      ? "stock sob consulta"
-                      : semStock
-                        ? "sem stock"
-                        : `${p.stock} un.`}
-                  </span>
-                  {noCarrinho && (
-                    <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-[#C9A962] px-2 py-0.5 text-[10px] font-semibold text-[#0A0A0A]">
-                      <ShoppingCart className="h-2.5 w-2.5" />
-                      {qtd}
-                    </span>
-                  )}
                 </div>
 
-                <div className="flex flex-1 flex-col p-4">
-                  <h3 className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-[#F5F5F5]">
-                    {p.nome}
-                  </h3>
-                  <p className="mt-1 truncate text-[11px] text-[#525252]">
-                    {p.sku ?? "sem SKU"}
-                    {p.categoria ? ` · ${p.categoria}` : ""}
-                  </p>
+                <div className="my-4 h-px bg-[#2A2A2A]" />
 
-                  {/* Os dois números que decidem a compra. */}
-                  <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#1F1F1F] pt-3">
-                    <div className="min-w-0">
-                      <p className="text-[9.5px] uppercase tracking-wide text-[#525252]">
-                        Aquisição
-                      </p>
-                      <p className="text-lg font-light leading-tight text-[#C9A962]">
+                {/* ---- os dois números que decidem a compra ---- */}
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#9C8A5E]">
+                      Aquisição
+                    </p>
+                    {/* O preço de aquisição é o número que manda: caixa dourada
+                        com brilho, e a pastilha «por unidade» por baixo. */}
+                    <div className="relative mt-2 inline-block">
+                      <span className="inline-block rounded-xl border border-[#C9A962] px-3.5 py-1.5 text-2xl font-bold leading-none text-[#E8C766] shadow-[0_0_26px_-8px_rgba(201,169,98,0.85)] sm:text-3xl">
                         {formatCurrency(p.preco_grosso)}
-                      </p>
-                      <p className="text-[10px] text-[#4A4A4A]">por unidade</p>
-                    </div>
-                    <div className="min-w-0 text-right">
-                      <p className="text-[9.5px] uppercase tracking-wide text-[#525252]">
-                        Mín. oficial
-                      </p>
-                      <p className="text-sm font-medium leading-tight text-[#E5E5E5]">
-                        {formatCurrency(p.preco_loja)}
-                      </p>
-                      <p className="text-[10px] text-[#4A4A4A]">venda ao cliente</p>
+                      </span>
+                      <span className="absolute -bottom-3 left-2 inline-flex items-center gap-1.5 rounded-full bg-[#C9A962] px-2.5 py-1 text-[11px] font-semibold leading-none text-[#141414]">
+                        <ShoppingCart className="h-3 w-3" />
+                        por unidade
+                      </span>
                     </div>
                   </div>
 
-                  <div className="mt-auto pt-3">
-                    {noCarrinho ? (
-                      <>
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center rounded-lg border border-[#333]">
-                            <button
-                              type="button"
-                              onClick={() => mudar(p, -1)}
-                              disabled={qtd <= 1}
-                              aria-label="Diminuir"
-                              className="grid h-8 w-8 place-items-center text-[#A3A3A3] transition hover:text-[#C9A962] disabled:opacity-30 disabled:hover:text-[#A3A3A3]"
-                            >
-                              <Minus className="h-3.5 w-3.5" />
-                            </button>
-                            <input
-                              value={qtd}
-                              onChange={(e) => definirQuantidade(p, e.target.value)}
-                              inputMode="numeric"
-                              aria-label={`Quantidade de ${p.nome}`}
-                              className="w-10 border-x border-[#333] bg-transparent py-1.5 text-center text-sm text-[#F5F5F5] focus:outline-none"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => mudar(p, 1)}
-                              aria-label="Aumentar"
-                              className="grid h-8 w-8 place-items-center text-[#A3A3A3] transition hover:text-[#C9A962]"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
+                  <div className="shrink-0 pt-1 text-right">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8A8A8A]">
+                      Mín. oficial
+                    </p>
+                    <p className="mt-2 text-xl font-semibold leading-none text-[#F5F5F5]">
+                      {formatCurrency(p.preco_loja)}
+                    </p>
+                    <p className="mt-1 text-[12px] text-[#8A8A8A]">venda ao cliente</p>
+                  </div>
+                </div>
+
+                {/* `mt-8` abre espaço para a pastilha que sai da caixa do preço. */}
+                <div className="mt-8">
+                  {noCarrinho ? (
+                    <>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-stretch overflow-hidden rounded-xl border border-[#3A3A3A]">
                           <button
                             type="button"
-                            onClick={() => remover(p.product_id)}
-                            className="inline-flex items-center gap-1 text-[10px] text-[#525252] transition hover:text-[#F87171]"
+                            onClick={() => mudar(p, -1)}
+                            disabled={qtd <= 1}
+                            aria-label="Diminuir"
+                            className="grid h-11 w-14 place-items-center text-[#A3A3A3] transition hover:text-[#C9A962] disabled:opacity-30 disabled:hover:text-[#A3A3A3]"
                           >
-                            <Trash2 className="h-3 w-3" />
-                            remover
+                            <Minus className="h-4 w-4" />
+                          </button>
+                          <input
+                            value={qtd}
+                            onChange={(e) => definirQuantidade(p, e.target.value)}
+                            inputMode="numeric"
+                            aria-label={`Quantidade de ${p.nome}`}
+                            className="h-11 w-14 border-x border-[#3A3A3A] bg-transparent text-center text-base text-[#F5F5F5] focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => mudar(p, 1)}
+                            aria-label="Aumentar"
+                            className="grid h-11 w-14 place-items-center text-[#A3A3A3] transition hover:text-[#C9A962]"
+                          >
+                            <Plus className="h-4 w-4" />
                           </button>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => remover(p.product_id)}
+                          className="inline-flex items-center gap-2 text-[13px] text-[#8A8A8A] transition hover:text-[#F87171]"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          remover
+                        </button>
+                      </div>
 
-                        {/* O preço é dele: escreve, e o lucro muda à vista. */}
-                        <div className="mt-2.5 rounded-lg border border-[#262626] bg-[#0A0A0A] p-2.5">
-                          <div className="flex items-center justify-between gap-2">
-                            <label
-                              htmlFor={`venda-${p.product_id}`}
-                              className="text-[10px] uppercase tracking-wide text-[#6F6F6F]"
-                            >
-                              O seu preço de venda
-                            </label>
-                            <div className="flex items-center gap-1">
-                              <input
-                                id={`venda-${p.product_id}`}
-                                value={venda}
-                                onChange={(e) => escreverPreco(p, e.target.value)}
-                                onBlur={() => confirmarPreco(p)}
-                                inputMode="numeric"
-                                className={`w-24 rounded border bg-transparent px-2 py-1 text-right text-sm focus:outline-none ${
-                                  abaixoDoMinimo
-                                    ? "border-[#7A5A20] text-[#E3D5A7]"
-                                    : "border-[#333] text-[#F5F5F5] focus:border-[#C9A962]"
-                                }`}
-                              />
-                              <span className="text-[10px] text-[#525252]">Kz</span>
-                            </div>
+                      {/* O preço é dele: escreve, e o lucro muda à vista. */}
+                      <div className="mt-4 rounded-xl border border-[#2E2E2E] bg-[#101010] p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <label
+                            htmlFor={`venda-${p.product_id}`}
+                            className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#9A9A9A]"
+                          >
+                            O seu preço de venda
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              id={`venda-${p.product_id}`}
+                              value={venda}
+                              onChange={(e) => escreverPreco(p, e.target.value)}
+                              onBlur={() => confirmarPreco(p)}
+                              inputMode="numeric"
+                              className={`w-32 rounded-lg border bg-transparent px-3 py-2 text-right text-xl font-semibold focus:outline-none sm:w-36 ${
+                                abaixoDoMinimo
+                                  ? "border-[#7A5A20] text-[#E3D5A7]"
+                                  : "border-[#444] text-[#F5F5F5] focus:border-[#C9A962]"
+                              }`}
+                            />
+                            <span className="text-[13px] text-[#8A8A8A]">Kz</span>
                           </div>
+                        </div>
 
-                          <div className="mt-2 flex items-baseline justify-between border-t border-[#1F1F1F] pt-2">
-                            <span className="inline-flex items-center gap-1 text-[10px] text-[#6F6F6F]">
-                              <TrendingUp className="h-3 w-3" />
+                        <div className="my-3.5 h-px bg-[#242424]" />
+
+                        <div className="space-y-2.5">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="inline-flex items-center gap-1.5 text-[13px] text-[#A3A3A3]">
+                              <TrendingUp className="h-4 w-4 text-[#6F6F6F]" />
                               Lucro por unidade
                             </span>
                             <span
-                              className={`text-sm font-semibold ${
+                              className={`text-xl font-bold ${
                                 lucro > 0 ? "text-[#4ADE80]" : "text-[#E3D5A7]"
                               }`}
                             >
                               {formatCurrency(lucro)}
                             </span>
                           </div>
-                          <div className="mt-1 flex items-baseline justify-between">
-                            <span className="text-[10px] text-[#6F6F6F]">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="text-[13px] text-[#A3A3A3]">
                               Lucro nas {qtd} un.
                             </span>
                             <span
-                              className={`text-xs font-medium ${
+                              className={`text-lg font-bold ${
                                 lucro > 0 ? "text-[#4ADE80]" : "text-[#E3D5A7]"
                               }`}
                             >
                               {formatCurrency(lucro * qtd)}
                             </span>
                           </div>
-                          {abaixoDoMinimo && (
-                            <p className="mt-1.5 text-[10px] leading-relaxed text-[#E3D5A7]">
-                              Abaixo do mínimo oficial ({formatCurrency(p.preco_loja)}). Ao sair
-                              do campo volta ao mínimo.
-                            </p>
-                          )}
                         </div>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => adicionar(p)}
-                        disabled={semStock}
-                        className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#C9A962]/50 bg-[#C9A962]/5 px-3 py-2 text-xs font-semibold text-[#C9A962] transition hover:bg-[#C9A962] hover:text-[#0A0A0A] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#C9A962]/5 disabled:hover:text-[#C9A962]"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                        {semStock ? "Sem stock nesta província" : "Adicionar 1 unidade"}
-                      </button>
-                    )}
-                  </div>
+
+                        {abaixoDoMinimo && (
+                          <p className="mt-2.5 text-[11px] leading-relaxed text-[#E3D5A7]">
+                            Abaixo do mínimo oficial ({formatCurrency(p.preco_loja)}). Ao sair do
+                            campo volta ao mínimo.
+                          </p>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => adicionar(p)}
+                      disabled={semStock}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[#C9A962]/50 bg-[#C9A962]/5 px-4 py-3 text-[13px] font-semibold text-[#C9A962] transition hover:bg-[#C9A962] hover:text-[#0A0A0A] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#C9A962]/5 disabled:hover:text-[#C9A962]"
+                    >
+                      <Plus className="h-4 w-4" />
+                      {semStock ? "Sem stock nesta província" : "Adicionar 1 unidade"}
+                    </button>
+                  )}
                 </div>
               </article>
             );
