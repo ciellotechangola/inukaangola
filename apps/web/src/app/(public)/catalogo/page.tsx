@@ -7,6 +7,7 @@ import OrdenarCatalogo from "@/components/OrdenarCatalogo";
 import { produtosComprados } from "@/lib/recompras";
 import { stockDosProdutos } from "@/lib/stock";
 import { precosDeCampanha, provinciaDoVisitante } from "@/lib/promocoes-server";
+import { ordenarCatalogo } from "@/lib/ordenacao-catalogo";
 import type { Category, Product } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -143,6 +144,15 @@ export default async function CatalogPage({
     if (ordem === "novidades") return (b.created_at ?? "").localeCompare(a.created_at ?? "");
     return 0;
   });
+
+  // A ordem de abertura do catálogo: perfumes, depois cremes, depois o resto.
+  // Só na «Relevância» — as outras opções são escolhas explícitas do visitante
+  // («Preço ↑» tem de ser preço, não preço dentro de perfumes) e a regra está
+  // num sítio só (`lib/ordenacao-catalogo`), partilhada com o catálogo de
+  // grosso. Dentro de cada grupo a ordem que veio da base fica como está.
+  if (ordem === "relevancia") {
+    produtos = ordenarCatalogo(produtos, (p) => ({ nome: p.name, categoria: p.category }));
+  }
 
   // ------------------------------------------------------------------- links
   function hrefCom(over: Record<string, string | undefined>) {

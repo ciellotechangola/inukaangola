@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
 import { normalizarCatalogo, normalizarMinhaRevenda } from "@/lib/revenda";
+import { ordenarCatalogo } from "@/lib/ordenacao-catalogo";
 import CatalogoGrosso from "./CatalogoGrosso";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +13,12 @@ export const dynamic = "force-dynamic";
  * Os preços são calculados na base (`revendedor_catalogo`), nunca aqui: o
  * browser não pode decidir quanto custa um produto. Esta página só transporta
  * o que a função devolveu.
+ *
+ * A ordem de abertura é a da casa — **perfumes, depois cremes, depois o
+ * resto** —, aplicada pela mesma função que o catálogo de cliente usa
+ * (`lib/ordenacao-catalogo`). A base continua a devolver o último submetido em
+ * primeiro (0035); dentro de cada grupo essa ordem mantém-se, e é isso que faz
+ * um creme recém-inscrito aparecer no topo dos cremes.
  */
 export default async function CatalogoGrossoPage() {
   const profile = await getProfile();
@@ -28,7 +35,10 @@ export default async function CatalogoGrossoPage() {
   const painel = normalizarMinhaRevenda(painelRaw);
   if (!painel.revendedor) redirect("/revendedor");
 
-  const produtos = normalizarCatalogo((catalogoRaw ?? []) as unknown[]);
+  const produtos = ordenarCatalogo(
+    normalizarCatalogo((catalogoRaw ?? []) as unknown[]),
+    (p) => ({ nome: p.nome, categoria: p.categoria })
+  );
   const semMigracao = !!error && /PGRST202|PGRST205|does not exist/i.test(error.message);
 
   return (

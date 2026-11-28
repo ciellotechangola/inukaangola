@@ -96,7 +96,10 @@ export default function Header() {
     // ao colaborador.
     ...(profile?.role === "manager"
       ? [
-          { href: "/gerente/encomendas", label: "Pedidos" },
+          // «Pedidos» é a central: encomendas, mensagens e as duas
+          // candidaturas num sítio só. As páginas antigas continuam a existir
+          // para quem vai directo a elas.
+          { href: "/gerente/pedidos", label: "Pedidos" },
           { href: "/designer", label: "Designer" },
           { href: "/gerente/conteudos", label: "Conteúdos" },
           // O mesmo feed que a equipa lê, com a lista de quem reagiu em cada

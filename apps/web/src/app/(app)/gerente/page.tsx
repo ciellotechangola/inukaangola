@@ -145,7 +145,9 @@ export default async function ManagerDashboardPage() {
           <Action href="/gerente/perfis" title="Perfis e permissões" />
           <Action href="/gerente/provincias" title="Províncias e delegações" />
           <Action href="/gerente/categorias" title="Categorias" />
-          <Action href="/gerente/encomendas" title="Encomendas" />
+          {/* A central junta encomendas, mensagens e as duas candidaturas:/n              é por aqui que se atende, não por quatro ecrãs diferentes. */}
+          <Action href="/gerente/pedidos" title="Central de pedidos" />
+          <Action href="/gerente/encomendas" title="Encomendas de clientes" />
           <Action href="/gerente/descontos" title="Descontos" />
           <Action href="/gerente/clientes" title="Clientes" />
           <Action href="/gerente/colaboradores" title="Colaboradores" />
