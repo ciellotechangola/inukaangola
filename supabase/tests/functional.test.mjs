@@ -82,6 +82,7 @@ for (const rel of [
   "migrations/0031_catalogo_grosso_proprio.sql",
   "migrations/0032_precos_grosso_por_reducao.sql",
   "migrations/0033_preco_revenda_oficial.sql",
+  "migrations/0034_situacao_da_venda.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -5274,6 +5275,318 @@ const lojaIntacta = await q(
   `SELECT official_price FROM public.products WHERE id = '${gIds[0]}'`);
 check("o preço de cliente final fica intacto depois de escrever o de grosso",
   Number(lojaIntacta[0].official_price) === 1000, String(lojaIntacta[0].official_price));
+
+console.log("\n--- 35. SITUAÇÃO DA VENDA: PENDENTE → PAGO E OS TRÊS SALDOS (0034) ---");
+
+// Contas novas, para o saldo começar mesmo do zero: uma venda de 30.000 Kz e
+// nada mais. Reaproveitar o colaborador do Uíge traria as vendas das secções
+// anteriores e o teste deixava de provar o que diz provar.
+const S_SALDO = "dddd1111-1111-4111-8111-111111111111";
+const M_SALDO = "dddd2222-2222-4222-8222-222222222222";
+
+await exec(`
+  INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
+    ('${S_SALDO}', 'saldo@inuka.ao', '{"full_name":"Colaborador Saldo","phone":"923000090"}'),
+    ('${M_SALDO}', 'msaldo@inuka.ao', '{"full_name":"Gerente Saldo","phone":"923000091"}');
+`);
+await q(`SELECT public.promote_to_seller('+244923000090', 'Uíge', '${UIG}')`);
+await q(`SELECT public.promote_to_manager('+244923000091')`);
+// Gerente provincial do Uíge: vê o Uíge, não vê o resto.
+await exec(`UPDATE public.profiles
+            SET provincia_id = '${UIG}', is_national_admin = false
+            WHERE id = '${M_SALDO}'`);
+await exec(`UPDATE public.seller_profiles SET commission_rate = 0.10 WHERE id = '${S_SALDO}'`);
+
+// Produto exclusivo desta secção: 1 unidade = 30.000 Kz, o número do cenário.
+const pSaldo = (await q(`
+  INSERT INTO public.products (sku, name, official_price, is_active)
+  VALUES ('INK-SALDO-30K', 'Produto do teste de saldo', 30000, true) RETURNING id`))[0].id;
+await exec(`
+  INSERT INTO public.inventory (product_id, provincia_id, quantity)
+  VALUES ('${pSaldo}', '${UIG}', 10);`);
+
+// 35.1 o colaborador regista a venda com a situação por escolher → PENDENTE
+const venda30 = await asUser(S_SALDO, async () =>
+  q(`SELECT public.register_sale('[{"product_id":"${pSaldo}","quantity":1}]'::jsonb,
+      NULL, 'dinheiro', 'pending', 'Venda de 30.000 Kz', 'saldo-30k') AS r`)
+);
+const idVenda30 = venda30[0].r.sale_id;
+check("a venda de 30.000 Kz fica registada", Number(venda30[0].r.total) === 30000,
+  JSON.stringify(venda30[0].r));
+
+// 35.2 ESTADO INICIAL — PENDENTE
+const inicial = (await asUser(S_SALDO, async () =>
+  q(`SELECT public.saldo_colaborador(NULL) AS s`)))[0].s;
+check("PENDENTE · saldo contabilístico = 30.000",
+  Number(inicial.vendas.contabilistico) === 30000, JSON.stringify(inicial.vendas));
+check("PENDENTE · saldo pendente = 30.000",
+  Number(inicial.vendas.pendente) === 30000, JSON.stringify(inicial.vendas));
+check("PENDENTE · saldo activo real = 0",
+  Number(inicial.vendas.activo) === 0, JSON.stringify(inicial.vendas));
+check("PENDENTE · levantamento permitido = 0",
+  Number(inicial.comissoes.disponivel) === 0, JSON.stringify(inicial.comissoes));
+check("PENDENTE · a comissão está por pagar, não ganha (3.000)",
+  Number(inicial.comissoes.por_pagar) === 3000 && Number(inicial.comissoes.ganho) === 0,
+  JSON.stringify(inicial.comissoes));
+check("PENDENTE · uma venda pendente e nenhuma paga",
+  inicial.vendas.count_pendente === 1 && inicial.vendas.count_activo === 0,
+  JSON.stringify(inicial.vendas));
+
+// 35.3 o colaborador não confirma o próprio recebimento
+const colabConfirma = await asUser(S_SALDO, async () => {
+  try { await q(`SELECT public.confirmar_pagamento_venda('${idVenda30}')`); return null; }
+  catch (e) { return e.message; }
+});
+check("o colaborador não confirma o recebimento",
+  /só a gestão/i.test(colabConfirma ?? ""), colabConfirma ?? "não deu erro");
+
+// 35.4 a hierarquia provincial é respeitada
+const ldaConfirma = await asUser(M_LDA, async () => {
+  try { await q(`SELECT public.confirmar_pagamento_venda('${idVenda30}')`); return null; }
+  catch (e) { return e.message; }
+});
+check("um gerente de outra província não confirma esta venda",
+  /outra província/i.test(ldaConfirma ?? ""), ldaConfirma ?? "não deu erro");
+
+const ldaVeSaldo = await asUser(M_LDA, async () => {
+  try { await q(`SELECT public.saldo_colaborador('${S_SALDO}')`); return null; }
+  catch (e) { return e.message; }
+});
+check("um gerente de outra província não vê o saldo deste colaborador",
+  /sem permissão/i.test(ldaVeSaldo ?? ""), ldaVeSaldo ?? "não deu erro");
+
+// 35.5 O GERENTE CONFIRMA O PAGAMENTO
+const confirmacao = (await asUser(M_SALDO, async () =>
+  q(`SELECT public.confirmar_pagamento_venda('${idVenda30}') AS r`)))[0].r;
+check("o gerente confirma o pagamento", confirmacao.estado === "paid",
+  JSON.stringify(confirmacao));
+check("a confirmação devolve já o saldo actualizado (activo 30.000)",
+  Number(confirmacao.saldo.vendas.activo) === 30000, JSON.stringify(confirmacao.saldo.vendas));
+check("a confirmação diz quem a fez",
+  confirmacao.confirmado_por === "Gerente Saldo", String(confirmacao.confirmado_por));
+
+// 35.6 NOVO ESTADO — PAGO
+const pago = (await asUser(S_SALDO, async () =>
+  q(`SELECT public.saldo_colaborador(NULL) AS s`)))[0].s;
+check("PAGO · saldo contabilístico continua 30.000 (não soma outra vez)",
+  Number(pago.vendas.contabilistico) === 30000, JSON.stringify(pago.vendas));
+check("PAGO · saldo pendente = 0",
+  Number(pago.vendas.pendente) === 0, JSON.stringify(pago.vendas));
+check("PAGO · saldo activo real = 30.000",
+  Number(pago.vendas.activo) === 30000, JSON.stringify(pago.vendas));
+check("PAGO · disponível para levantar = a comissão (3.000)",
+  Number(pago.comissoes.disponivel) === 3000, JSON.stringify(pago.comissoes));
+check("PAGO · a comissão passa de «por pagar» a «ganho»",
+  Number(pago.comissoes.por_pagar) === 0 && Number(pago.comissoes.ganho) === 3000,
+  JSON.stringify(pago.comissoes));
+check("PAGO · uma venda paga e nenhuma pendente",
+  pago.vendas.count_activo === 1 && pago.vendas.count_pendente === 0,
+  JSON.stringify(pago.vendas));
+
+// 35.7 confirmar não cria uma venda nova
+const vendasDoColab = await q(
+  `SELECT count(*)::int n, COALESCE(SUM(total_amount), 0) v
+   FROM public.sales WHERE seller_id = '${S_SALDO}' AND status <> 'cancelled'`);
+check("confirmar o pagamento não cria uma venda nova",
+  vendasDoColab[0].n === 1 && Number(vendasDoColab[0].v) === 30000,
+  JSON.stringify(vendasDoColab[0]));
+
+// 35.8 a venda guarda quem confirmou e quando
+const marca = await q(`
+  SELECT payment_status::text AS estado, payment_confirmed_at, payment_confirmed_by
+  FROM public.sales WHERE id = '${idVenda30}'`);
+check("a venda fica marcada como paga com autor e data",
+  marca[0].estado === "paid" && marca[0].payment_confirmed_by === M_SALDO
+  && marca[0].payment_confirmed_at !== null, JSON.stringify(marca[0]));
+
+// 35.9 segunda confirmação é recusada e não mexe no saldo
+const segunda = await asUser(M_SALDO, async () => {
+  try { await q(`SELECT public.confirmar_pagamento_venda('${idVenda30}')`); return null; }
+  catch (e) { return e.message; }
+});
+check("confirmar duas vezes é recusado",
+  /já está confirmada como paga/i.test(segunda ?? ""), segunda ?? "não deu erro");
+const depoisDaRecusa = (await asUser(S_SALDO, async () =>
+  q(`SELECT public.saldo_colaborador(NULL) AS s`)))[0].s;
+check("a recusa não somou nada outra vez",
+  Number(depoisDaRecusa.vendas.activo) === 30000
+  && Number(depoisDaRecusa.vendas.contabilistico) === 30000,
+  JSON.stringify(depoisDaRecusa.vendas));
+
+// 35.10 o histórico financeiro da venda
+const eventos = await q(`
+  SELECT tipo, de, para, por, detalhe FROM public.sale_events
+  WHERE sale_id = '${idVenda30}' ORDER BY ordem`);
+check("o histórico tem o registo e a confirmação",
+  eventos.map((e) => e.tipo).join(",") === "registo,pagamento_confirmado",
+  JSON.stringify(eventos.map((e) => e.tipo)));
+check("a confirmação no histórico diz de que estado para que estado",
+  eventos[1]?.de === "pending" && eventos[1]?.para === "paid", JSON.stringify(eventos[1]));
+check("a confirmação no histórico diz quem a fez",
+  eventos[1]?.por === M_SALDO, String(eventos[1]?.por));
+
+const histColab = await asUser(S_SALDO, async () =>
+  q(`SELECT count(*)::int n FROM public.sale_events WHERE sale_id = '${idVenda30}'`));
+check("o colaborador vê o histórico da sua venda", histColab[0].n === 2, String(histColab[0].n));
+const histOutro = await asUser(S_UIGE, async () =>
+  q(`SELECT count(*)::int n FROM public.sale_events WHERE sale_id = '${idVenda30}'`));
+check("outro colaborador não vê este histórico", histOutro[0].n === 0, String(histOutro[0].n));
+
+// 35.11 reabrir devolve o valor de «activo» para «pendente», sem apagar nada
+const reaberto = (await asUser(M_SALDO, async () =>
+  q(`SELECT public.reabrir_pagamento_venda('${idVenda30}', 'Engano do gerente') AS r`)))[0].r;
+check("a gestão reabre o pagamento", reaberto.estado === "pending", JSON.stringify(reaberto));
+const aposReabrir = (await asUser(S_SALDO, async () =>
+  q(`SELECT public.saldo_colaborador(NULL) AS s`)))[0].s;
+check("reabrir devolve o valor ao pendente e zera o activo",
+  Number(aposReabrir.vendas.pendente) === 30000
+  && Number(aposReabrir.vendas.activo) === 0
+  && Number(aposReabrir.vendas.contabilistico) === 30000,
+  JSON.stringify(aposReabrir.vendas));
+check("reabrir volta a bloquear o levantamento",
+  Number(aposReabrir.comissoes.disponivel) === 0, JSON.stringify(aposReabrir.comissoes));
+const eventos2 = await q(`
+  SELECT tipo, detalhe FROM public.sale_events
+  WHERE sale_id = '${idVenda30}' ORDER BY ordem`);
+check("reabrir não apaga o histórico, acrescenta",
+  eventos2.length === 3 && eventos2[2].tipo === "pagamento_reaberto",
+  JSON.stringify(eventos2.map((e) => e.tipo)));
+check("o motivo da reabertura fica escrito",
+  eventos2[2]?.detalhe === "Engano do gerente", String(eventos2[2]?.detalhe));
+const marcaLimpa = await q(
+  `SELECT payment_confirmed_by FROM public.sales WHERE id = '${idVenda30}'`);
+check("reabrir limpa quem tinha confirmado", marcaLimpa[0].payment_confirmed_by === null,
+  String(marcaLimpa[0].payment_confirmed_by));
+
+// 35.12 confirmar de novo fecha o ciclo no mesmo valor
+await asUser(M_SALDO, async () =>
+  q(`SELECT public.confirmar_pagamento_venda('${idVenda30}')`));
+const fecho = (await asUser(S_SALDO, async () =>
+  q(`SELECT public.saldo_colaborador(NULL) AS s`)))[0].s;
+check("confirmar de novo deixa tudo no mesmo sítio",
+  Number(fecho.vendas.contabilistico) === 30000 && Number(fecho.vendas.pendente) === 0
+  && Number(fecho.vendas.activo) === 30000, JSON.stringify(fecho.vendas));
+
+// 35.13 uma venda anulada não recebe confirmação
+const vendaAnulada = (await asUser(S_SALDO, async () =>
+  q(`SELECT public.register_sale('[{"product_id":"${pSaldo}","quantity":1}]'::jsonb,
+      NULL, 'dinheiro', 'pending', NULL, 'saldo-anulada') AS r`)))[0].r.sale_id;
+await asUser(M_SALDO, async () =>
+  q(`UPDATE public.sales SET status = 'cancelled' WHERE id = '${vendaAnulada}'`));
+const confAnulada = await asUser(M_SALDO, async () => {
+  try { await q(`SELECT public.confirmar_pagamento_venda('${vendaAnulada}')`); return null; }
+  catch (e) { return e.message; }
+});
+check("uma venda anulada não recebe confirmação de pagamento",
+  /anulada/i.test(confAnulada ?? ""), confAnulada ?? "não deu erro");
+const depoisAnulada = (await asUser(S_SALDO, async () =>
+  q(`SELECT public.saldo_colaborador(NULL) AS s`)))[0].s;
+check("a venda anulada sai das contas todas",
+  Number(depoisAnulada.vendas.contabilistico) === 30000
+  && Number(depoisAnulada.vendas.activo) === 30000,
+  JSON.stringify(depoisAnulada.vendas));
+
+// 35.14 a lista de vendas da gestão
+const lista = (await asUser(M_SALDO, async () =>
+  q(`SELECT public.vendas_gestao(NULL, NULL, 500) AS r`)))[0].r;
+check("a lista da gestão é do âmbito provincial",
+  lista.scope === "provincial", String(lista.scope));
+check("a lista separa pendentes de pagas",
+  typeof lista.totais.pendentes === "number" && typeof lista.totais.pagas === "number"
+  && Number(lista.totais.valor) === Number(lista.totais.valor_pendente)
+     + Number(lista.totais.valor_pago),
+  JSON.stringify(lista.totais));
+
+const linha30 = (lista.linhas ?? []).find((l) => l.id === idVenda30);
+check("a venda de 30.000 aparece na lista com o nome do colaborador",
+  Number(linha30?.total_amount) === 30000 && linha30?.seller_nome === "Colaborador Saldo",
+  JSON.stringify(linha30));
+check("a linha diz quem confirmou",
+  linha30?.confirmado_por === "Gerente Saldo", String(linha30?.confirmado_por));
+check("a linha conta as alterações que a venda tem",
+  Number(linha30?.eventos) >= 4, String(linha30?.eventos));
+
+const soPendentes = (await asUser(M_SALDO, async () =>
+  q(`SELECT public.vendas_gestao('pendente', NULL, 500) AS r`)))[0].r;
+check("o filtro «pendente» só traz vendas por confirmar",
+  (soPendentes.linhas ?? []).every((l) => l.payment_status !== "paid"),
+  JSON.stringify((soPendentes.linhas ?? []).map((l) => l.payment_status)));
+const soPagas = (await asUser(M_SALDO, async () =>
+  q(`SELECT public.vendas_gestao('pago', NULL, 500) AS r`)))[0].r;
+check("o filtro «pago» só traz vendas confirmadas",
+  (soPagas.linhas ?? []).length > 0
+  && (soPagas.linhas ?? []).every((l) => l.payment_status === "paid"),
+  JSON.stringify((soPagas.linhas ?? []).map((l) => l.payment_status)));
+
+const soDele = (await asUser(M_SALDO, async () =>
+  q(`SELECT public.vendas_gestao(NULL, '${S_SALDO}', 500) AS r`)))[0].r;
+check("o filtro por colaborador só traz as vendas dele",
+  (soDele.linhas ?? []).length > 0
+  && (soDele.linhas ?? []).every((l) => l.seller_id === S_SALDO),
+  JSON.stringify((soDele.linhas ?? []).map((l) => l.seller_id)));
+
+// 35.15 a lista não atravessa províncias nem chega ao colaborador
+const listaDeFora = (await asUser(M_LDA, async () =>
+  q(`SELECT public.vendas_gestao(NULL, NULL, 1000) AS r`)))[0].r;
+check("um gerente provincial não vê vendas de outra província na lista",
+  (listaDeFora.linhas ?? []).every((l) => l.seller_id !== S_SALDO),
+  JSON.stringify((listaDeFora.linhas ?? []).map((l) => l.seller_nome).slice(0, 5)));
+
+const listaColab = await asUser(S_SALDO, async () => {
+  try { await q(`SELECT public.vendas_gestao(NULL, NULL, 10)`); return null; }
+  catch (e) { return e.message; }
+});
+check("o colaborador não usa a lista da gestão",
+  /apenas a gestão/i.test(listaColab ?? ""), listaColab ?? "não deu erro");
+
+// 35.16 a administração nacional vê tudo
+const listaNac = (await asUser(MANAGER, async () =>
+  q(`SELECT public.vendas_gestao(NULL, NULL, 1000) AS r`)))[0].r;
+check("a administração nacional vê a rede toda",
+  listaNac.scope === "nacional"
+  && (listaNac.linhas ?? []).some((l) => l.id === idVenda30),
+  JSON.stringify({ scope: listaNac.scope, total: (listaNac.linhas ?? []).length }));
+
+// 35.17 os saldos da equipa numa só chamada
+const equipaSaldo = (await asUser(M_SALDO, async () =>
+  q(`SELECT public.saldos_equipa(NULL) AS r`)))[0].r;
+check("a lista de saldos é do âmbito provincial",
+  equipaSaldo.scope === "provincial", String(equipaSaldo.scope));
+const linhaEquipa = (equipaSaldo.linhas ?? []).find((l) => l.seller_id === S_SALDO);
+check("o colaborador do teste aparece com os três saldos",
+  Number(linhaEquipa?.contabilistico) === 30000
+  && Number(linhaEquipa?.pendente) === 0
+  && Number(linhaEquipa?.activo) === 30000,
+  JSON.stringify(linhaEquipa));
+check("a lista mostra o que ele pode levantar (3.000)",
+  Number(linhaEquipa?.disponivel) === 3000, String(linhaEquipa?.disponivel));
+check("a lista traz o nome e a província",
+  linhaEquipa?.nome === "Colaborador Saldo" && linhaEquipa?.provincia_codigo === "UIG",
+  JSON.stringify([linhaEquipa?.nome, linhaEquipa?.provincia_codigo]));
+check("os totais da equipa somam as linhas",
+  Number(equipaSaldo.totais.contabilistico)
+    === (equipaSaldo.linhas ?? []).reduce((s, l) => s + Number(l.contabilistico), 0),
+  JSON.stringify(equipaSaldo.totais));
+
+const equipaSaldoFora = (await asUser(M_LDA, async () =>
+  q(`SELECT public.saldos_equipa(NULL) AS r`)))[0].r;
+check("um gerente provincial não vê saldos de outra província",
+  (equipaSaldoFora.linhas ?? []).every((l) => l.seller_id !== S_SALDO),
+  JSON.stringify((equipaSaldoFora.linhas ?? []).map((l) => l.nome).slice(0, 5)));
+
+const equipaSaldoNac = (await asUser(MANAGER, async () =>
+  q(`SELECT public.saldos_equipa(NULL) AS r`)))[0].r;
+check("a administração nacional vê a equipa toda",
+  equipaSaldoNac.scope === "nacional"
+  && (equipaSaldoNac.linhas ?? []).some((l) => l.seller_id === S_SALDO),
+  JSON.stringify({ scope: equipaSaldoNac.scope, n: (equipaSaldoNac.linhas ?? []).length }));
+
+const equipaSaldoColab = await asUser(S_SALDO, async () => {
+  try { await q(`SELECT public.saldos_equipa(NULL)`); return null; }
+  catch (e) { return e.message; }
+});
+check("o colaborador não vê os saldos da equipa",
+  /apenas a gestão/i.test(equipaSaldoColab ?? ""), equipaSaldoColab ?? "não deu erro");
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);

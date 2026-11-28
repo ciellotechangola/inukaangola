@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Check, Plus, Trash2, UserCheck } from "lucide-react";
+import { BadgeCheck, Check, Clock3, Plus, Trash2, UserCheck, Wallet } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
 import { registerSale, registerSaleByPhone, type PaymentStatus } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
@@ -54,7 +54,16 @@ export default function FormularioVenda({
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("cash");
-  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("paid");
+  /**
+   * Situação da venda — obrigatória e sem valor por omissão.
+   *
+   * Antes vinha «Pago» escolhido, e como ninguém volta atrás num campo que já
+   * tem resposta, todas as vendas nasciam pagas: o saldo do colaborador nunca
+   * tinha nada «por confirmar» e a gestão não tinha o que confirmar. Deixar o
+   * campo vazio obriga a uma decisão consciente e é o que dá sentido aos três
+   * saldos — pendente é dinheiro possível, pago é dinheiro recebido.
+   */
+  const [situacao, setSituacao] = useState<"" | "pendente" | "pago">("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
@@ -107,13 +116,17 @@ export default function FormularioVenda({
       setError("As quantidades devem ser superiores a zero.");
       return;
     }
+    if (!situacao) {
+      setError("Escolha a situação da venda: pendente ou paga.");
+      return;
+    }
 
     setSaving(true);
     try {
       const telefone = customerPhone.trim();
       const detalhes = {
         paymentMethod,
-        paymentStatus,
+        paymentStatus: (situacao === "pago" ? "paid" : "pending") as PaymentStatus,
         notes: notes || undefined,
         sellerId: vendedor || null,
       };
@@ -154,6 +167,7 @@ export default function FormularioVenda({
       setNotes("");
       setCustomerName("");
       setCustomerPhone("");
+      setSituacao("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Não foi possível registar a venda.");
     } finally {
@@ -316,7 +330,80 @@ export default function FormularioVenda({
           </p>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="mb-5 rounded-xl border border-[#2A2A2A] bg-[#141414] p-4">
+          <p className="mb-3 flex items-center gap-2 text-[10px] uppercase tracking-wider text-[#8A8A8A]">
+            <Wallet className="h-3.5 w-3.5 text-[#C9A962]" />
+            Situação da venda
+            <span className="text-[#C9A962]">*</span>
+          </p>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setSituacao("pendente")}
+              aria-pressed={situacao === "pendente"}
+              className={`rounded-lg border px-3 py-2.5 text-left transition ${
+                situacao === "pendente"
+                  ? "border-[#C9A962] bg-[#241E0E]"
+                  : "border-[#404040] bg-[#0A0A0A] hover:border-[#5A5A5A]"
+              }`}
+            >
+              <span className="flex items-center gap-2 text-sm text-[#F5F5F5]">
+                <Clock3
+                  className={`h-4 w-4 ${situacao === "pendente" ? "text-[#C9A962]" : "text-[#6F6F6F]"}`}
+                />
+                Pendente
+              </span>
+              <span className="mt-1 block text-[11px] leading-snug text-[#6F6F6F]">
+                O dinheiro ainda não entrou. Fica por confirmar e não conta como disponível.
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSituacao("pago")}
+              aria-pressed={situacao === "pago"}
+              className={`rounded-lg border px-3 py-2.5 text-left transition ${
+                situacao === "pago"
+                  ? "border-[#C9A962] bg-[#241E0E]"
+                  : "border-[#404040] bg-[#0A0A0A] hover:border-[#5A5A5A]"
+              }`}
+            >
+              <span className="flex items-center gap-2 text-sm text-[#F5F5F5]">
+                <BadgeCheck
+                  className={`h-4 w-4 ${situacao === "pago" ? "text-[#4ADE80]" : "text-[#6F6F6F]"}`}
+                />
+                Pago
+              </span>
+              <span className="mt-1 block text-[11px] leading-snug text-[#6F6F6F]">
+                O dinheiro já entrou. Entra no saldo confirmado e fica disponível para levantamento.
+              </span>
+            </button>
+          </div>
+
+          <p className="mt-2 text-[11px] leading-relaxed text-[#6F6F6F]">
+            {situacao === "pendente" ? (
+              <>
+                A venda fica em <span className="text-[#C9A962]">por confirmar</span>. O valor conta
+                para o desempenho, mas não para o saldo disponível — quem confirma que o dinheiro
+                entrou é a gestão.
+              </>
+            ) : situacao === "pago" ? (
+              <>
+                A venda fica <span className="text-[#4ADE80]">confirmada</span> com o seu nome e a
+                data de hoje. Se o dinheiro não entrou, escolha «Pendente» — a gestão confirma depois.
+              </>
+            ) : (
+              <>
+                Escolha uma das duas. Só há duas situações: <span className="text-[#C9A962]">pendente</span>{" "}
+                (por receber) ou <span className="text-[#4ADE80]">pago</span> (recebido). Não há valor
+                por omissão porque esta resposta muda o saldo de alguém.
+              </>
+            )}
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
           <select
             value={paymentMethod}
             onChange={(e) => setPaymentMethod(e.target.value)}
@@ -326,15 +413,6 @@ export default function FormularioVenda({
             <option value="transfer">Transferência</option>
             <option value="multicaixa">Multicaixa</option>
             <option value="other">Outro</option>
-          </select>
-          <select
-            value={paymentStatus}
-            onChange={(e) => setPaymentStatus(e.target.value as PaymentStatus)}
-            className="rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] focus:border-[#C9A962] focus:outline-none"
-          >
-            <option value="paid">Pago</option>
-            <option value="pending">Pendente</option>
-            <option value="partial">Parcial</option>
           </select>
           <input
             value={notes}

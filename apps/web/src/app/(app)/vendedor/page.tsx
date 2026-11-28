@@ -11,11 +11,13 @@ import {
   type PainelColaborador,
 } from "@/lib/colaborador";
 import ColaboradorIdentidade from "@/components/ColaboradorIdentidade";
+import TresSaldos from "@/components/saldos/TresSaldos";
 import TaxaAoVivo from "@/components/comissoes/TaxaAoVivo";
 import { MinhasTarefas } from "@/components/tarefas/MinhasTarefas";
 import { ordenarTarefas, type Tarefa } from "@/lib/tarefas";
 import { formatarTaxa, normalizarTaxa } from "@/lib/comissoes";
 import { normalizarResumo, progressoVendas } from "@/lib/levantamentos";
+import { normalizarSaldo } from "@/lib/vendas";
 import { GraficoEvolucao, ProgressoMeta } from "@/components/Graficos";
 import DadosPessoais from "./DadosPessoais";
 
@@ -34,7 +36,7 @@ export default async function SellerDashboardPage() {
   if (!profile || (profile.role !== "seller" && profile.role !== "manager")) redirect("/");
 
   const supabase = await createClientServer();
-  const [{ data, error }, { data: taxaBruta }, { data: resumoBruto }, fichaRes, tarefasRes] =
+  const [{ data, error }, { data: taxaBruta }, { data: resumoBruto }, fichaRes, tarefasRes, saldoRes] =
     await Promise.all([
       supabase.rpc("colaborador_painel"),
       supabase.rpc("taxa_comissao"),
@@ -52,12 +54,16 @@ export default async function SellerDashboardPage() {
         .eq("seller_id", profile.id)
         .order("prazo", { ascending: true, nullsFirst: false })
         .limit(50),
+      // Os três saldos (0034). Sem esta migração a secção desaparece e o painel
+      // continua a abrir com o que já havia.
+      supabase.rpc("saldo_colaborador", { p_seller: profile.id }),
     ]);
 
   const taxa = normalizarTaxa(taxaBruta);
   // Se a migração dos levantamentos ainda não estiver aplicada, a RPC devolve
   // erro e o resumo fica a zeros — o painel continua a abrir.
   const resumo = normalizarResumo(resumoBruto);
+  const saldo = normalizarSaldo(saldoRes.data);
   const ficha = (fichaRes.data ?? null) as FichaColaborador | null;
 
   if (error) {
@@ -130,6 +136,17 @@ export default async function SellerDashboardPage() {
           para hoje, o saldo já esperou até aqui. */}
       <MinhasTarefas tarefas={tarefas} />
 
+      {/* Os três saldos, de propósito separados e com nomes que não se
+          confundem. O erro que isto corrige: um colaborador via 30.000 Kz e
+          achava que tinha 30.000 Kz para levantar. Não tem — o que se levanta
+          é a comissão, e só depois de a gestão confirmar que o dinheiro entrou. */}
+      {saldo && (
+        <section className="mb-4">
+          <p className="mb-2 text-[10px] uppercase tracking-[0.18em] text-[#6F6F6F]">Saldos</p>
+          <TresSaldos saldo={saldo} />
+        </section>
+      )}
+
       {/* Retirar dinheiro: o saldo é a primeira coisa que o colaborador quer ver. */}
       <div className="mb-6 rounded-xl border border-[#C9A962]/40 bg-[#1A1A1A] p-5">
         <div className="flex flex-wrap items-center justify-between gap-4">
@@ -199,9 +216,9 @@ export default async function SellerDashboardPage() {
         />
         <Cartao rotulo="Comissão acumulada" valor={formatCurrency(numero(cartoes.comissao_total))} />
         <Cartao
-          rotulo="Comissão disponível"
+          rotulo="Comissão já paga"
           valor={formatCurrency(numero(cartoes.comissao_paga))}
-          detalhe="já paga"
+          detalhe="entregue"
         />
         <Cartao
           rotulo="Comissão pendente"

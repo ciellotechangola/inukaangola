@@ -48,6 +48,7 @@ const PARTES = [
   { ficheiro: "migrations/0031_catalogo_grosso_proprio.sql", titulo: "CATÁLOGO DE GROSSO PRÓPRIO E MÍNIMO DE PRODUTOS POR PEDIDO" },
   { ficheiro: "migrations/0032_precos_grosso_por_reducao.sql", titulo: "PREÇO DE GROSSO POR REDUÇÃO ABSOLUTA E TABELA DE LUCRO" },
   { ficheiro: "migrations/0033_preco_revenda_oficial.sql", titulo: "PREÇO DE REVENDA OFICIAL (TABELA 2026)" },
+  { ficheiro: "migrations/0034_situacao_da_venda.sql", titulo: "SITUAÇÃO DA VENDA: PENDENTE → PAGO, HISTÓRICO E SALDOS" },
 ];
 
 const cabecalho = `-- =============================================================================
