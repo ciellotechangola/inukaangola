@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import ProductImage from "@/components/ProductImage";
+import FotoProduto from "@/components/produto/FotoProduto";
 import { Heart, ShoppingBag } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
 import { listFavorites, toggleFavorite } from "@/lib/api";
@@ -86,21 +86,17 @@ export default function FavoritesPage() {
                 key={row.product_id}
                 className="flex gap-4 rounded-xl border border-[#262626] bg-[#1A1A1A] p-4"
               >
-                <div className="foto-painel h-20 w-20 shrink-0 rounded-lg">
-                  {image ? (
-                    <ProductImage
-                      src={image}
-                      alt={p.name}
-                      width={80}
-                      height={80}
-                      className="h-full w-full object-contain p-1.5"
-                    />
-                  ) : (
-                    <div className="flex h-full items-center justify-center text-xs text-[#404040]">
-                      INUKA
-                    </div>
-                  )}
-                </div>
+                <FotoProduto
+                  src={image}
+                  alt={p.name}
+                  lado={80}
+                  raio="md"
+                  respiro="normal"
+                  className="shrink-0"
+                  vazio={
+                    <span className="text-xs tracking-[0.3em] text-[#C9A962]/35">INUKA</span>
+                  }
+                />
 
                 <div className="min-w-0 flex-1">
                   <Link href={`/produto/${p.id}`} className="block truncate text-[#F5F5F5] hover:text-[#C9A962]">

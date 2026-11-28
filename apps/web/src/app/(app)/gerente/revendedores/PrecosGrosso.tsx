@@ -14,7 +14,7 @@ import {
   ToggleRight,
 } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
-import ProductImage from "@/components/ProductImage";
+import FotoProduto from "@/components/produto/FotoProduto";
 import { formatCurrency } from "@/lib/utils";
 import type { CatalogoGestao, CatalogoProduto } from "./page";
 
@@ -314,21 +314,15 @@ export default function PrecosGrosso({
                   p.no_catalogo ? "bg-[#141414]" : "bg-[#0F0F0F]"
                 }`}
               >
-                <div className="foto-painel h-10 w-10 shrink-0 rounded-lg">
-                  {p.imagem ? (
-                    <ProductImage
-                      src={p.imagem}
-                      alt={p.nome}
-                      width={40}
-                      height={40}
-                      className="h-full w-full object-contain p-0.5"
-                    />
-                  ) : (
-                    <span className="grid h-full w-full place-items-center text-[#333]">
-                      <Package className="h-4 w-4" />
-                    </span>
-                  )}
-                </div>
+                <FotoProduto
+                  src={p.imagem}
+                  alt={p.nome}
+                  lado={40}
+                  raio="md"
+                  respiro="nenhum"
+                  className="shrink-0"
+                  vazio={<Package className="h-4 w-4 text-[#B8B8B8]" />}
+                />
 
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm text-[#F5F5F5]">{p.nome}</p>

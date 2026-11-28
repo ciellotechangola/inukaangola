@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Check, RotateCcw } from "lucide-react";
-import ProductImage from "@/components/ProductImage";
+import FotoProduto from "@/components/produto/FotoProduto";
 import { useCart } from "@/components/cart-context";
 import { formatCurrency } from "@/lib/utils";
 
@@ -56,23 +56,15 @@ export default function ComprarNovamente({ produtos }: { produtos: ProdutoParaRe
               key={p.id}
               className="flex w-[260px] shrink-0 snap-start items-center gap-3 rounded-lg border border-[#262626] bg-[#1A1A1A] p-2.5 sm:w-auto"
             >
-              <Link
-                href={`/produto/${p.id}`}
-                className="foto-painel h-14 w-14 shrink-0 rounded-md"
-              >
-                {p.image ? (
-                  <ProductImage
-                    src={p.image}
-                    alt={p.name}
-                    width={56}
-                    height={56}
-                    className="h-full w-full object-contain p-1"
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center text-[10px] text-[#404040]">
-                    INUKA
-                  </div>
-                )}
+              <Link href={`/produto/${p.id}`} className="shrink-0">
+                <FotoProduto
+                  src={p.image}
+                  alt={p.name}
+                  lado={56}
+                  raio="sm"
+                  respiro="curto"
+                  vazio={<span className="text-[10px] tracking-[0.3em] text-[#C9A962]/35">INUKA</span>}
+                />
               </Link>
 
               <div className="min-w-0 flex-1">

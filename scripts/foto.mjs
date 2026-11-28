@@ -56,7 +56,7 @@ async function cdp(ws, metodo, params = {}) {
       msg.error ? reject(new Error(`${metodo}: ${msg.error.message}`)) : resolve(msg.result);
     };
     ws.addEventListener("message", onMsg);
-    setTimeout(() => reject(new Error(`${metodo}: tempo esgotado`)), 40000);
+    setTimeout(() => reject(new Error(`${metodo}: tempo esgotado`)), 120000);
   });
 }
 
@@ -134,7 +134,7 @@ if (process.env.ANTES) {
 
 const { data } = await cdp(ws, "Page.captureScreenshot", {
   format: "png",
-  captureBeyondViewport: true,
+  captureBeyondViewport: !process.env.SO_VISTA,
 });
 fs.writeFileSync(saida, Buffer.from(data, "base64"));
 console.log(`guardado: ${saida}`);

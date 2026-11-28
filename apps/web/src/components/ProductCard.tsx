@@ -1,5 +1,5 @@
 import Link from "next/link";
-import ProductImage from "@/components/ProductImage";
+import FotoProduto from "@/components/produto/FotoProduto";
 import { formatCurrency } from "@/lib/utils";
 import type { Product } from "@/types";
 
@@ -66,31 +66,22 @@ export default function ProductCard({
       href={`/produto/${product.id}`}
       className="group flex w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-[#232323] bg-[linear-gradient(180deg,#171717_0%,#101010_100%)] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_38px_-26px_rgba(0,0,0,0.95)] transition duration-300 hover:-translate-y-0.5 hover:border-[#C9A962]/45 hover:shadow-[0_1px_0_0_rgba(255,255,255,0.06)_inset,0_26px_48px_-22px_rgba(201,169,98,0.25)]"
     >
-      {/* A fotografia vive num painel branco (`foto-painel`) com uma margem
-          curta em volta. Antes o fundo era escuro e, como as fotos oficiais
-          são retrato sobre branco, sobravam faixas pretas de cada lado. Agora
-          o branco da foto continua no painel e o produto fica centrado e
-          sempre do mesmo tamanho, seja qual for a proporção da imagem.
-          `object-contain` e não `object-cover`: numa grelha de duas colunas o
+      {/* A fotografia vive no painel branco de `FotoProduto` — quadrado,
+          centrado e com `object-contain`. Antes o fundo era escuro e, como as
+          fotos oficiais são retrato sobre branco, sobravam faixas pretas de
+          cada lado. `contain` e não `cover`: numa grelha de duas colunas o
           cartão tem ~150 px e o `cover` cortava as laterais — o frasco
           aparecia sem tampa ou sem rótulo. */}
       <div className="p-1.5 sm:p-2">
-        <div className="foto-painel relative aspect-square overflow-hidden rounded-xl">
-          {imagem ? (
-            <ProductImage
-              src={imagem}
-              alt={product.name}
-              width={400}
-              height={400}
-              sizes="(max-width: 640px) 45vw, (max-width: 1024px) 30vw, 22vw"
-              priority={prioridade}
-              className="h-full w-full object-contain p-2 transition duration-500 group-hover:scale-[1.04] sm:p-3"
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(180deg,#FFFFFF_0%,#F4F3F0_100%)]">
-              <span className="text-xs tracking-[0.35em] text-[#C9A962]/35">INUKA</span>
-            </div>
-          )}
+        <FotoProduto
+          src={imagem}
+          alt={product.name}
+          raio="lg"
+          respiro="normal"
+          prioridade={prioridade}
+          sizes="(max-width: 640px) 45vw, (max-width: 1024px) 30vw, 22vw"
+          classNameImagem="transition duration-500 group-hover:scale-[1.04] sm:p-3"
+        >
 
           <div className="absolute left-1.5 top-1.5 flex flex-col items-start gap-1 sm:left-2 sm:top-2">
             {desconto > 0 && (
@@ -126,7 +117,7 @@ export default function ProductCard({
               {(product.images ?? []).filter((i) => i.url).length} fotos
             </span>
           )}
-        </div>
+        </FotoProduto>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col gap-0.5 px-2.5 pb-2.5 pt-1 sm:px-3.5 sm:pb-3.5 sm:pt-1.5">

@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
-import ProductImage from "@/components/ProductImage";
+import FotoProduto from "@/components/produto/FotoProduto";
 import { formatCurrency } from "@/lib/utils";
 import type { ProdutoGrosso } from "@/lib/revenda";
 
@@ -287,21 +287,15 @@ export default function CatalogoGrosso({
                 }`}
               >
                 <div className="flex min-w-0 gap-3">
-                  <div className="foto-painel h-16 w-16 shrink-0 rounded-lg">
-                    {p.imagem ? (
-                      <ProductImage
-                        src={p.imagem}
-                        alt={p.nome}
-                        width={64}
-                        height={64}
-                        className="h-full w-full object-contain p-1"
-                      />
-                    ) : (
-                      <span className="grid h-full w-full place-items-center text-[#333]">
-                        <Package className="h-5 w-5" />
-                      </span>
-                    )}
-                  </div>
+                  <FotoProduto
+                    src={p.imagem}
+                    alt={p.nome}
+                    lado={64}
+                    raio="md"
+                    respiro="curto"
+                    className="shrink-0"
+                    vazio={<Package className="h-5 w-5 text-[#B8B8B8]" />}
+                  />
 
                   <div className="min-w-0">
                     <h3 className="truncate text-sm font-medium text-[#F5F5F5]">{p.nome}</h3>

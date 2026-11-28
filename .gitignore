@@ -52,3 +52,7 @@ apps/capacitor/ios/App/App/public/
 .DS_Store
 Thumbs.db
 openapi.tmp.json
+
+# Perfis temporários do Chrome usados por scripts/foto.mjs e scripts/medir.mjs
+.chrome-foto/
+.chrome-medir/

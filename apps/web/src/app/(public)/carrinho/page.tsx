@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import ProductImage from "@/components/ProductImage";
+import FotoProduto from "@/components/produto/FotoProduto";
 import Link from "next/link";
 import { Trash2, ArrowRight, Truck, Store, Info } from "lucide-react";
 import { useCart } from "@/components/cart-context";
@@ -185,21 +185,18 @@ export default function CartPage() {
               <div className="flex items-start gap-3 sm:gap-4">
                 <Link
                   href={`/produto/${item.product_id}`}
-                  className="foto-painel h-20 w-20 shrink-0 rounded-lg sm:h-24 sm:w-24"
+                  className="h-20 w-20 shrink-0 sm:h-24 sm:w-24"
                 >
-                  {item.image ? (
-                    <ProductImage
-                      src={item.image}
-                      alt={item.name}
-                      width={96}
-                      height={96}
-                      className="h-full w-full object-contain p-1.5"
-                    />
-                  ) : (
-                    <div className="flex h-full items-center justify-center text-xs text-[#404040]">
-                      INUKA
-                    </div>
-                  )}
+                  <FotoProduto
+                    src={item.image}
+                    alt={item.name}
+                    raio="md"
+                    respiro="normal"
+                    className="h-full w-full"
+                    vazio={
+                      <span className="text-xs tracking-[0.3em] text-[#C9A962]/35">INUKA</span>
+                    }
+                  />
                 </Link>
 
                 <div className="min-w-0 flex-1">

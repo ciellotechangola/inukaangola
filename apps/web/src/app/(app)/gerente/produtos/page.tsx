@@ -8,7 +8,7 @@ import { setProductStock } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 import { mensagemDeErro } from "@/lib/erros";
 import { listarProvincias, faltaPatchProvincial, AVISO_PATCH_PROVINCIAL, type Provincia } from "@/lib/provincias";
-import ProductImage from "@/components/ProductImage";
+import FotoProduto from "@/components/produto/FotoProduto";
 import TabelaResponsiva from "@/components/TabelaResponsiva";
 
 interface Category {
@@ -1074,19 +1074,18 @@ export default function ManagerProductsPage() {
                 return (
                   <div>
                     <div className="flex items-center gap-3">
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded border border-[#262626] bg-[#141414]">
-                        {imagem ? (
-                          <ProductImage
-                            src={imagem}
-                            alt={p.name}
-                            width={44}
-                            height={44}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <Package className="h-4 w-4 text-[#3A3A3A]" />
-                        )}
-                      </div>
+                      {/* Miniatura da lista: o mesmo painel branco do cartão.
+                          Era a única área de produto ainda escura — e com
+                          `object-cover`, que cortava as tampas dos frascos. */}
+                      <FotoProduto
+                        src={imagem}
+                        alt={p.name}
+                        lado={44}
+                        raio="sm"
+                        respiro="nenhum"
+                        className="shrink-0"
+                        vazio={<Package className="h-4 w-4 text-[#B8B8B8]" />}
+                      />
                       <div className="min-w-0">
                         <p className="text-[#F5F5F5]">{p.name}</p>
                         {p.sku && <p className="text-xs text-[#525252]">{p.sku}</p>}

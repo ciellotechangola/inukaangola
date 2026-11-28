@@ -153,6 +153,8 @@ export default function ProductGallery({ imagens, alt, desconto = 0, esgotado = 
               todas, sem encolher até ao ilegível. */}
           <div className="mt-3 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {imagens.map((img, i) => (
+              // O botão é o próprio painel branco (`foto-painel`): a moldura
+              // dourada da miniatura activa fica por fora da fotografia.
               <button
                 key={img.id}
                 type="button"
