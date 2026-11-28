@@ -26,13 +26,15 @@ import type { CatalogoGestao, CatalogoProduto } from "./page";
  * um revendedor pode comprar** — e, se quiser, a que preço.
  *
  * Três estados por produto, e só três:
- *   · fora do catálogo      → o revendedor não o vê;
- *   · no catálogo, preço automático → tabela de reduções (ou o desconto
- *     negociado do revendedor, quando existe);
- *   · no catálogo, preço escrito    → esse preço, congelado até alguém o mudar.
+ *   · fora do catálogo            → o revendedor não o vê;
+ *   · no catálogo, sem preço      → pendente: continua invisível ao revendedor
+ *     até alguém escrever o preço de revenda (0033);
+ *   · no catálogo, com preço      → é esse preço que o revendedor paga, tal e
+ *     qual, sem descontos nem tabelas por cima.
  *
- * «Repor» volta ao automático **sem** tirar o produto do catálogo — retirar é
- * outra decisão, e tem o seu próprio botão.
+ * «Repor» limpa o preço **sem** tirar o produto do catálogo — retirar é outra
+ * decisão, e tem o seu próprio botão. Um produto sem preço não é vendido a
+ * grosso: fica à espera de decisão, não a um preço inventado.
  */
 export default function PrecosGrosso({
   catalogo,
@@ -77,17 +79,10 @@ export default function PrecosGrosso({
   }, [catalogo.produtos, procura, filtro]);
 
   const foraDoCatalogo = catalogo.produtos.filter((p) => !p.no_catalogo).length;
-
-  /**
-   * O preço que a base aplica quando o campo está vazio.
-   *
-   * Já vem calculado (`preco_grosso`): a tabela de reduções é decidida na
-   * base, produto a produto. Recalcular aqui com uma percentagem dava um
-   * número que não era o preço pago pelo revendedor.
-   */
-  function precoAutomatico(p: CatalogoProduto): number {
-    return p.preco_grosso;
-  }
+  /** No catálogo mas sem preço: não chegam ao revendedor. */
+  const pendentes = catalogo.produtos.filter(
+    (p) => p.no_catalogo && p.preco_proprio === null
+  ).length;
 
   async function alternar(p: CatalogoProduto) {
     setErro("");
@@ -200,14 +195,15 @@ export default function PrecosGrosso({
       )}
 
       {/* ------------------------------------------------------------- NÚMEROS */}
-      <div className="mb-5 grid gap-3 sm:grid-cols-3">
+      <div className="mb-5 grid gap-3 sm:grid-cols-4">
         <Indicador
           rotulo="No catálogo de grosso"
           valor={String(catalogo.totais.no_catalogo)}
           destaque
         />
+        <Indicador rotulo="Com preço de revenda" valor={String(catalogo.totais.com_preco)} />
+        <Indicador rotulo="Pendentes de preço" valor={String(pendentes)} />
         <Indicador rotulo="Fora do catálogo" valor={String(foraDoCatalogo)} />
-        <Indicador rotulo="Com preço escrito" valor={String(catalogo.totais.com_preco)} />
       </div>
 
       {/* -------------------------------------------------------- MÍNIMO PEDIDO */}
@@ -377,7 +373,7 @@ export default function PrecosGrosso({
                       setValores((v) => ({ ...v, [p.product_id]: e.target.value }))
                     }
                     disabled={!p.no_catalogo}
-                    placeholder={String(precoAutomatico(p))}
+                    placeholder="preço de revenda"
                     inputMode="decimal"
                     className="w-28 rounded-lg border border-[#404040] bg-[#0A0A0A] px-2.5 py-1.5 text-right text-xs text-[#F5F5F5] placeholder:text-[#4A4A4A] focus:border-[#C9A962] focus:outline-none disabled:opacity-40"
                   />
@@ -398,7 +394,7 @@ export default function PrecosGrosso({
                     type="button"
                     onClick={() => guardar(p, true)}
                     disabled={ocupado || !p.no_catalogo || p.preco_proprio === null}
-                    title="Voltar ao desconto automático"
+                    title="Limpar o preço de revenda"
                     className="rounded-lg border border-[#333] p-1.5 text-[#A3A3A3] transition hover:border-[#C9A962]/50 hover:text-[#C9A962] disabled:opacity-40"
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
@@ -407,15 +403,27 @@ export default function PrecosGrosso({
 
                 <div className="w-24 shrink-0 text-right">
                   <p className="text-[10px] uppercase tracking-wide text-[#525252]">Grosso</p>
-                  <p className={`text-xs ${p.no_catalogo ? "text-[#C9A962]" : "text-[#4A4A4A]"}`}>
-                    {p.no_catalogo ? formatCurrency(p.preco_grosso) : "—"}
+                  <p
+                    className={`text-xs ${
+                      !p.no_catalogo
+                        ? "text-[#4A4A4A]"
+                        : p.preco_grosso === null
+                          ? "text-[#E3D5A7]"
+                          : "text-[#C9A962]"
+                    }`}
+                  >
+                    {!p.no_catalogo
+                      ? "—"
+                      : p.preco_grosso === null
+                        ? "sem preço"
+                        : formatCurrency(p.preco_grosso)}
                   </p>
                 </div>
 
                 {p.no_catalogo && p.preco_proprio === null && (
-                  <span className="hidden shrink-0 items-center gap-1 text-[10px] text-[#525252] sm:flex">
+                  <span className="hidden shrink-0 items-center gap-1 text-[10px] text-[#E3D5A7] sm:flex">
                     <EyeOff className="h-3 w-3" />
-                    automático
+                    pendente
                   </span>
                 )}
               </div>
@@ -425,10 +433,10 @@ export default function PrecosGrosso({
       )}
 
       <p className="mt-3 text-[11px] leading-relaxed text-[#525252]">
-        Preço vazio = tabela de reduções ({(catalogo.reducoes ?? []).join(" / ") || "3.500 / 4.000 / 5.000"}{" "}
-        Kz sobre o preço de loja, escolhida pela margem que deixa ao revendedor, ou o desconto
-        próprio dele, quando existe). Um preço escrito à mão fica congelado até alguém o mudar
-        — não segue a política da empresa.
+        O preço que se escreve aqui é o preço de revenda oficial (tabela INUKA 2026) — é o
+        que o revendedor paga, sem descontos nem tabelas por cima. Um produto no catálogo
+        sem preço fica <strong className="font-medium text-[#8A8A8A]">pendente</strong>: não
+        aparece ao revendedor e não entra em pedidos, até alguém decidir o preço.
       </p>
     </div>
   );

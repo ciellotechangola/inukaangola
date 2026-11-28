@@ -60,7 +60,11 @@ export default function Header() {
   // `desde` adia a ligação para ecrãs largos: com as áreas novas (conteúdos e
   // formação) o menu passava a não caber a partir de 768 px.
   const navLinks: { href: string; label: string; desde?: "md" | "lg" }[] = [
-    { href: "/catalogo", label: "Catálogo" },
+    // O catálogo público é a montra a preço de cliente final. O revendedor não
+    // o vê no menu: o catálogo dele é o de grosso, com os preços de aquisição,
+    // e dois catálogos lado a lado só deixavam a dúvida de qual é o dele.
+    // A página continua pública — sai do menu, não do site.
+    ...(profile?.role === "reseller" ? [] : [{ href: "/catalogo", label: "Catálogo" }]),
     // Feed Clientes logo a seguir ao catálogo, e para todos: é a montra viva
     // da marca — promoções e testemunhos — e abre **sem sessão**. Quem chega
     // de um link não pode ter de criar conta para ver o que a INUKA oferece.
@@ -126,10 +130,12 @@ export default function Header() {
         ]
       : []),
     // O revendedor tem o seu próprio menu: catálogo de grosso e pedidos.
+    // O catálogo vem primeiro — é o único catálogo que ele tem, e é lá que o
+    // dia de trabalho começa.
     ...(profile?.role === "reseller"
       ? [
-          { href: "/revenda", label: "Revenda" },
           { href: "/revenda/catalogo", label: "Catálogo de grosso" },
+          { href: "/revenda", label: "Revenda" },
           { href: "/revenda/pedidos", label: "Pedidos" },
           // O revendedor lê o mesmo Feed Inuka da equipa (0030). Publicar
           // continua a ser só da gestão.

@@ -142,7 +142,7 @@ export default function PainelRevenda({
           <span className="min-w-0">
             <span className="block text-sm font-medium text-[#F5F5F5]">Catálogo de grosso</span>
             <span className="mt-0.5 block text-xs leading-relaxed text-[#8A8A8A]">
-              Preço de revenda ao lado do preço de loja. Mínimo de {rev.minimo_unidades} unidades
+              Preços de revenda oficiais INUKA 2026. Mínimo de {rev.minimo_unidades} unidades
               por produto.
             </span>
           </span>
@@ -231,12 +231,11 @@ export default function PainelRevenda({
               preços e condições especiais.
             </p>
           </div>
-          {/* Com acordo próprio mostra-se a percentagem; sem ele, o preço vem
-              da tabela de reduções e um «35%» inventado seria mentira. */}
+          {/* Um «Desconto 10%» aqui seria mentira desde a 0033: o preço do
+              catálogo é o da tabela, e nenhum acordo o altera. O que se mostra
+              é a origem do preço, que é a mesma para todos os revendedores. */}
           <span className="rounded-full bg-[#C9A962]/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-[#C9A962]">
-            {rev.desconto === null
-              ? "Tabela de reduções"
-              : `Desconto ${Math.round(rev.desconto * 100)}%`}
+            Tabela oficial 2026
           </span>
         </div>
 
@@ -333,8 +332,9 @@ export default function PainelRevenda({
       </section>
 
       <p className="mt-8 text-[11px] leading-relaxed text-[#525252]">
-        O preço de grosso é o seu custo de compra. O preço de venda ao público é decisão sua —
-        a INUKA não impõe margem. Condições e descontos podem ser ajustados pela gestão.
+        O preço de grosso é o seu custo de compra, igual para todos os revendedores: vem da
+        tabela oficial INUKA 2026 e não leva descontos nem acréscimos. O preço de venda ao
+        público é decisão sua — a INUKA não impõe margem.
       </p>
     </div>
   );

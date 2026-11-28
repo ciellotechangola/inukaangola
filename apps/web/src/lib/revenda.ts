@@ -87,17 +87,18 @@ export interface ProdutoGrosso {
   sku: string | null;
   categoria: string | null;
   imagem: string | null;
-  /** Preço normal para o cliente final. */
+  /** Preço normal para o cliente final. Não se mostra no catálogo do revendedor. */
   preco_loja: number;
-  /** Preço de aquisição do revendedor. */
+  /** Preço de revenda oficial (tabela 2026) — o que o revendedor paga. */
   preco_grosso: number;
-  /** Kwanza que saíram do preço de cliente (3.500, 4.000, 5.000…). */
+  /**
+   * Diferença entre a tabela de loja e o preço escrito. É informação interna
+   * da base: o ecrã do revendedor não a mostra, e nada é calculado a partir
+   * dela para decidir preços.
+   */
   reducao: number;
-  /** `preco_loja − preco_grosso`, por unidade. */
   lucro_unidade: number;
-  /** Lucro sobre o preço de compra — o que se ganha por cada Kz pago. */
   margem_pct: number;
-  /** Lucro sobre o preço de loja — o desconto que se vê na montra. */
   desconto_pct: number;
   minimo: number;
   stock: number | null;

@@ -71,12 +71,17 @@ export interface CatalogoProduto {
   imagem: string | null;
   preco_loja: number;
   no_catalogo: boolean;
-  /** Preço escrito à mão. `null` = tabela de reduções / desconto do revendedor. */
+  /** Preço de revenda escrito. `null` = produto pendente, ainda sem preço. */
   preco_proprio: number | null;
-  preco_grosso: number;
-  /** Kwanza tirados ao preço de loja (3.500 / 4.000 / 5.000). */
+  /**
+   * O preço que o revendedor paga — é o mesmo `preco_proprio`. `null` quando o
+   * produto está no catálogo mas ainda não tem preço: fica pendente e não
+   * aparece ao revendedor (0033).
+   */
+  preco_grosso: number | null;
+  /** Diferença para o preço de loja. Informativa. */
   reducao: number;
-  /** Lucro do revendedor sobre o preço de compra, em percentagem. */
+  /** Diferença sobre o preço de compra, em percentagem. Informativa. */
   margem_pct: number;
   nota: string | null;
   stock: number | null;
@@ -90,7 +95,7 @@ export interface CatalogoGestao {
   reducoes: number[];
   margem_alvo: number;
   margem_max: number;
-  totais: { produtos: number; no_catalogo: number; com_preco: number };
+  totais: { produtos: number; no_catalogo: number; com_preco: number; pendentes: number };
   produtos: CatalogoProduto[];
 }
 
@@ -278,6 +283,7 @@ export default async function RevendedoresPage() {
         produtos: Number(totais.produtos) || 0,
         no_catalogo: Number(totais.no_catalogo) || 0,
         com_preco: Number(totais.com_preco) || 0,
+        pendentes: Number(totais.pendentes) || 0,
       },
       produtos: lista.map((p) => ({
         product_id: String(p.product_id),
@@ -291,7 +297,10 @@ export default async function RevendedoresPage() {
           p.preco_proprio === null || p.preco_proprio === undefined
             ? null
             : Number(p.preco_proprio),
-        preco_grosso: Number(p.preco_grosso) || 0,
+        preco_grosso:
+          p.preco_grosso === null || p.preco_grosso === undefined
+            ? null
+            : Number(p.preco_grosso),
         reducao: Number(p.reducao) || 0,
         margem_pct: Number(p.margem_pct) || 0,
         nota: (p.nota as string | null) ?? null,
@@ -312,7 +321,12 @@ export default async function RevendedoresPage() {
       reducoes: [3500, 4000, 5000],
       margem_alvo: 0.2,
       margem_max: 0.3,
-      totais: { produtos: linhas.length, no_catalogo: linhas.length, com_preco: 0 },
+      totais: {
+        produtos: linhas.length,
+        no_catalogo: linhas.length,
+        com_preco: 0,
+        pendentes: linhas.length,
+      },
       produtos: linhas.map((p) => {
         const loja = Number(p.official_price);
         return {

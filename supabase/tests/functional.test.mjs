@@ -81,6 +81,7 @@ for (const rel of [
   "migrations/0030_revendedores_grupos_e_feed.sql",
   "migrations/0031_catalogo_grosso_proprio.sql",
   "migrations/0032_precos_grosso_por_reducao.sql",
+  "migrations/0033_preco_revenda_oficial.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -4985,15 +4986,32 @@ const catClienteGestao = await asUser(C1, async () => {
 check("um cliente não abre o cadastro do grosso",
   /Só a gestão/i.test(catClienteGestao ?? ""), catClienteGestao ?? "não deu erro");
 
-// 32.3 inscrever e retirar
+// 32.3 inscrever, dar preço, retirar
+//
+// Desde a 0033 «estar no catálogo» e «ter preço» são duas coisas: a inscrição
+// abre a porta, o preço é que a deixa passar. Um produto inscrito sem preço
+// fica pendente — visível para a gestão, invisível para o revendedor.
 for (const id of gIds) {
   await asUser(MANAGER, async () => q(`SELECT public.adicionar_produto_catalogo('${id}')`));
 }
-const catDepois = await asUser(REV, async () =>
+const catSemPreco = await asUser(REV, async () =>
   q(`SELECT product_id FROM public.revendedor_catalogo()`));
-check("inscrever um produto põe-no à vista do revendedor",
+check("um produto inscrito mas sem preço não chega ao revendedor",
+  !catSemPreco.some((l) => gIds.includes(l.product_id)),
+  String(catSemPreco.length));
+
+for (const id of gIds) {
+  await asUser(MANAGER, async () =>
+    q(`SELECT public.definir_preco_revenda('${id}', 800, 'Tabela de teste')`));
+}
+const catDepois = await asUser(REV, async () =>
+  q(`SELECT product_id, preco_grosso FROM public.revendedor_catalogo()`));
+check("inscrever um produto e dar-lhe preço põe-no à vista do revendedor",
   gIds.slice(0, 3).every((id) => catDepois.some((l) => l.product_id === id)),
   String(catDepois.length));
+check("o revendedor vê o preço escrito, nem mais nem menos",
+  catDepois.filter((l) => gIds.includes(l.product_id)).every((l) => Number(l.preco_grosso) === 800),
+  JSON.stringify(catDepois.filter((l) => gIds.includes(l.product_id))));
 
 await asUser(MANAGER, async () => q(`SELECT public.remover_produto_catalogo('${gIds[2]}')`));
 const catRetirado = await asUser(REV, async () =>
@@ -5016,6 +5034,10 @@ check("um pedido com 3 produtos diferentes é recusado",
   tresProdutos ?? "não deu erro");
 
 await asUser(MANAGER, async () => q(`SELECT public.adicionar_produto_catalogo('${gIds[2]}')`));
+// Retirar apaga o preço; voltar a inscrever não o traz de volta. Desde a 0033
+// isso significa que o produto volta pendente — escreve-se o preço outra vez.
+await asUser(MANAGER, async () =>
+  q(`SELECT public.definir_preco_revenda('${gIds[2]}', 800, 'Tabela de teste')`));
 
 const pedido4 = (await asUser(REV, async () =>
   q(`SELECT public.registar_pedido_revendedor('${JSON.stringify(
@@ -5066,18 +5088,22 @@ check("o preço escrito pela gestão vale no grosso",
     .preco_grosso) === 700);
 
 // O desconto próprio do revendedor foi limpo num teste anterior («limpar
-// desconto»). Repõe-se aqui para provar que «Repor» volta ao desconto **dele**,
-// não ao da empresa.
+// desconto»). Repõe-se aqui para provar que «Repor» **não** volta a aplicar
+// esse desconto: desde a 0033 o catálogo só conhece o preço escrito.
 await asUser(MANAGER, async () =>
   q(`SELECT public.actualizar_revendedor('${rvId}', 0.4)`));
 
 await asUser(MANAGER, async () => q(`SELECT public.limpar_preco_revenda('${gIds[0]}')`));
-const depoisDeRepor = (await asUser(REV, async () =>
-  q(`SELECT preco_grosso FROM public.revendedor_catalogo() WHERE product_id = '${gIds[0]}'`)));
+const depoisDeRepor = await q(
+  `SELECT product_id, preco FROM public.precos_revenda WHERE product_id = '${gIds[0]}'`);
 check("«Repor» não retira o produto do catálogo",
   depoisDeRepor.length === 1, String(depoisDeRepor.length));
-check("«Repor» devolve o produto ao desconto do revendedor",
-  Number(depoisDeRepor[0].preco_grosso) === 600, String(depoisDeRepor[0].preco_grosso));
+check("«Repor» deixa o produto sem preço em vez de inventar um",
+  depoisDeRepor[0].preco === null, String(depoisDeRepor[0].preco));
+const catReposto = await asUser(REV, async () =>
+  q(`SELECT product_id FROM public.revendedor_catalogo() WHERE product_id = '${gIds[0]}'`));
+check("um produto sem preço escrito sai da vista do revendedor",
+  catReposto.length === 0, String(catReposto.length));
 
 // 32.7 inscrever o catálogo inteiro
 const inscritosAgora = (await asUser(MANAGER, async () =>
@@ -5144,32 +5170,31 @@ check("um preço a zero não inventa redução",
 check("um preço nulo não inventa redução",
   Number((await q(`SELECT public.reducao_grosso(NULL) AS r`))[0].r) === 0);
 
-// 33.4 a tabela de lucro chega ao catálogo do revendedor
-// REV2 não tem desconto negociado: é o revendedor da tabela. Os produtos
-// «Grosso N» custam 1.000 Kz → redução de 200 Kz (o tecto manda encolher).
+// 33.4 o catálogo devolve o preço escrito, sem contas por cima
+// REV2 não tem desconto negociado. Mesmo assim o preço é o que está escrito
+// em `precos_revenda` — a 0033 tirou o desconto e a tabela do caminho.
+await asUser(MANAGER, async () =>
+  q(`SELECT public.definir_preco_revenda('${gIds[0]}', 700, 'Tabela 2026')`));
 const linhaLucro = (await asUser(REV2, async () =>
   q(`SELECT * FROM public.revendedor_catalogo() WHERE product_id = '${gIds[0]}'`)))[0];
 check("o catálogo traz o preço de cliente final",
   Number(linhaLucro.preco_loja) === 1000, String(linhaLucro.preco_loja));
-check("o catálogo traz o preço de aquisição pela tabela de reduções",
-  Number(linhaLucro.preco_grosso) === 800, String(linhaLucro.preco_grosso));
-check("o catálogo traz a redução aplicada",
-  Number(linhaLucro.reducao) === 200, String(linhaLucro.reducao));
-check("o catálogo traz o lucro por unidade",
-  Number(linhaLucro.lucro_unidade) === 200, String(linhaLucro.lucro_unidade));
-check("o lucro por unidade é a diferença entre os dois preços",
-  Number(linhaLucro.lucro_unidade) ===
-    Number(linhaLucro.preco_loja) - Number(linhaLucro.preco_grosso));
-check("o catálogo traz a margem sobre o preço de compra (25%)",
-  Number(linhaLucro.margem_pct) === 25, String(linhaLucro.margem_pct));
-check("o catálogo traz o desconto sobre o preço de loja (20%)",
-  Number(linhaLucro.desconto_pct) === 20, String(linhaLucro.desconto_pct));
+check("o catálogo traz o preço de revenda escrito, tal e qual (700)",
+  Number(linhaLucro.preco_grosso) === 700, String(linhaLucro.preco_grosso));
+check("o preço escrito não é recalculado por nenhuma tabela",
+  Number(linhaLucro.preco_grosso) === 700, String(linhaLucro.preco_grosso));
+check("a diferença para o preço de loja é só informativa (300)",
+  Number(linhaLucro.lucro_unidade) === 300, String(linhaLucro.lucro_unidade));
+check("a margem sobre o preço de compra segue o preço escrito (42,9%)",
+  Number(linhaLucro.margem_pct) === 42.9, String(linhaLucro.margem_pct));
+check("o desconto sobre o preço de loja segue o preço escrito (30%)",
+  Number(linhaLucro.desconto_pct) === 30, String(linhaLucro.desconto_pct));
 
-// 33.5 os acordos continuam a vencer a tabela
-check("um desconto negociado vence a tabela (40% de 1.000 = 600)",
+// 33.5 o acordo negociado já não mexe no preço do catálogo
+check("um desconto negociado de 40% não baixa o preço escrito (800)",
   Number((await asUser(REV, async () =>
     q(`SELECT preco_grosso FROM public.revendedor_catalogo() WHERE product_id = '${gIds[1]}'`)))[0]
-    .preco_grosso) === 600);
+    .preco_grosso) === 800);
 
 // 33.6 o painel do revendedor diz de onde vem o preço
 const painelRv2 = (await asUser(REV2, async () =>
@@ -5184,13 +5209,18 @@ check("o painel traz a margem-alvo e o tecto",
   Number(painelRv2.regras.margem_alvo) === 0.2 && Number(painelRv2.regras.margem_max) === 0.3,
   JSON.stringify([painelRv2.regras.margem_alvo, painelRv2.regras.margem_max]));
 
-// 33.7 o pedido é cotado pela tabela, não pelo browser
+// 33.7 o pedido é cotado pelo preço escrito, não pelo browser
+// O gIds[2] foi retirado em 32.3 e voltou em 32.7 sem preço («inscrever tudo»
+// não inventa preços). Volta-se a escrever o dele para o pedido fechar.
+await asUser(MANAGER, async () =>
+  q(`SELECT public.definir_preco_revenda('${gIds[2]}', 800, 'Tabela 2026')`));
+// 700 + 800 + 800 + 800 = 3.100 Kz por unidade; 5 de cada = 15.500 Kz.
 const pedidoTabela = (await asUser(REV2, async () =>
   q(`SELECT public.registar_pedido_revendedor('${JSON.stringify(
     gIds.map((id) => ({ product_id: id, quantidade: 5 }))
   )}'::jsonb) AS r`)))[0].r;
-check("o pedido de grosso é cotado pela tabela de reduções",
-  pedidoTabela.total_unidades === 20 && Number(pedidoTabela.valor_estimado) === 16000,
+check("o pedido de grosso é cotado pelo preço escrito no catálogo",
+  pedidoTabela.total_unidades === 20 && Number(pedidoTabela.valor_estimado) === 15500,
   JSON.stringify(pedidoTabela));
 
 // 33.8 a gestão vê a mesma conta
@@ -5201,9 +5231,49 @@ check("o cadastro da gestão mostra as alavancas",
   JSON.stringify(gestaoRed.reducoes));
 const linhaGestao = gestaoRed.produtos.find((p) => p.product_id === gIds[0]);
 check("o cadastro da gestão mostra o mesmo preço de grosso do revendedor",
-  Number(linhaGestao.preco_grosso) === 800, JSON.stringify(linhaGestao));
+  Number(linhaGestao.preco_grosso) === 700, JSON.stringify(linhaGestao));
 check("o cadastro da gestão mostra a margem de cada produto",
-  Number(linhaGestao.margem_pct) === 25, String(linhaGestao.margem_pct));
+  Number(linhaGestao.margem_pct) === 42.9, String(linhaGestao.margem_pct));
+check("o cadastro da gestão conta os produtos no catálogo sem preço",
+  typeof gestaoRed.totais.pendentes === "number", JSON.stringify(gestaoRed.totais));
+
+console.log("\n--- 34. PREÇO DE REVENDA OFICIAL (0033) ---");
+
+// 34.1 uma só porta para ler o preço escrito
+const escrito = await q(`SELECT public.preco_revenda_escrito('${gIds[0]}') AS p`);
+check("o preço escrito lê-se por uma função só", Number(escrito[0].p) === 700,
+  String(escrito[0].p));
+const semEscrito = await q(`SELECT public.preco_revenda_escrito('${pFora}') AS p`);
+check("um produto sem preço escrito devolve NULL, não zero",
+  semEscrito[0].p === null, String(semEscrito[0].p));
+
+// 34.2 um produto no catálogo sem preço não entra num pedido
+const pSemPreco = (await q(`
+  INSERT INTO public.products (name, sku, official_price, is_active)
+  VALUES ('Sem preço de grosso', 'GRS-3Z', 9000, true) RETURNING id`))[0].id;
+await asUser(MANAGER, async () =>
+  q(`SELECT public.adicionar_produto_catalogo('${pSemPreco}')`));
+
+const pedidoSemPreco = await asUser(REV2, async () => {
+  try {
+    await q(`SELECT public.registar_pedido_revendedor('${JSON.stringify([
+      { product_id: gIds[0], quantidade: 5 },
+      { product_id: gIds[1], quantidade: 5 },
+      { product_id: gIds[2], quantidade: 5 },
+      { product_id: pSemPreco, quantidade: 5 },
+    ])}'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("um produto no catálogo sem preço escrito é recusado no pedido",
+  /ainda não tem preço de revenda definido/i.test(pedidoSemPreco ?? ""),
+  pedidoSemPreco ?? "não deu erro");
+
+// 34.3 o preço de cliente final não foi tocado
+const lojaIntacta = await q(
+  `SELECT official_price FROM public.products WHERE id = '${gIds[0]}'`);
+check("o preço de cliente final fica intacto depois de escrever o de grosso",
+  Number(lojaIntacta[0].official_price) === 1000, String(lojaIntacta[0].official_price));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);
