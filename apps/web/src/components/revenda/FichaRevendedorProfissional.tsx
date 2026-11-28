@@ -164,7 +164,7 @@ export default function FichaRevendedorProfissional({
               valor={r.gestor ?? "Administração nacional"}
             />
             <Dado rotulo="Condição de grosso" valor={desconto} />
-            <Dado rotulo="Mínimo por produto" valor={`${r.minimo_unidades} unidades`} />
+            <Dado rotulo="Mínimo do pedido" valor={`${r.minimo_unidades} unidades`} />
             <Dado
               rotulo="Conta de acesso"
               valor={

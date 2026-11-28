@@ -52,7 +52,7 @@ export default function AcoesFicha({
         p_id: id,
         p_desconto:
           String(d).trim() === "" || !Number.isFinite(descontoNum) ? null : descontoNum / 100,
-        p_minimo: Number.isFinite(minimoNum) && minimoNum >= 1 ? Math.round(minimoNum) : null,
+        p_minimo: Number.isFinite(minimoNum) && minimoNum > 0 ? Math.max(4, Math.round(minimoNum)) : null,
         p_status: novoEstado ?? null,
         p_nota: texto.trim(),
         p_limpar_desconto: String(d).trim() === "",
@@ -113,7 +113,7 @@ export default function AcoesFicha({
 
         <label className="block">
           <span className="mb-1 block text-[10px] uppercase tracking-wide text-[#6F6F6F]">
-            Mínimo por produto
+            Mínimo do pedido
           </span>
           <input
             value={m}
@@ -121,7 +121,7 @@ export default function AcoesFicha({
             inputMode="numeric"
             className="w-full rounded-lg border border-[#333] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] focus:border-[#C9A962] focus:outline-none"
           />
-          <span className="mt-1 block text-[10px] text-[#525252]">unidades</span>
+          <span className="mt-1 block text-[10px] text-[#525252]">unidades no total do pedido (mínimo 4)</span>
         </label>
 
         <label className="block">

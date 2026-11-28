@@ -348,7 +348,7 @@ function FichaRevendedor({
       const { error } = await supabase.rpc("actualizar_revendedor", {
         p_id: revendedor.id,
         p_desconto: String(desconto).trim() === "" ? null : d / 100,
-        p_minimo: Number.isFinite(m) && m >= 1 ? Math.round(m) : null,
+        p_minimo: Number.isFinite(m) && m > 0 ? Math.max(4, Math.round(m)) : null,
         p_status: estado ?? null,
         p_nota: null,
         // Campo vazio = «volta ao desconto da empresa». Sem esta bandeira,
@@ -412,7 +412,7 @@ function FichaRevendedor({
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-[10px] text-[#6F6F6F]">Mínimo un.</span>
+            <span className="mb-1 block text-[10px] text-[#6F6F6F]">Mínimo un./pedido</span>
             <input
               value={minimo}
               onChange={(e) => setMinimo(e.target.value)}

@@ -44,8 +44,8 @@ export async function POST(request: Request) {
     descontoBruto !== undefined && descontoBruto !== null && String(descontoBruto).trim() !== "";
   const desconto = temDesconto ? Number(descontoBruto) : null;
 
-  const minimoBruto = Number(corpo.minimo ?? 5);
-  const minimo = Number.isFinite(minimoBruto) ? Math.max(1, Math.round(minimoBruto)) : 5;
+  const minimoBruto = Number(corpo.minimo ?? 4);
+  const minimo = Number.isFinite(minimoBruto) ? Math.max(4, Math.round(minimoBruto)) : 4;
 
   if (nome.length < 3) {
     return NextResponse.json(

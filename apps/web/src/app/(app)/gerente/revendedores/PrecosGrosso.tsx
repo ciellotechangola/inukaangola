@@ -59,7 +59,7 @@ export default function PrecosGrosso({
   const [guardado, setGuardado] = useState<string | null>(null);
   const [erro, setErro] = useState("");
   const [aInscrever, setAInscrever] = useState(false);
-  const [minimo, setMinimo] = useState(String(catalogo.minimo_produtos));
+  const [minimo, setMinimo] = useState(String(catalogo.minimo_unidades));
   const [aGravarMinimo, setAGravarMinimo] = useState(false);
   const [minimoGravado, setMinimoGravado] = useState(false);
 
@@ -155,8 +155,8 @@ export default function PrecosGrosso({
     setErro("");
     setMinimoGravado(false);
     const n = Number(minimo.replace(/[^0-9]/g, ""));
-    if (!Number.isFinite(n) || n < 1) {
-      setErro("O mínimo de produtos por pedido tem de ser 1 ou mais.");
+    if (!Number.isFinite(n) || n < 4) {
+      setErro("O mínimo é de 4 unidades no total do pedido, ou mais.");
       return;
     }
 
@@ -166,7 +166,7 @@ export default function PrecosGrosso({
       const { error } = await supabase
         .from("platform_settings")
         .upsert(
-          { key: "revenda_minimo_produtos", value: { value: Math.round(n) } },
+          { key: "revenda_minimo_unidades", value: { value: Math.round(n) } },
           { onConflict: "key" }
         );
       if (error) throw new Error(error.message);
@@ -210,20 +210,21 @@ export default function PrecosGrosso({
       <section className="mb-5 rounded-xl border border-[#262626] bg-[#141414] p-4">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-[#F5F5F5]">Mínimo de produtos por pedido</p>
+            <p className="text-sm font-medium text-[#F5F5F5]">Mínimo de unidades por pedido</p>
             <p className="mt-0.5 text-[11px] leading-relaxed text-[#8A8A8A]">
-              Quantos produtos <em>diferentes</em> um revendedor tem de juntar para o pedido
-              seguir. O mínimo de unidades por linha continua a ser o da ficha do revendedor.
+              Quantas unidades, <em>somadas em todo o carrinho</em>, um revendedor tem de juntar
+              para o pedido seguir. Cada linha pode levar 1 unidade: 4 do mesmo produto contam
+              tanto como 1+1+1+1 de quatro produtos. A regra da casa é 4.
             </p>
           </div>
           <div className="flex items-end gap-2">
             <label className="block">
               <span className="mb-1 block text-[10px] uppercase tracking-wide text-[#6F6F6F]">
-                Produtos
+                Unidades
               </span>
               <input
                 type="number"
-                min={1}
+                min={4}
                 value={minimo}
                 onChange={(e) => {
                   setMinimo(e.target.value);

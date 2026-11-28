@@ -203,3 +203,33 @@ supabase/PATCH_PRECO_REVENDA_OFICIAL.sql
 Supabase → SQL Editor → New query → colar → RUN. É idempotente e não apaga preços já
 escritos pela gestão.
 
+
+## 8. A regra do pedido mudou (0035) — 4 unidades, não 4 produtos
+
+O relatório acima descreve o ecrã da 0033. A regra do pedido que lá se testava — «4
+produtos diferentes por pedido, 5 unidades por linha» — **já não existe**. Foi substituída
+pela 0035 e o ecrã acompanha.
+
+| Antes (0031 → 0034) | Agora (0035) |
+|---|---|
+| 4 **produtos diferentes** por pedido | 4 **unidades no total** do pedido |
+| 5 unidades por linha | 1 unidade por linha (o revendedor sobe se quiser) |
+| 6 un. do mesmo produto = recusado | 6 un. do mesmo produto = aceite |
+| o botão contava linhas | o botão soma unidades |
+
+Como funciona no ecrã (`/revenda/catalogo`):
+
+- cada produto entra no carrinho com **1 unidade**; «−» e «+» andam de uma em uma e nunca
+  descem abaixo de 1;
+- o revendedor mistura os produtos que quiser — 1 de cada, ou 3 do mesmo;
+- a barra do fundo mostra `unidades/mínimo` (ex.: `2/4`) e o botão **Enviar pedido** fica
+  desativado enquanto a soma não chegar ao mínimo, com a mensagem «Selecione pelo menos 4
+  unidades para poder finalizar a compra.»;
+- a partir de 4 unidades o botão fica ativo. Acima de 4 não há tecto.
+
+A base recusa o mesmo em `registar_pedido_revendedor()`: mínimo de **unidades**, uma linha
+por produto, sem preço inventado. O mínimo vem de `revendedores.minimo_unidades` (acordo
+individual) ou de `platform_settings.revenda_minimo_unidades` (4, regra da casa) — a gestão
+edita-o em **Grosso → Mínimo de unidades por pedido**.
+
+Aplicar: `supabase/PATCH_CATALOGO_POR_UNIDADES.sql` (equivale à migração 0035).

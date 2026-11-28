@@ -35,8 +35,7 @@ export default async function CatalogoGrossoPage() {
     <main className="mx-auto max-w-6xl px-4 py-10">
       <CatalogoGrosso
         produtos={produtos}
-        minimo={painel.revendedor.minimo_unidades}
-        minimoProdutos={painel.regras.minimo_produtos}
+        minimo={painel.regras.minimo_unidades}
         revendedor={painel.revendedor.nome}
         semMigracao={semMigracao}
       />

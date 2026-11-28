@@ -143,7 +143,7 @@ export default function PainelRevenda({
             <span className="block text-sm font-medium text-[#F5F5F5]">Catálogo de grosso</span>
             <span className="mt-0.5 block text-xs leading-relaxed text-[#8A8A8A]">
               Preços de revenda oficiais INUKA 2026. Mínimo de {rev.minimo_unidades} unidades
-              por produto.
+              por pedido.
             </span>
           </span>
           <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-[#4A4A4A] transition group-hover:translate-x-0.5 group-hover:text-[#C9A962]" />

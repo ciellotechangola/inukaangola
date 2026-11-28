@@ -26,28 +26,31 @@ interface LinhaCarrinho {
 /**
  * Catálogo de grosso com carrinho.
  *
- * Duas regras, ambas vindas da base (`minha_revenda().regras`):
- *   · `minimo` unidades por linha — o botão «−» para no mínimo em vez de
- *     deixar chegar a 3 e falhar no servidor;
- *   · `minimoProdutos` produtos **diferentes** por pedido — um pedido de
- *     grosso com uma linha só é uma compra ao balcão com desconto.
+ * UMA regra, vinda da base (`minha_revenda().regras.minimo_unidades`):
+ *   · o pedido precisa de **N unidades no total** (4, por regra da casa).
+ *     Cada linha começa em **1 unidade** e o revendedor sobe como quiser.
+ *     Quatro unidades do mesmo produto valem tanto como 1+1+1+1 de quatro
+ *     produtos — quem soma é o carrinho, não a lista de produtos.
+ *
+ * A 0035 acabou com a regra antiga dos «4 produtos diferentes», que obrigava
+ * quem queria 6 unidades do mesmo artigo a inventar três linhas de outros
+ * produtos para o pedido passar. O ecrã acompanha: nada aqui conta produtos
+ * diferentes, só unidades.
  *
  * O preço é o **preço de revenda oficial** da tabela INUKA 2026, escrito na
  * base produto a produto. O browser não calcula nada: nem desconto, nem
  * margem, nem lucro. O ecrã mostra o preço de aquisição e a conta do pedido —
- * quantas unidades, quanto se paga. O que o revendedor ganha na revenda é
- * conta dele; a INUKA não lhe põe uma folha de cálculo à frente.
+ * quantas unidades, quanto se paga.
  */
 export default function CatalogoGrosso({
   produtos,
   minimo,
-  minimoProdutos,
   revendedor,
   semMigracao,
 }: {
   produtos: ProdutoGrosso[];
+  /** Unidades mínimas **do pedido inteiro**, não de cada linha. */
   minimo: number;
-  minimoProdutos: number;
   revendedor: string;
   semMigracao: boolean;
 }) {
@@ -92,22 +95,24 @@ export default function CatalogoGrosso({
     (soma, l) => soma + l.produto.preco_grosso * l.quantidade,
     0
   );
-  /** Quantos produtos diferentes faltam para o pedido poder seguir. */
-  const faltam = Math.max(0, minimoProdutos - linhas.length);
+  /** Quantas unidades faltam para o pedido poder seguir. */
+  const faltam = Math.max(0, minimo - totalUnidades);
+  const podeEnviar = linhas.length > 0 && faltam === 0;
 
   function quantidadeDe(p: ProdutoGrosso): number {
     return carrinho[p.product_id] ?? 0;
   }
 
+  /** Entra com **1 unidade** — o revendedor sobe a partir daí, se quiser. */
   function adicionar(p: ProdutoGrosso) {
     setErro("");
-    setCarrinho((c) => ({ ...c, [p.product_id]: c[p.product_id] ?? p.minimo }));
+    setCarrinho((c) => ({ ...c, [p.product_id]: c[p.product_id] ?? 1 }));
   }
 
   function mudar(p: ProdutoGrosso, delta: number) {
     setCarrinho((c) => {
-      const atual = c[p.product_id] ?? p.minimo;
-      const novo = Math.max(p.minimo, atual + delta);
+      const atual = c[p.product_id] ?? 1;
+      const novo = Math.max(1, atual + delta);
       return { ...c, [p.product_id]: novo };
     });
   }
@@ -115,7 +120,7 @@ export default function CatalogoGrosso({
   function definir(p: ProdutoGrosso, valor: string) {
     const n = Number(valor.replace(/[^0-9]/g, ""));
     if (!Number.isFinite(n)) return;
-    setCarrinho((c) => ({ ...c, [p.product_id]: Math.max(p.minimo, Math.round(n)) }));
+    setCarrinho((c) => ({ ...c, [p.product_id]: Math.max(1, Math.round(n)) }));
   }
 
   function remover(id: string) {
@@ -132,9 +137,9 @@ export default function CatalogoGrosso({
       setErro("Adicione pelo menos um produto ao pedido.");
       return;
     }
-    if (linhas.length < minimoProdutos) {
+    if (totalUnidades < minimo) {
       setErro(
-        `O pedido de grosso exige pelo menos ${minimoProdutos} produtos diferentes. Tem ${linhas.length}.`
+        `Selecione pelo menos ${minimo} unidades para poder finalizar a compra. Tem ${totalUnidades}.`
       );
       return;
     }
@@ -209,8 +214,10 @@ export default function CatalogoGrosso({
         <h1 className="mt-2 text-3xl font-light text-[#F5F5F5]">Catálogo de grosso</h1>
         <p className="mt-1 max-w-2xl text-sm text-[#A3A3A3]">
           Preços de revenda oficiais INUKA 2026 para{" "}
-          <strong className="font-medium text-[#E5E5E5]">{revendedor}</strong>. Mínimo de{" "}
-          {minimo} unidades por produto e {minimoProdutos} produtos diferentes por pedido.
+          <strong className="font-medium text-[#E5E5E5]">{revendedor}</strong>. Escolha os
+          produtos à vontade, a partir de 1 unidade de cada. O pedido segue com{" "}
+          <strong className="font-medium text-[#E5E5E5]">{minimo} unidades no total</strong> —
+          do mesmo produto ou de produtos diferentes, como preferir.
         </p>
         <p className="mt-2 max-w-2xl rounded-lg border border-[#262626] bg-[#111] px-3 py-2 text-[11.5px] leading-relaxed text-[#8A8A8A]">
           O preço que vê é o preço de aquisição da tabela. Não há descontos a somar nem
@@ -328,9 +335,10 @@ export default function CatalogoGrosso({
                     <div className="flex items-center gap-1 rounded-lg border border-[#333]">
                       <button
                         type="button"
-                        onClick={() => mudar(p, -p.minimo)}
+                        onClick={() => mudar(p, -1)}
+                        disabled={qtd <= 1}
                         aria-label="Diminuir"
-                        className="grid h-8 w-8 place-items-center text-[#A3A3A3] transition hover:text-[#C9A962]"
+                        className="grid h-8 w-8 place-items-center text-[#A3A3A3] transition hover:text-[#C9A962] disabled:opacity-30 disabled:hover:text-[#A3A3A3]"
                       >
                         <Minus className="h-3.5 w-3.5" />
                       </button>
@@ -343,7 +351,7 @@ export default function CatalogoGrosso({
                       />
                       <button
                         type="button"
-                        onClick={() => mudar(p, p.minimo)}
+                        onClick={() => mudar(p, 1)}
                         aria-label="Aumentar"
                         className="grid h-8 w-8 place-items-center text-[#A3A3A3] transition hover:text-[#C9A962]"
                       >
@@ -372,7 +380,7 @@ export default function CatalogoGrosso({
 
                 {noCarrinho && (
                   <p className="mt-2 text-[10px] text-[#6F6F6F]">
-                    {qtd} un. · {formatCurrency(p.preco_grosso * qtd)} (mínimo {p.minimo})
+                    {qtd} un. · {formatCurrency(p.preco_grosso * qtd)}
                   </p>
                 )}
               </article>
@@ -419,10 +427,15 @@ export default function CatalogoGrosso({
             </table>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {[
               { rotulo: "Produtos", valor: String(linhas.length), cor: "text-[#D4D4D4]" },
-              { rotulo: "Unidades", valor: String(totalUnidades), cor: "text-[#D4D4D4]" },
+              {
+                rotulo: "Unidades",
+                valor: String(totalUnidades),
+                cor: faltam === 0 ? "text-[#4ADE80]" : "text-[#D4D4D4]",
+              },
+              { rotulo: "Mínimo do pedido", valor: `${minimo} un.`, cor: "text-[#8A8A8A]" },
               { rotulo: "Total a pagar", valor: formatCurrency(totalValor), cor: "text-[#C9A962]" },
             ].map((c) => (
               <div key={c.rotulo} className="rounded-lg border border-[#1F1F1F] bg-[#0A0A0A] px-3 py-2">
@@ -442,7 +455,10 @@ export default function CatalogoGrosso({
               <div className="min-w-0 flex-1">
                 <p className="flex items-center gap-2 text-xs text-[#A3A3A3]">
                   <ShoppingCart className="h-3.5 w-3.5 text-[#C9A962]" />
-                  {linhas.length} de {minimoProdutos} produtos · {totalUnidades} unidades
+                  {linhas.length} {linhas.length === 1 ? "produto" : "produtos"} ·{" "}
+                  <span className={faltam === 0 ? "text-[#4ADE80]" : undefined}>
+                    {totalUnidades} {totalUnidades === 1 ? "unidade" : "unidades"}
+                  </span>
                   <button
                     type="button"
                     onClick={() => setCarrinho({})}
@@ -452,10 +468,32 @@ export default function CatalogoGrosso({
                     limpar
                   </button>
                 </p>
-                {faltam > 0 && (
+
+                {/* Progresso até ao mínimo: a barra enche à medida que se
+                    juntam unidades e fica verde quando a soma chega a 4. */}
+                <div className="mt-1.5 flex items-center gap-2">
+                  <div className="h-1 w-32 overflow-hidden rounded-full bg-[#262626]">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        faltam === 0 ? "bg-[#4ADE80]" : "bg-[#C9A962]"
+                      }`}
+                      style={{
+                        width: `${Math.min(100, Math.round((totalUnidades / Math.max(1, minimo)) * 100))}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-[#6F6F6F]">
+                    {Math.min(totalUnidades, minimo)}/{minimo}
+                  </span>
+                </div>
+
+                {faltam > 0 ? (
                   <p className="mt-1 text-[11px] text-[#E3D5A7]">
-                    Faltam {faltam} {faltam === 1 ? "produto" : "produtos"} para poder enviar o
-                    pedido.
+                    Selecione pelo menos {minimo} unidades para poder finalizar a compra.
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[11px] text-[#4ADE80]">
+                    Mínimo atingido — pode finalizar a compra.
                   </p>
                 )}
                 <input
@@ -481,8 +519,13 @@ export default function CatalogoGrosso({
               <button
                 type="button"
                 onClick={enviarPedido}
-                disabled={aEnviar || faltam > 0}
-                className="inline-flex items-center gap-2 rounded-lg bg-[#C9A962] px-5 py-2.5 text-sm font-semibold text-[#0A0A0A] transition hover:bg-[#D8BC7A] disabled:opacity-50"
+                disabled={aEnviar || !podeEnviar}
+                title={
+                  podeEnviar
+                    ? undefined
+                    : `Selecione pelo menos ${minimo} unidades para poder finalizar a compra.`
+                }
+                className="inline-flex items-center gap-2 rounded-lg bg-[#C9A962] px-5 py-2.5 text-sm font-semibold text-[#0A0A0A] transition hover:bg-[#D8BC7A] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#C9A962]"
               >
                 {aEnviar ? "A enviar…" : "Enviar pedido"}
                 <ArrowRight className="h-4 w-4" />

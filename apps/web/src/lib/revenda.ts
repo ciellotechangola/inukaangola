@@ -54,15 +54,20 @@ export interface MinhaRevenda {
   /**
    * As regras do grosso, calculadas na base.
    *
-   * `minimo_unidades` é por linha; `minimo_produtos` é por pedido. São duas
-   * regras diferentes e o ecrã mostra as duas — um pedido de grosso com uma
-   * linha só não é um pedido de grosso.
+   * `minimo_unidades` é o mínimo **do pedido inteiro** (4 por regra da casa):
+   * cada linha pode levar 1 unidade, e quem soma é o carrinho. Desde a 0035
+   * deixou de existir um mínimo por linha.
+   *
+   * `minimo_produtos` é legado (regra dos «4 produtos diferentes» da 0031,
+   * revogada pela 0035). Sai sempre com 1 e **nenhum ecrã decide nada por
+   * ele** — fica só para um cliente antigo não partir.
    *
    * `reducoes` são as alavancas em Kwanza (3.500 / 4.000 / 5.000) e
    * `margem_alvo` / `margem_max` a banda que a base usa para escolher uma.
    */
   regras: {
     minimo_unidades: number;
+    /** @deprecated Revogado pela 0035 — o mínimo é de unidades, não de produtos. */
     minimo_produtos: number;
     reducoes: number[];
     margem_alvo: number;
@@ -100,6 +105,10 @@ export interface ProdutoGrosso {
   lucro_unidade: number;
   margem_pct: number;
   desconto_pct: number;
+  /**
+   * Unidades mínimas **do pedido** (4). Igual em todas as linhas — não é um
+   * mínimo por produto. O carrinho soma as unidades de todas as linhas.
+   */
   minimo: number;
   stock: number | null;
 }
@@ -152,7 +161,7 @@ export function normalizarMinhaRevenda(bruto: unknown): MinhaRevenda {
           loja_id: (rev.loja_id as string | null) ?? null,
           // `null` é informação: sem acordo próprio, manda a tabela.
           desconto: rev.desconto === null || rev.desconto === undefined ? null : numero(rev.desconto),
-          minimo_unidades: numero(rev.minimo_unidades) || 5,
+          minimo_unidades: numero(rev.minimo_unidades) || 4,
           status:
             rev.status === "suspenso" || rev.status === "encerrado" ? rev.status : "activo",
           nota: (rev.nota as string | null) ?? null,
@@ -161,7 +170,7 @@ export function normalizarMinhaRevenda(bruto: unknown): MinhaRevenda {
     // Sem `regras` (migração 0031/0032 por aplicar) ficam os valores antigos:
     // só o mínimo de unidades, sem mínimo de produtos nem tabela.
     regras: {
-      minimo_unidades: numero(regras.minimo_unidades) || numero(rev?.minimo_unidades) || 5,
+      minimo_unidades: numero(regras.minimo_unidades) || numero(rev?.minimo_unidades) || 4,
       minimo_produtos: numero(regras.minimo_produtos) || 1,
       reducoes: Array.isArray(regras.reducoes)
         ? (regras.reducoes as unknown[]).map(numero).filter((n) => n > 0)
@@ -201,7 +210,7 @@ export function normalizarCatalogo(linhas: unknown[]): ProdutoGrosso[] {
           : numero(l.lucro_unidade),
       margem_pct: numero(l.margem_pct),
       desconto_pct: numero(l.desconto_pct),
-      minimo: numero(l.minimo) || 5,
+      minimo: numero(l.minimo) || 4,
       stock: l.stock === null || l.stock === undefined ? null : numero(l.stock),
     };
   });

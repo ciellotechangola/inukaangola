@@ -58,7 +58,7 @@ export default function NovoRevendedor({
   const [email, setEmail] = useState("");
   const [provincia, setProvincia] = useState(provinciaFixa ?? "");
   const [desconto, setDesconto] = useState("35");
-  const [minimo, setMinimo] = useState("5");
+  const [minimo, setMinimo] = useState("4");
   const [password, setPassword] = useState("");
   const [confirmar, setConfirmar] = useState("");
   const [ver, setVer] = useState(false);
@@ -136,7 +136,7 @@ export default function NovoRevendedor({
             Number.isFinite(descontoNum) && String(desconto).trim() !== ""
               ? descontoNum / 100
               : null,
-          minimo: Number.isFinite(minimoNum) && minimoNum >= 1 ? minimoNum : 5,
+          minimo: Number.isFinite(minimoNum) && minimoNum > 0 ? Math.max(4, minimoNum) : 4,
         }),
       });
 
@@ -425,11 +425,11 @@ export default function NovoRevendedor({
 
         <label className="block">
           <span className="mb-1 block text-[10px] uppercase tracking-wide text-[#6F6F6F]">
-            Mínimo de unidades
+            Mínimo de unidades por pedido
           </span>
           <input
             type="number"
-            min={1}
+            min={4}
             value={minimo}
             onChange={(e) => setMinimo(e.target.value)}
             className="w-full rounded-lg border border-[#404040] bg-[#0A0A0A] px-3 py-2 text-sm text-[#F5F5F5] focus:border-[#C9A962] focus:outline-none"

@@ -51,7 +51,7 @@ export default function AprovarCandidatura({
     provinciaFixa ?? candidatura.provincia_id ?? ""
   );
   const [desconto, setDesconto] = useState("");
-  const [minimo, setMinimo] = useState("5");
+  const [minimo, setMinimo] = useState("4");
   const [ver, setVer] = useState(false);
   const [erro, setErro] = useState("");
   const [aGuardar, setAGuardar] = useState(false);
@@ -111,7 +111,7 @@ export default function AprovarCandidatura({
             Number.isFinite(descontoNum) && String(desconto).trim() !== ""
               ? descontoNum / 100
               : null,
-          minimo: Number.isFinite(minimoNum) && minimoNum >= 1 ? minimoNum : 5,
+          minimo: Number.isFinite(minimoNum) && minimoNum > 0 ? Math.max(4, minimoNum) : 4,
         }),
       });
 
@@ -366,10 +366,10 @@ export default function AprovarCandidatura({
         </label>
 
         <label className="block">
-          <span className="mb-1 block text-[10px] text-[#6F6F6F]">Mínimo de unidades</span>
+          <span className="mb-1 block text-[10px] text-[#6F6F6F]">Mínimo de unidades por pedido</span>
           <input
             type="number"
-            min={1}
+            min={4}
             value={minimo}
             onChange={(e) => setMinimo(e.target.value)}
             className="w-full rounded-lg border border-[#404040] bg-[#0A0A0A] px-2.5 py-1.5 text-sm text-[#F5F5F5] focus:border-[#C9A962] focus:outline-none"

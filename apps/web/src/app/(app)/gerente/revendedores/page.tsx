@@ -88,7 +88,8 @@ export interface CatalogoProduto {
 }
 
 export interface CatalogoGestao {
-  minimo_produtos: number;
+  /** Unidades mínimas **do pedido** (4). Não é um mínimo por produto. */
+  minimo_unidades: number;
   /** Legado: a percentagem da 0026. O preço passou a vir da tabela. */
   desconto: number;
   /** As alavancas do grosso, em Kwanza. */
@@ -272,7 +273,7 @@ export default async function RevendedoresPage() {
     const lista = (bruto.produtos ?? []) as Record<string, unknown>[];
 
     catalogo = {
-      minimo_produtos: Number(bruto.minimo_produtos) || 4,
+      minimo_unidades: Number(bruto.minimo_unidades) || 4,
       desconto: Number(bruto.desconto) || descontoEmpresa,
       reducoes: Array.isArray(bruto.reducoes)
         ? (bruto.reducoes as unknown[]).map(Number).filter((n) => n > 0)
@@ -316,7 +317,7 @@ export default async function RevendedoresPage() {
     }[];
 
     catalogo = {
-      minimo_produtos: 1,
+      minimo_unidades: 4,
       desconto: descontoEmpresa,
       reducoes: [3500, 4000, 5000],
       margem_alvo: 0.2,

@@ -83,6 +83,7 @@ for (const rel of [
   "migrations/0032_precos_grosso_por_reducao.sql",
   "migrations/0033_preco_revenda_oficial.sql",
   "migrations/0034_situacao_da_venda.sql",
+  "migrations/0035_catalogo_grosso_por_unidades.sql",
 ]) {
   const sql = fs
     .readFileSync(path.join(root, rel), "utf8")
@@ -5021,18 +5022,28 @@ check("retirar um produto tira-o do catálogo do revendedor",
   !catRetirado.some((l) => l.product_id === gIds[2]),
   String(catRetirado.length));
 
-// 32.4 o mínimo de produtos diferentes
-const tresProdutos = await asUser(REV, async () => {
-  try {
-    await q(`SELECT public.registar_pedido_revendedor('${JSON.stringify(
-      gIds.slice(0, 3).map((id) => ({ product_id: id, quantidade: 5 }))
-    )}'::jsonb)`);
-    return null;
-  } catch (e) { return e.message; }
-});
-check("um pedido com 3 produtos diferentes é recusado",
-  /pelo menos 4 produtos diferentes/i.test(tresProdutos ?? ""),
-  tresProdutos ?? "não deu erro");
+// 32.4 o mínimo do pedido
+//
+// A 0031 exigia **4 produtos diferentes**. A 0035 substituiu essa regra pela
+// única que interessa a quem compra: **4 unidades no total**. Aqui as três
+// linhas de 5 somam 15 unidades, por isso o pedido passa — antes era recusado
+// por ter só 3 produtos. A matriz completa da regra nova está na secção 36.
+//
+// Retirar apaga o preço; voltar a inscrever não o traz de volta. Desde a 0033
+// isso significa que o produto volta pendente — escreve-se o preço outra vez.
+// (A reposição vem antes do pedido: sem ela o erro seria «não está no
+// catálogo», que não é o que este passo quer provar.)
+await asUser(MANAGER, async () => q(`SELECT public.adicionar_produto_catalogo('${gIds[2]}')`));
+await asUser(MANAGER, async () =>
+  q(`SELECT public.definir_preco_revenda('${gIds[2]}', 800, 'Tabela de teste')`));
+
+const tresLinhas = (await asUser(REV, async () =>
+  q(`SELECT public.registar_pedido_revendedor('${JSON.stringify(
+    gIds.slice(0, 3).map((id) => ({ product_id: id, quantidade: 5 }))
+  )}'::jsonb) AS r`)))[0].r;
+check("3 produtos × 5 unidades = 15 unidades — o pedido passa (o mínimo é de unidades)",
+  /^RV-\d{4}-\d{4}$/.test(tresLinhas.numero ?? "") && tresLinhas.total_unidades === 15,
+  JSON.stringify(tresLinhas));
 
 await asUser(MANAGER, async () => q(`SELECT public.adicionar_produto_catalogo('${gIds[2]}')`));
 // Retirar apaga o preço; voltar a inscrever não o traz de volta. Desde a 0033
@@ -5122,10 +5133,12 @@ check("depois disso todos os produtos activos estão no grosso",
 // 32.8 as regras chegam ao ecrã do revendedor
 const painelRegras = (await asUser(REV, async () =>
   q(`SELECT public.minha_revenda() AS r`)))[0].r;
-check("o painel do revendedor traz o mínimo de produtos",
-  painelRegras.regras.minimo_produtos === 4,
+check("o painel do revendedor já não traz a regra dos 4 produtos",
+  painelRegras.regras.minimo_produtos === 1,
   JSON.stringify(painelRegras.regras));
-check("o painel do revendedor traz o mínimo de unidades",
+// 5 é o acordo próprio desta ficha (criada em 27 com `minimo_unidades = 5`);
+// quem não tem acordo fica com a regra da casa, 4. Ver a secção 36.
+check("o painel do revendedor traz o mínimo de unidades do pedido",
   painelRegras.regras.minimo_unidades === 5,
   JSON.stringify(painelRegras.regras));
 
@@ -5587,6 +5600,154 @@ const equipaSaldoColab = await asUser(S_SALDO, async () => {
 });
 check("o colaborador não vê os saldos da equipa",
   /apenas a gestão/i.test(equipaSaldoColab ?? ""), equipaSaldoColab ?? "não deu erro");
+
+console.log("\n--- 36. O GROSSO COMPRA-SE POR UNIDADES E O NOVO VEM PRIMEIRO (0035) ---");
+
+// A ficha deste revendedor nasceu em 27 com `minimo_unidades = 5`, que era o
+// `DEFAULT` da tabela na 0026 — não um acordo negociado. A 0035 normaliza
+// essas fichas para 4; aqui faz-se o mesmo, para o teste provar a regra da
+// casa e não o resto de uma semente.
+await exec(`UPDATE public.revendedores SET minimo_unidades = 4 WHERE id = '${rvId}'`);
+
+// Dois produtos novos, inscritos no grosso e com preço escrito. 5.000 Kz de
+// preço mínimo oficial, 3.000 Kz de preço de revenda.
+const uIds = [];
+for (const n of [1, 2]) {
+  const id = (await q(`
+    INSERT INTO public.products (name, sku, official_price, is_active)
+    VALUES ('Unidade ${n}', 'UND-3${n}', 5000, true) RETURNING id`))[0].id;
+  uIds.push(id);
+  await asUser(MANAGER, async () => q(`SELECT public.adicionar_produto_catalogo('${id}')`));
+  await asUser(MANAGER, async () =>
+    q(`SELECT public.definir_preco_revenda('${id}', 3000, 'Tabela de teste')`));
+}
+const [uA, uB] = uIds;
+
+// 36.1 O CASO QUE ESTAVA PROIBIDO: UM PRODUTO, 4 UNIDADES
+const umProdutoQuatro = (await asUser(REV, async () =>
+  q(`SELECT public.registar_pedido_revendedor('${JSON.stringify([
+    { product_id: uA, quantidade: 4 },
+  ])}'::jsonb) AS r`)))[0].r;
+check("um único produto ×4 é um pedido de grosso válido",
+  /^RV-\d{4}-\d{4}$/.test(umProdutoQuatro.numero ?? ""),
+  JSON.stringify(umProdutoQuatro));
+check("o pedido leva 4 unidades de uma linha só",
+  umProdutoQuatro.total_unidades === 4, JSON.stringify(umProdutoQuatro));
+check("4 × 3.000 Kz = 12.000 Kz a pagar",
+  Number(umProdutoQuatro.valor_estimado) === 12000, JSON.stringify(umProdutoQuatro));
+check("a resposta diz qual é o mínimo do pedido (4 unidades)",
+  umProdutoQuatro.minimo_unidades === 4, JSON.stringify(umProdutoQuatro));
+
+// 36.2 três unidades continuam a não ser um pedido de grosso
+const tresUnidades = await asUser(REV, async () => {
+  try {
+    await q(`SELECT public.registar_pedido_revendedor('${JSON.stringify([
+      { product_id: uA, quantidade: 3 },
+    ])}'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("um único produto ×3 é recusado, com o número que falta",
+  /pelo menos 4 unidades no total \(tem 3\)/i.test(tresUnidades ?? ""),
+  tresUnidades ?? "não deu erro");
+
+// 36.3 a combinação também conta: 2+2 = 4
+const doisDois = (await asUser(REV, async () =>
+  q(`SELECT public.registar_pedido_revendedor('${JSON.stringify([
+    { product_id: uA, quantidade: 2 },
+    { product_id: uB, quantidade: 2 },
+  ])}'::jsonb) AS r`)))[0].r;
+check("dois produtos 2+2 = 4 unidades passam",
+  doisDois.total_unidades === 4, JSON.stringify(doisDois));
+
+// 36.4 uma linha pode ter 1 unidade: quem soma é o pedido
+const umMaisTres = (await asUser(REV, async () =>
+  q(`SELECT public.registar_pedido_revendedor('${JSON.stringify([
+    { product_id: uA, quantidade: 1 },
+    { product_id: uB, quantidade: 3 },
+  ])}'::jsonb) AS r`)))[0].r;
+check("uma linha de 1 unidade é aceite desde que o pedido chegue a 4",
+  umMaisTres.total_unidades === 4, JSON.stringify(umMaisTres));
+
+// 36.5 acima de 4 não há tecto: 4, 5, 6, … 10, 40
+const dezUnidades = (await asUser(REV, async () =>
+  q(`SELECT public.registar_pedido_revendedor('${JSON.stringify([
+    { product_id: uA, quantidade: 10 },
+  ])}'::jsonb) AS r`)))[0].r;
+check("10 unidades do mesmo produto passam — não há limite artificial",
+  dezUnidades.total_unidades === 10, JSON.stringify(dezUnidades));
+
+// 36.6 uma linha a zero não é uma compra
+const linhaZero = await asUser(REV, async () => {
+  try {
+    await q(`SELECT public.registar_pedido_revendedor('${JSON.stringify([
+      { product_id: uA, quantidade: 0 },
+      { product_id: uB, quantidade: 4 },
+    ])}'::jsonb)`);
+    return null;
+  } catch (e) { return e.message; }
+});
+check("uma linha sem quantidade é recusada",
+  /sem quantidade/i.test(linhaZero ?? ""), linhaZero ?? "não deu erro");
+
+// 36.7 A ORDEM DO CATÁLOGO: O ÚLTIMO SUBMETIDO EM PRIMEIRO
+// A fica com dez dias, B com agora. A data que conta é a mais recente entre o
+// produto e a linha de grosso, por isso as duas são recuadas em A.
+await exec(`
+  UPDATE public.products        SET updated_at = now() - interval '10 days' WHERE id = '${uA}';
+  UPDATE public.precos_revenda  SET updated_at = now() - interval '10 days' WHERE product_id = '${uA}';
+  UPDATE public.products        SET updated_at = now()                   WHERE id = '${uB}';
+  UPDATE public.precos_revenda  SET updated_at = now()                   WHERE product_id = '${uB}';
+`);
+
+const ordem1 = await asUser(REV, async () =>
+  q(`SELECT product_id, nome FROM public.revendedor_catalogo()`));
+const pos = (linhas, id) => linhas.findIndex((l) => l.product_id === id);
+check("o último produto submetido aparece em primeiro lugar",
+  ordem1[0]?.product_id === uB,
+  JSON.stringify({ primeiro: ordem1[0]?.nome, esperado: "Unidade 2" }));
+check("o produto antigo fica atrás do novo",
+  pos(ordem1, uB) >= 0 && pos(ordem1, uA) > pos(ordem1, uB),
+  JSON.stringify({ b: pos(ordem1, uB), a: pos(ordem1, uA) }));
+
+// 36.8 corrigir um produto antigo traz-lo para o topo outra vez
+await asUser(MANAGER, async () =>
+  q(`SELECT public.definir_preco_revenda('${uA}', 3200, 'Preço corrigido')`));
+const ordem2 = await asUser(REV, async () =>
+  q(`SELECT product_id, nome, preco_loja, preco_grosso, lucro_unidade, margem_pct, minimo
+     FROM public.revendedor_catalogo()`));
+check("actualizar o preço de um produto antigo põe-no em primeiro",
+  ordem2[0]?.product_id === uA,
+  JSON.stringify({ primeiro: ordem2[0]?.nome, esperado: "Unidade 1" }));
+
+// 36.9 O PREÇO MÍNIMO OFICIAL E O LUCRO CHEGAM AO REVENDEDOR
+const linhaA = ordem2.find((l) => l.product_id === uA) ?? {};
+check("o catálogo devolve o preço mínimo oficial de venda ao cliente (5.000)",
+  Number(linhaA.preco_loja) === 5000, JSON.stringify(linhaA));
+check("o lucro por unidade ao preço mínimo é a diferença (5.000 − 3.200 = 1.800)",
+  Number(linhaA.lucro_unidade) === 1800, JSON.stringify(linhaA));
+check("a margem sobre o preço de compra é 56,3%",
+  Number(linhaA.margem_pct) === 56.3, JSON.stringify(linhaA));
+check("o catálogo diz que o mínimo é de 4 unidades no pedido, não por linha",
+  linhaA.minimo === 4, JSON.stringify(linhaA));
+
+// 36.10 a gestão vê a regra nova e a data de cada linha
+const gestaoNovo = (await asUser(MANAGER, async () =>
+  q(`SELECT public.catalogo_revenda_gestao() AS r`)))[0].r;
+check("o cadastro da gestão mostra 4 unidades por pedido",
+  gestaoNovo.minimo_unidades === 4, JSON.stringify({
+    min: gestaoNovo.minimo_unidades, produtos: gestaoNovo.minimo_produtos,
+  }));
+check("o cadastro já não impõe produtos diferentes por pedido",
+  gestaoNovo.minimo_produtos === 1, String(gestaoNovo.minimo_produtos));
+check("o cadastro traz a data da última alteração de cada linha",
+  typeof gestaoNovo.produtos[0]?.actualizado_em === "string",
+  String(gestaoNovo.produtos[0]?.actualizado_em));
+
+// 36.11 a regra está gravada na configuração, não escondida no código
+check("a regra da casa está na configuração (4 unidades)",
+  Number((await q(`SELECT public.config_revenda('revenda_minimo_unidades', 0) AS r`))[0].r) === 4,
+  String((await q(`SELECT public.config_revenda('revenda_minimo_unidades', 0) AS r`))[0].r));
 
 console.log("\n================ RESUMO ================");
 console.log(`Total: ${results.length}  |  Passou: ${results.length - failures}  |  Falhou: ${failures}`);
