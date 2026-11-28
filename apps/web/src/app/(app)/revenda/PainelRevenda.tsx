@@ -21,10 +21,12 @@ import { formatCurrency } from "@/lib/utils";
 import { ESTADOS, estadoDe, type MinhaRevenda, type PedidoGrosso } from "@/lib/revenda";
 
 /**
- * Ecrã de entrada do revendedor.
+ * Painel do revendedor — a segunda paragem, não a primeira.
  *
- * A ordem é deliberada: primeiro quem é e quanto já comprou; depois a única
- * acção que dá dinheiro (catálogo); só no fim o histórico e as conversas.
+ * O revendedor entra direto no **catálogo de grosso** (é lá que o dia começa);
+ * este ecrã é onde ele vê o que já comprou e fala com o gestor. A ordem é
+ * deliberada: primeiro quem é e quanto já comprou; depois a única acção que
+ * dá dinheiro (catálogo); só no fim o histórico e as conversas.
  */
 export default function PainelRevenda({
   painel,
@@ -142,8 +144,8 @@ export default function PainelRevenda({
           <span className="min-w-0">
             <span className="block text-sm font-medium text-[#F5F5F5]">Catálogo de grosso</span>
             <span className="mt-0.5 block text-xs leading-relaxed text-[#8A8A8A]">
-              Preços de revenda oficiais INUKA 2026. Mínimo de {rev.minimo_unidades} unidades
-              por pedido.
+              Preço de aquisição e preço mínimo oficial de venda. Calcule o seu lucro e
+              envie o pedido a partir de {rev.minimo_unidades} unidades no total.
             </span>
           </span>
           <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-[#4A4A4A] transition group-hover:translate-x-0.5 group-hover:text-[#C9A962]" />

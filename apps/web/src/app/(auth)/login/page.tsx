@@ -64,7 +64,19 @@ function LoginForm() {
         .eq("id", sessao?.user.id ?? "")
         .maybeSingle();
       const papel = (perfil as { role?: string } | null)?.role;
-      destino = papel === "manager" ? "/gerente" : papel === "seller" ? "/vendedor" : "/catalogo";
+      // O revendedor entra **direto no catálogo de grosso**: é a única montra
+      // que ele tem e o sítio onde o dia de trabalho começa. Mandá-lo para o
+      // catálogo de cliente dava-lhe preços que não são os dele.
+      destino =
+        papel === "manager"
+          ? "/gerente"
+          : papel === "seller"
+            ? "/vendedor"
+            : papel === "store_seller"
+              ? "/loja"
+              : papel === "reseller"
+                ? "/revenda/catalogo"
+                : "/catalogo";
     }
 
     router.push(destino);

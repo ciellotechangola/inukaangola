@@ -36,7 +36,7 @@ export default async function CatalogoGrossoPage() {
       <CatalogoGrosso
         produtos={produtos}
         minimo={painel.regras.minimo_unidades}
-        revendedor={painel.revendedor.nome}
+        revendedor={{ id: painel.revendedor.id, nome: painel.revendedor.nome }}
         semMigracao={semMigracao}
       />
     </main>

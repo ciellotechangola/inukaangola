@@ -172,9 +172,17 @@ export default function Header() {
         : profile.role === "seller"
           ? "/vendedor"
           : profile.role === "reseller"
-            ? "/revenda"
+            ? // O revendedor aterra no catálogo de grosso — a primeira página
+              // da plataforma para ele. O painel (/revenda) fica no menu, não
+              // é a porta de entrada.
+              "/revenda/catalogo"
             : "/cliente"
     : "/login";
+
+  // O carrinho é de cliente final: preço de loja, uma unidade, entrega. O
+  // revendedor compra por grosso noutro sítio (o carrinho do catálogo), por
+  // isso o ícone não lhe aparece — dois carrinhos davam dois totais.
+  const temCarrinho = profile?.role !== "reseller";
 
   return (
     <header className="sticky top-0 z-50 border-b border-[#262626] bg-[#0A0A0A]/95 backdrop-blur">
@@ -199,18 +207,20 @@ export default function Header() {
         </nav>
 
         <div className="hidden items-center gap-4 md:flex">
-          <Link
-            href="/carrinho"
-            className="relative text-[#A3A3A3] transition hover:text-[#C9A962]"
-            aria-label="Carrinho"
-          >
-            <ShoppingBag className="h-5 w-5" />
-            {ready && count > 0 && (
-              <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#C9A962] px-1 text-[11px] font-semibold text-[#0A0A0A]">
-                {count}
-              </span>
-            )}
-          </Link>
+          {temCarrinho && (
+            <Link
+              href="/carrinho"
+              className="relative text-[#A3A3A3] transition hover:text-[#C9A962]"
+              aria-label="Carrinho"
+            >
+              <ShoppingBag className="h-5 w-5" />
+              {ready && count > 0 && (
+                <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#C9A962] px-1 text-[11px] font-semibold text-[#0A0A0A]">
+                  {count}
+                </span>
+              )}
+            </Link>
+          )}
 
           {profile ? (
             <div className="flex items-center gap-3">
@@ -241,19 +251,23 @@ export default function Header() {
         </div>
 
         <div className="flex items-center gap-1 md:hidden">
-          {/* No telemóvel o carrinho fica sempre à vista: é o que mais se usa. */}
-          <Link
-            href="/carrinho"
-            className="relative flex h-10 w-10 items-center justify-center text-[#A3A3A3] transition hover:text-[#C9A962]"
-            aria-label={ready && count > 0 ? `Carrinho, ${count} artigos` : "Carrinho"}
-          >
-            <ShoppingBag className="h-5 w-5" />
-            {ready && count > 0 && (
-              <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#C9A962] px-1 text-[10px] font-semibold text-[#0A0A0A]">
-                {count}
-              </span>
-            )}
-          </Link>
+          {/* No telemóvel o carrinho fica sempre à vista: é o que mais se usa.
+              Para o revendedor não há carrinho de cliente — ele leva o pedido
+              de grosso no próprio catálogo. */}
+          {temCarrinho && (
+            <Link
+              href="/carrinho"
+              className="relative flex h-10 w-10 items-center justify-center text-[#A3A3A3] transition hover:text-[#C9A962]"
+              aria-label={ready && count > 0 ? `Carrinho, ${count} artigos` : "Carrinho"}
+            >
+              <ShoppingBag className="h-5 w-5" />
+              {ready && count > 0 && (
+                <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#C9A962] px-1 text-[10px] font-semibold text-[#0A0A0A]">
+                  {count}
+                </span>
+              )}
+            </Link>
+          )}
 
           <button
             className="flex h-10 w-10 items-center justify-center text-[#F5F5F5]"
@@ -302,13 +316,15 @@ export default function Header() {
                 {link.label}
               </Link>
             ))}
-            <Link
-              href="/carrinho"
-              className="text-[#A3A3A3] transition hover:text-[#C9A962]"
-              onClick={() => setMobileOpen(false)}
-            >
-              Carrinho {ready && count > 0 ? `(${count})` : ""}
-            </Link>
+            {temCarrinho && (
+              <Link
+                href="/carrinho"
+                className="text-[#A3A3A3] transition hover:text-[#C9A962]"
+                onClick={() => setMobileOpen(false)}
+              >
+                Carrinho {ready && count > 0 ? `(${count})` : ""}
+              </Link>
+            )}
             <Link
               href={dashboardLink}
               className="inline-flex items-center gap-2 rounded-lg bg-[#C9A962] px-4 py-2.5 font-semibold text-[#0A0A0A]"

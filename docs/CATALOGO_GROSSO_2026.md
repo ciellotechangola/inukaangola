@@ -233,3 +233,34 @@ individual) ou de `platform_settings.revenda_minimo_unidades` (4, regra da casa)
 edita-o em **Grosso → Mínimo de unidades por pedido**.
 
 Aplicar: `supabase/PATCH_CATALOGO_POR_UNIDADES.sql` (equivale à migração 0035).
+
+## 9. O catálogo passa a ser uma ferramenta de negócio
+
+A montra deu lugar a uma calculadora de margem. O revendedor entra direto no catálogo de
+grosso (o login deixa de o mandar para o catálogo de cliente) e cada cartão mostra os dois
+números que decidem a compra:
+
+| No cartão | O que é |
+|---|---|
+| **Aquisição** | o que ele paga à INUKA por unidade (`precos_revenda.preco`) |
+| **Mín. oficial** | o preço mínimo oficial de venda ao cliente final (`official_price`) |
+| **O seu preço de venda** | o preço que ele decide — nunca é obrigado a vender ao mínimo |
+| **Lucro por unidade / nas N un.** | venda − aquisição, por unidade e no total |
+
+O preço de venda é **dele** e não sobe para a base: fica no dispositivo
+(`localStorage`, chave `inuka:revenda:precos-venda:<id do revendedor>`), para não se perder
+a cada visita. Não altera o preço do produto nem a cotação do pedido — a INUKA factura
+sempre pelo preço de aquisição. O mínimo oficial funciona como chão: abaixo dele o campo
+volta ao mínimo ao sair, porque aí a venda é a perder dinheiro.
+
+O resumo do pedido soma, linha a linha e no fim: **investimento total**, **receita total
+estimada**, **lucro total estimado** e a margem sobre o investimento. A barra fixa mostra
+investimento e lucro ao lado do botão, para a decisão ser tomada com os dois números à
+vista.
+
+Ao juntar o primeiro produto aparece a mensagem motivadora — «Boa escolha! Sabia que pode
+aumentar o seu lucro?…» — dispensável, e o selo permanente **«PREÇO MÍNIMO OFICIAL — O SEU
+PREÇO DE VENDA PODE SER SUPERIOR»** enquadra todos os preços do ecrã.
+
+Nada disto toca nos dados: preços, códigos, fotografias e stock continuam a vir das mesmas
+funções (`revendedor_catalogo`, `stock_produtos`).

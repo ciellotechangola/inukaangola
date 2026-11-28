@@ -1,16 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   Check,
+  Lightbulb,
   Minus,
   Package,
   Plus,
   Search,
   ShoppingCart,
   Trash2,
+  TrendingUp,
   X,
 } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
@@ -23,24 +25,29 @@ interface LinhaCarrinho {
   quantidade: number;
 }
 
+/** Onde ficam guardados os preços de venda que o revendedor definiu. */
+const CHAVE_PRECOS = "inuka:revenda:precos-venda";
+
 /**
- * Catálogo de grosso com carrinho.
+ * CATÁLOGO DE GROSSO — a ferramenta de negócio do revendedor.
  *
- * UMA regra, vinda da base (`minha_revenda().regras.minimo_unidades`):
- *   · o pedido precisa de **N unidades no total** (4, por regra da casa).
- *     Cada linha começa em **1 unidade** e o revendedor sobe como quiser.
- *     Quatro unidades do mesmo produto valem tanto como 1+1+1+1 de quatro
- *     produtos — quem soma é o carrinho, não a lista de produtos.
+ * Não é uma montra: é uma calculadora de margem com um botão de pedido. Cada
+ * cartão mostra os dois números que decidem a compra —
  *
- * A 0035 acabou com a regra antiga dos «4 produtos diferentes», que obrigava
- * quem queria 6 unidades do mesmo artigo a inventar três linhas de outros
- * produtos para o pedido passar. O ecrã acompanha: nada aqui conta produtos
- * diferentes, só unidades.
+ *   · **preço de aquisição** (o que ele paga à INUKA, por unidade);
+ *   · **preço mínimo oficial de venda ao cliente final** (a referência da
+ *     INUKA, não um tecto).
  *
- * O preço é o **preço de revenda oficial** da tabela INUKA 2026, escrito na
- * base produto a produto. O browser não calcula nada: nem desconto, nem
- * margem, nem lucro. O ecrã mostra o preço de aquisição e a conta do pedido —
- * quantas unidades, quanto se paga.
+ * O revendedor escreve o preço a que quer vender e vê o lucro por unidade e no
+ * total mudar no mesmo instante. O preço de venda é **dele**: fica só neste
+ * dispositivo (`localStorage`), não sobe para a base e não toca no preço do
+ * produto nem no do pedido. O pedido continua a ser cotado pelo preço de
+ * aquisição — a margem é o negócio dele, não uma condição da INUKA.
+ *
+ * A regra do pedido é uma só, vinda da base (`minha_revenda().regras`): **N
+ * unidades no total** (4, por regra da casa). Cada linha começa em 1 unidade e
+ * o revendedor sobe como quiser; 4 do mesmo produto valem tanto como 1+1+1+1
+ * de quatro produtos. Quem soma é o carrinho, não a lista de produtos.
  */
 export default function CatalogoGrosso({
   produtos,
@@ -51,16 +58,63 @@ export default function CatalogoGrosso({
   produtos: ProdutoGrosso[];
   /** Unidades mínimas **do pedido inteiro**, não de cada linha. */
   minimo: number;
-  revendedor: string;
+  revendedor: { id: string; nome: string };
   semMigracao: boolean;
 }) {
   const [procura, setProcura] = useState("");
   const [categoria, setCategoria] = useState("");
   const [carrinho, setCarrinho] = useState<Record<string, number>>({});
+  /** Preço de venda escolhido pelo revendedor, por produto. */
+  const [precos, setPrecos] = useState<Record<string, number>>({});
+  const [precosLidos, setPrecosLidos] = useState(false);
+  const [avisoFechado, setAvisoFechado] = useState(false);
   const [mensagem, setMensagem] = useState("");
   const [aEnviar, setAEnviar] = useState(false);
   const [erro, setErro] = useState("");
-  const [confirmado, setConfirmado] = useState<{ numero: string; total: number } | null>(null);
+  const [confirmado, setConfirmado] = useState<{
+    numero: string;
+    total: number;
+    lucro: number;
+  } | null>(null);
+
+  const chavePrecos = `${CHAVE_PRECOS}:${revendedor.id}`;
+
+  // --- os preços de venda são uma estratégia, não um dado do pedido --------
+  // Ficam no dispositivo para o revendedor não os reescrever a cada visita.
+  //
+  // Isto é uma leitura de um sistema externo (localStorage), e tem de ser
+  // depois da montagem: no servidor não existe `window`, e ler no `useState`
+  // inicial faria o HTML do servidor discordar do primeiro render do browser
+  // (preço oficial de um lado, preço guardado do outro). O aviso do lint é
+  // sobre renderizações em cascata; aqui é uma vez, à entrada.
+  useEffect(() => {
+    let guardado: Record<string, number> = {};
+    try {
+      const bruto = window.localStorage.getItem(chavePrecos);
+      if (bruto) {
+        const lido = JSON.parse(bruto) as Record<string, unknown>;
+        for (const [id, valor] of Object.entries(lido)) {
+          const n = Number(valor);
+          if (Number.isFinite(n) && n > 0) guardado[id] = Math.round(n);
+        }
+      }
+    } catch {
+      // Sem armazenamento (modo privado, quota cheia): vale o preço oficial.
+      guardado = {};
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- ler localStorage na montagem, ver acima
+    setPrecos(guardado);
+    setPrecosLidos(true);
+  }, [chavePrecos]);
+
+  useEffect(() => {
+    if (!precosLidos) return;
+    try {
+      window.localStorage.setItem(chavePrecos, JSON.stringify(precos));
+    } catch {
+      // Guardar é uma comodidade; falhar não pode partir o catálogo.
+    }
+  }, [precos, precosLidos, chavePrecos]);
 
   const categorias = useMemo(
     () => [...new Set(produtos.map((p) => p.categoria).filter(Boolean) as string[])].sort(),
@@ -90,11 +144,29 @@ export default function CatalogoGrosso({
     [carrinho, produtos]
   );
 
+  /** Preço a que o revendedor vende. Sem escolha própria, o mínimo oficial. */
+  function precoVenda(p: ProdutoGrosso): number {
+    const escolhido = precos[p.product_id];
+    return escolhido && escolhido > 0 ? escolhido : p.preco_loja;
+  }
+
+  function lucroUnidade(p: ProdutoGrosso): number {
+    return precoVenda(p) - p.preco_grosso;
+  }
+
   const totalUnidades = linhas.reduce((soma, l) => soma + l.quantidade, 0);
-  const totalValor = linhas.reduce(
+  const investimento = linhas.reduce(
     (soma, l) => soma + l.produto.preco_grosso * l.quantidade,
     0
   );
+  const receita = linhas.reduce(
+    (soma, l) => soma + precoVenda(l.produto) * l.quantidade,
+    0
+  );
+  const lucroTotal = receita - investimento;
+  /** Margem sobre o que se investe — a régua de quem compra por grosso. */
+  const margemPct = investimento > 0 ? (lucroTotal / investimento) * 100 : 0;
+
   /** Quantas unidades faltam para o pedido poder seguir. */
   const faltam = Math.max(0, minimo - totalUnidades);
   const podeEnviar = linhas.length > 0 && faltam === 0;
@@ -117,7 +189,7 @@ export default function CatalogoGrosso({
     });
   }
 
-  function definir(p: ProdutoGrosso, valor: string) {
+  function definirQuantidade(p: ProdutoGrosso, valor: string) {
     const n = Number(valor.replace(/[^0-9]/g, ""));
     if (!Number.isFinite(n)) return;
     setCarrinho((c) => ({ ...c, [p.product_id]: Math.max(1, Math.round(n)) }));
@@ -128,6 +200,22 @@ export default function CatalogoGrosso({
       const copia = { ...c };
       delete copia[id];
       return copia;
+    });
+  }
+
+  /** Enquanto se escreve não se trava nada: só ao sair é que se corrige. */
+  function escreverPreco(p: ProdutoGrosso, valor: string) {
+    const n = Number(valor.replace(/[^0-9]/g, ""));
+    if (!Number.isFinite(n)) return;
+    setPrecos((m) => ({ ...m, [p.product_id]: Math.round(n) }));
+  }
+
+  /** O mínimo oficial é o chão: abaixo dele a venda é a perder dinheiro. */
+  function confirmarPreco(p: ProdutoGrosso) {
+    setPrecos((m) => {
+      const atual = m[p.product_id] ?? p.preco_loja;
+      const chao = Math.max(0, p.preco_loja);
+      return { ...m, [p.product_id]: Math.max(chao, Math.round(atual || chao)) };
     });
   }
 
@@ -162,7 +250,8 @@ export default function CatalogoGrosso({
       const r = data as { numero?: string; valor_estimado?: number } | null;
       setConfirmado({
         numero: r?.numero ?? "",
-        total: Number(r?.valor_estimado ?? totalValor),
+        total: Number(r?.valor_estimado ?? investimento),
+        lucro: lucroTotal,
       });
       setCarrinho({});
       setMensagem("");
@@ -185,6 +274,12 @@ export default function CatalogoGrosso({
           por {formatCurrency(confirmado.total)}. A gestão da sua província vai analisar e
           responder com a cotação.
         </p>
+        {confirmado.lucro > 0 && (
+          <p className="mt-3 rounded-lg border border-[#2F6B45] bg-[#0F2A18] px-3 py-2 text-xs leading-relaxed text-[#4ADE80]">
+            Ao preço de venda que definiu, este pedido pode render{" "}
+            <strong className="font-semibold">{formatCurrency(confirmado.lucro)}</strong> de lucro.
+          </p>
+        )}
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <Link
             href="/revenda/pedidos"
@@ -206,7 +301,7 @@ export default function CatalogoGrosso({
   }
 
   return (
-    <div className="pb-32">
+    <div className="pb-40">
       <header className="mb-6">
         <Link href="/revenda" className="text-xs text-[#6F6F6F] hover:text-[#C9A962]">
           ← Área de revenda
@@ -214,15 +309,21 @@ export default function CatalogoGrosso({
         <h1 className="mt-2 text-3xl font-light text-[#F5F5F5]">Catálogo de grosso</h1>
         <p className="mt-1 max-w-2xl text-sm text-[#A3A3A3]">
           Preços de revenda oficiais INUKA 2026 para{" "}
-          <strong className="font-medium text-[#E5E5E5]">{revendedor}</strong>. Escolha os
+          <strong className="font-medium text-[#E5E5E5]">{revendedor.nome}</strong>. Escolha os
           produtos à vontade, a partir de 1 unidade de cada. O pedido segue com{" "}
           <strong className="font-medium text-[#E5E5E5]">{minimo} unidades no total</strong> —
           do mesmo produto ou de produtos diferentes, como preferir.
         </p>
-        <p className="mt-2 max-w-2xl rounded-lg border border-[#262626] bg-[#111] px-3 py-2 text-[11.5px] leading-relaxed text-[#8A8A8A]">
-          O preço que vê é o preço de aquisição da tabela. Não há descontos a somar nem
-          margens a calcular: é o valor que paga por unidade.
-        </p>
+
+        {/* A indicação visual que enquadra todos os preços do ecrã. */}
+        <div className="mt-3 inline-flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-[#C9A962]/30 bg-[#C9A962]/5 px-3 py-2">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#C9A962]">
+            Preço mínimo oficial
+          </span>
+          <span className="text-[10px] uppercase tracking-[0.14em] text-[#8A8A8A]">
+            — o seu preço de venda pode ser superior.
+          </span>
+        </div>
       </header>
 
       {semMigracao && (
@@ -263,6 +364,32 @@ export default function CatalogoGrosso({
         </p>
       )}
 
+      {/* ------------------------------------------------- MENSAGEM MOTIVADORA */}
+      {linhas.length > 0 && !avisoFechado && (
+        <div className="mb-5 flex items-start gap-3 rounded-xl border border-[#C9A962]/40 bg-gradient-to-r from-[#1A1710] to-[#141414] p-4">
+          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#C9A962]/15 text-[#C9A962]">
+            <Lightbulb className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] leading-relaxed text-[#E5E5E5]">
+              <strong className="font-semibold text-[#C9A962]">Boa escolha!</strong> Sabia que
+              pode aumentar o seu lucro? O preço apresentado é o preço mínimo oficial recomendado
+              pela INUKA. Tem liberdade para definir um preço de venda superior, de acordo com a
+              sua estratégia comercial. Quanto maior for a sua margem de venda, maior poderá ser
+              o seu lucro!
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAvisoFechado(true)}
+            aria-label="Fechar aviso"
+            className="shrink-0 rounded p-1 text-[#6F6F6F] transition hover:text-[#F5F5F5]"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* ------------------------------------------------------------ PRODUTOS */}
       {filtrados.length === 0 ? (
         <div className="rounded-xl border border-dashed border-[#2A2A2A] bg-[#111] px-6 py-16 text-center">
@@ -285,165 +412,300 @@ export default function CatalogoGrosso({
             const qtd = quantidadeDe(p);
             const noCarrinho = qtd > 0;
             const semStock = p.stock !== null && p.stock <= 0;
+            const venda = precoVenda(p);
+            const lucro = lucroUnidade(p);
+            const abaixoDoMinimo = venda < p.preco_loja;
 
             return (
               <article
                 key={p.product_id}
-                className={`flex min-w-0 flex-col rounded-xl border bg-[#141414] p-4 transition ${
-                  noCarrinho ? "border-[#C9A962]/60" : "border-[#262626]"
+                className={`flex min-w-0 flex-col overflow-hidden rounded-2xl border bg-[#141414] transition ${
+                  noCarrinho
+                    ? "border-[#C9A962]/60 shadow-[0_0_0_1px_rgba(201,169,98,0.15)]"
+                    : "border-[#262626] hover:border-[#3A3A3A]"
                 }`}
               >
-                <div className="flex min-w-0 gap-3">
+                {/* Fotografia: painel branco quadrado, a mesma regra em todo o sistema. */}
+                <div className="relative">
                   <FotoProduto
                     src={p.imagem}
                     alt={p.nome}
-                    lado={64}
-                    raio="md"
-                    respiro="curto"
-                    className="shrink-0"
-                    vazio={<Package className="h-5 w-5 text-[#B8B8B8]" />}
+                    raio="nenhum"
+                    respiro="amplo"
+                    vazio={<Package className="h-8 w-8 text-[#B8B8B8]" />}
                   />
-
-                  <div className="min-w-0">
-                    <h3 className="truncate text-sm font-medium text-[#F5F5F5]">{p.nome}</h3>
-                    <p className="mt-0.5 text-[11px] text-[#525252]">
-                      {p.sku ?? "sem SKU"}
-                      {p.categoria ? ` · ${p.categoria}` : ""}
-                    </p>
-                    <p className="mt-1 text-[11px] text-[#6F6F6F]">
-                      {p.stock === null
-                        ? "Stock sob consulta"
-                        : semStock
-                          ? "Sem stock nesta província"
-                          : `${p.stock} un. disponíveis`}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-3 flex items-end justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-[10px] uppercase tracking-wide text-[#525252]">
-                      Preço de revenda
-                    </p>
-                    <p className="text-lg font-light text-[#C9A962]">
-                      {formatCurrency(p.preco_grosso)}
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-[#6F6F6F]">por unidade</p>
-                  </div>
-
-                  {noCarrinho ? (
-                    <div className="flex items-center gap-1 rounded-lg border border-[#333]">
-                      <button
-                        type="button"
-                        onClick={() => mudar(p, -1)}
-                        disabled={qtd <= 1}
-                        aria-label="Diminuir"
-                        className="grid h-8 w-8 place-items-center text-[#A3A3A3] transition hover:text-[#C9A962] disabled:opacity-30 disabled:hover:text-[#A3A3A3]"
-                      >
-                        <Minus className="h-3.5 w-3.5" />
-                      </button>
-                      <input
-                        value={qtd}
-                        onChange={(e) => definir(p, e.target.value)}
-                        inputMode="numeric"
-                        aria-label={`Quantidade de ${p.nome}`}
-                        className="w-12 border-x border-[#333] bg-transparent py-1.5 text-center text-sm text-[#F5F5F5] focus:outline-none"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => mudar(p, 1)}
-                        aria-label="Aumentar"
-                        className="grid h-8 w-8 place-items-center text-[#A3A3A3] transition hover:text-[#C9A962]"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => remover(p.product_id)}
-                        aria-label="Remover"
-                        className="grid h-8 w-8 place-items-center text-[#525252] transition hover:text-[#F87171]"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => adicionar(p)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#C9A962]/50 bg-[#C9A962]/5 px-3 py-1.5 text-xs font-medium text-[#C9A962] transition hover:bg-[#C9A962] hover:text-[#0A0A0A]"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      Adicionar
-                    </button>
+                  <span
+                    className={`absolute right-2 top-2 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                      semStock
+                        ? "bg-[#2A1010] text-[#F87171]"
+                        : "bg-[#0A0A0A]/85 text-[#A3A3A3]"
+                    }`}
+                  >
+                    {p.stock === null
+                      ? "stock sob consulta"
+                      : semStock
+                        ? "sem stock"
+                        : `${p.stock} un.`}
+                  </span>
+                  {noCarrinho && (
+                    <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-[#C9A962] px-2 py-0.5 text-[10px] font-semibold text-[#0A0A0A]">
+                      <ShoppingCart className="h-2.5 w-2.5" />
+                      {qtd}
+                    </span>
                   )}
                 </div>
 
-                {noCarrinho && (
-                  <p className="mt-2 text-[10px] text-[#6F6F6F]">
-                    {qtd} un. · {formatCurrency(p.preco_grosso * qtd)}
+                <div className="flex flex-1 flex-col p-4">
+                  <h3 className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-snug text-[#F5F5F5]">
+                    {p.nome}
+                  </h3>
+                  <p className="mt-1 truncate text-[11px] text-[#525252]">
+                    {p.sku ?? "sem SKU"}
+                    {p.categoria ? ` · ${p.categoria}` : ""}
                   </p>
-                )}
+
+                  {/* Os dois números que decidem a compra. */}
+                  <div className="mt-3 grid grid-cols-2 gap-2 border-t border-[#1F1F1F] pt-3">
+                    <div className="min-w-0">
+                      <p className="text-[9.5px] uppercase tracking-wide text-[#525252]">
+                        Aquisição
+                      </p>
+                      <p className="text-lg font-light leading-tight text-[#C9A962]">
+                        {formatCurrency(p.preco_grosso)}
+                      </p>
+                      <p className="text-[10px] text-[#4A4A4A]">por unidade</p>
+                    </div>
+                    <div className="min-w-0 text-right">
+                      <p className="text-[9.5px] uppercase tracking-wide text-[#525252]">
+                        Mín. oficial
+                      </p>
+                      <p className="text-sm font-medium leading-tight text-[#E5E5E5]">
+                        {formatCurrency(p.preco_loja)}
+                      </p>
+                      <p className="text-[10px] text-[#4A4A4A]">venda ao cliente</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-auto pt-3">
+                    {noCarrinho ? (
+                      <>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center rounded-lg border border-[#333]">
+                            <button
+                              type="button"
+                              onClick={() => mudar(p, -1)}
+                              disabled={qtd <= 1}
+                              aria-label="Diminuir"
+                              className="grid h-8 w-8 place-items-center text-[#A3A3A3] transition hover:text-[#C9A962] disabled:opacity-30 disabled:hover:text-[#A3A3A3]"
+                            >
+                              <Minus className="h-3.5 w-3.5" />
+                            </button>
+                            <input
+                              value={qtd}
+                              onChange={(e) => definirQuantidade(p, e.target.value)}
+                              inputMode="numeric"
+                              aria-label={`Quantidade de ${p.nome}`}
+                              className="w-10 border-x border-[#333] bg-transparent py-1.5 text-center text-sm text-[#F5F5F5] focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => mudar(p, 1)}
+                              aria-label="Aumentar"
+                              className="grid h-8 w-8 place-items-center text-[#A3A3A3] transition hover:text-[#C9A962]"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => remover(p.product_id)}
+                            className="inline-flex items-center gap-1 text-[10px] text-[#525252] transition hover:text-[#F87171]"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            remover
+                          </button>
+                        </div>
+
+                        {/* O preço é dele: escreve, e o lucro muda à vista. */}
+                        <div className="mt-2.5 rounded-lg border border-[#262626] bg-[#0A0A0A] p-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <label
+                              htmlFor={`venda-${p.product_id}`}
+                              className="text-[10px] uppercase tracking-wide text-[#6F6F6F]"
+                            >
+                              O seu preço de venda
+                            </label>
+                            <div className="flex items-center gap-1">
+                              <input
+                                id={`venda-${p.product_id}`}
+                                value={venda}
+                                onChange={(e) => escreverPreco(p, e.target.value)}
+                                onBlur={() => confirmarPreco(p)}
+                                inputMode="numeric"
+                                className={`w-24 rounded border bg-transparent px-2 py-1 text-right text-sm focus:outline-none ${
+                                  abaixoDoMinimo
+                                    ? "border-[#7A5A20] text-[#E3D5A7]"
+                                    : "border-[#333] text-[#F5F5F5] focus:border-[#C9A962]"
+                                }`}
+                              />
+                              <span className="text-[10px] text-[#525252]">Kz</span>
+                            </div>
+                          </div>
+
+                          <div className="mt-2 flex items-baseline justify-between border-t border-[#1F1F1F] pt-2">
+                            <span className="inline-flex items-center gap-1 text-[10px] text-[#6F6F6F]">
+                              <TrendingUp className="h-3 w-3" />
+                              Lucro por unidade
+                            </span>
+                            <span
+                              className={`text-sm font-semibold ${
+                                lucro > 0 ? "text-[#4ADE80]" : "text-[#E3D5A7]"
+                              }`}
+                            >
+                              {formatCurrency(lucro)}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex items-baseline justify-between">
+                            <span className="text-[10px] text-[#6F6F6F]">
+                              Lucro nas {qtd} un.
+                            </span>
+                            <span
+                              className={`text-xs font-medium ${
+                                lucro > 0 ? "text-[#4ADE80]" : "text-[#E3D5A7]"
+                              }`}
+                            >
+                              {formatCurrency(lucro * qtd)}
+                            </span>
+                          </div>
+                          {abaixoDoMinimo && (
+                            <p className="mt-1.5 text-[10px] leading-relaxed text-[#E3D5A7]">
+                              Abaixo do mínimo oficial ({formatCurrency(p.preco_loja)}). Ao sair
+                              do campo volta ao mínimo.
+                            </p>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => adicionar(p)}
+                        disabled={semStock}
+                        className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#C9A962]/50 bg-[#C9A962]/5 px-3 py-2 text-xs font-semibold text-[#C9A962] transition hover:bg-[#C9A962] hover:text-[#0A0A0A] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#C9A962]/5 disabled:hover:text-[#C9A962]"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        {semStock ? "Sem stock nesta província" : "Adicionar 1 unidade"}
+                      </button>
+                    )}
+                  </div>
+                </div>
               </article>
             );
           })}
         </div>
       )}
 
-      {/* ------------------------------------------------- A CONTA DO PEDIDO */}
+      {/* ------------------------------------------------- RESUMO DO PEDIDO */}
       {linhas.length > 0 && (
-        <section className="mt-8 rounded-xl border border-[#262626] bg-[#111] p-4 sm:p-5">
-          <h2 className="text-sm font-medium text-[#F5F5F5]">O seu pedido</h2>
-          <p className="mt-1 text-[11.5px] leading-relaxed text-[#6F6F6F]">
-            Quantas unidades leva de cada produto e quanto paga por elas, ao preço de
-            revenda da tabela.
-          </p>
+        <section className="mt-8 rounded-2xl border border-[#262626] bg-[#111] p-4 sm:p-5">
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-medium text-[#F5F5F5]">Resumo do pedido</h2>
+              <p className="mt-1 text-[11.5px] leading-relaxed text-[#6F6F6F]">
+                O que paga à INUKA, o que pode receber do cliente e o que fica para si.
+              </p>
+            </div>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[#2F6B45] bg-[#0F2A18] px-2.5 py-1 text-[10px] font-medium text-[#4ADE80]">
+              <TrendingUp className="h-3 w-3" />
+              margem de {margemPct.toFixed(0)}% sobre o investimento
+            </span>
+          </div>
 
           <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[26rem] border-collapse text-left text-[12.5px]">
+            <table className="w-full min-w-[42rem] border-collapse text-left text-[12.5px]">
               <thead>
-                <tr className="text-[10px] uppercase tracking-wide text-[#525252]">
+                <tr className="text-[9.5px] uppercase tracking-wide text-[#525252]">
                   <th className="pb-2 pr-3 font-medium">Produto</th>
-                  <th className="pb-2 pr-3 text-right font-medium">Preço/un.</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Aquisição</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Mín. oficial</th>
+                  <th className="pb-2 pr-3 text-right font-medium">O seu preço</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Lucro/un.</th>
                   <th className="pb-2 pr-3 text-right font-medium">Qtd</th>
-                  <th className="pb-2 text-right font-medium">Subtotal</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Investimento</th>
+                  <th className="pb-2 text-right font-medium">Lucro</th>
                 </tr>
               </thead>
               <tbody className="text-[#D4D4D4]">
-                {linhas.map((l) => (
-                  <tr key={l.produto.product_id} className="border-t border-[#1F1F1F]">
-                    <td className="py-2 pr-3">
-                      <span className="line-clamp-1">{l.produto.nome}</span>
-                    </td>
-                    <td className="py-2 pr-3 text-right text-[#C9A962]">
-                      {formatCurrency(l.produto.preco_grosso)}
-                    </td>
-                    <td className="py-2 pr-3 text-right">{l.quantidade}</td>
-                    <td className="py-2 text-right font-medium text-[#F5F5F5]">
-                      {formatCurrency(l.produto.preco_grosso * l.quantidade)}
-                    </td>
-                  </tr>
-                ))}
+                {linhas.map((l) => {
+                  const venda = precoVenda(l.produto);
+                  const lucro = lucroUnidade(l.produto);
+                  return (
+                    <tr key={l.produto.product_id} className="border-t border-[#1F1F1F]">
+                      <td className="py-2 pr-3">
+                        <span className="line-clamp-1">{l.produto.nome}</span>
+                      </td>
+                      <td className="py-2 pr-3 text-right text-[#C9A962]">
+                        {formatCurrency(l.produto.preco_grosso)}
+                      </td>
+                      <td className="py-2 pr-3 text-right text-[#8A8A8A]">
+                        {formatCurrency(l.produto.preco_loja)}
+                      </td>
+                      <td className="py-2 pr-3 text-right font-medium text-[#F5F5F5]">
+                        {formatCurrency(venda)}
+                      </td>
+                      <td
+                        className={`py-2 pr-3 text-right ${
+                          lucro > 0 ? "text-[#4ADE80]" : "text-[#E3D5A7]"
+                        }`}
+                      >
+                        {formatCurrency(lucro)}
+                      </td>
+                      <td className="py-2 pr-3 text-right">{l.quantidade}</td>
+                      <td className="py-2 pr-3 text-right">
+                        {formatCurrency(l.produto.preco_grosso * l.quantidade)}
+                      </td>
+                      <td
+                        className={`py-2 text-right font-medium ${
+                          lucro > 0 ? "text-[#4ADE80]" : "text-[#E3D5A7]"
+                        }`}
+                      >
+                        {formatCurrency(lucro * l.quantidade)}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {[
-              { rotulo: "Produtos", valor: String(linhas.length), cor: "text-[#D4D4D4]" },
-              {
-                rotulo: "Unidades",
-                valor: String(totalUnidades),
-                cor: faltam === 0 ? "text-[#4ADE80]" : "text-[#D4D4D4]",
-              },
-              { rotulo: "Mínimo do pedido", valor: `${minimo} un.`, cor: "text-[#8A8A8A]" },
-              { rotulo: "Total a pagar", valor: formatCurrency(totalValor), cor: "text-[#C9A962]" },
-            ].map((c) => (
-              <div key={c.rotulo} className="rounded-lg border border-[#1F1F1F] bg-[#0A0A0A] px-3 py-2">
-                <p className="text-[10px] uppercase tracking-wide text-[#525252]">{c.rotulo}</p>
-                <p className={`mt-0.5 text-sm font-medium ${c.cor}`}>{c.valor}</p>
-              </div>
-            ))}
+            <CartaoTotal
+              rotulo="Investimento total"
+              valor={formatCurrency(investimento)}
+              nota={`${totalUnidades} ${totalUnidades === 1 ? "unidade" : "unidades"}`}
+            />
+            <CartaoTotal
+              rotulo="Receita total estimada"
+              valor={formatCurrency(receita)}
+              nota="se vender ao preço definido"
+            />
+            <CartaoTotal
+              rotulo="Lucro total estimado"
+              valor={formatCurrency(lucroTotal)}
+              nota={`${margemPct.toFixed(0)}% sobre o investimento`}
+              destaque
+            />
+            <CartaoTotal
+              rotulo="Mínimo do pedido"
+              valor={`${minimo} un.`}
+              nota={faltam === 0 ? "atingido" : `faltam ${faltam}`}
+            />
           </div>
+
+          <p className="mt-3 text-[10.5px] leading-relaxed text-[#525252]">
+            O lucro é uma estimativa sua: a INUKA factura o pedido pelo preço de aquisição. O
+            preço de venda que escreveu fica guardado neste dispositivo e não altera o preço do
+            produto nem a cotação do pedido.
+          </p>
         </section>
       )}
 
@@ -453,7 +715,7 @@ export default function CatalogoGrosso({
           <div className="mx-auto max-w-6xl px-4 py-3">
             <div className="flex flex-wrap items-end gap-3">
               <div className="min-w-0 flex-1">
-                <p className="flex items-center gap-2 text-xs text-[#A3A3A3]">
+                <p className="flex flex-wrap items-center gap-2 text-xs text-[#A3A3A3]">
                   <ShoppingCart className="h-3.5 w-3.5 text-[#C9A962]" />
                   {linhas.length} {linhas.length === 1 ? "produto" : "produtos"} ·{" "}
                   <span className={faltam === 0 ? "text-[#4ADE80]" : undefined}>
@@ -505,13 +767,25 @@ export default function CatalogoGrosso({
                 />
               </div>
 
-              <div className="flex items-end gap-4 text-right">
+              <div className="flex items-end gap-5 text-right">
                 <div>
                   <p className="text-[10px] uppercase tracking-wide text-[#525252]">
-                    Total a pagar
+                    Investimento
                   </p>
                   <p className="text-sm font-medium text-[#C9A962]">
-                    {formatCurrency(totalValor)}
+                    {formatCurrency(investimento)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-[#525252]">
+                    Lucro estimado
+                  </p>
+                  <p
+                    className={`text-sm font-semibold ${
+                      lucroTotal > 0 ? "text-[#4ADE80]" : "text-[#E3D5A7]"
+                    }`}
+                  >
+                    {formatCurrency(lucroTotal)}
                   </p>
                 </div>
               </div>
@@ -534,6 +808,37 @@ export default function CatalogoGrosso({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Um dos quatro números do resumo. `destaque` pinta o lucro a dourado. */
+function CartaoTotal({
+  rotulo,
+  valor,
+  nota,
+  destaque,
+}: {
+  rotulo: string;
+  valor: string;
+  nota?: string;
+  destaque?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-xl border px-3 py-2.5 ${
+        destaque ? "border-[#C9A962]/40 bg-[#171308]" : "border-[#1F1F1F] bg-[#0A0A0A]"
+      }`}
+    >
+      <p className="text-[9.5px] uppercase tracking-wide text-[#525252]">{rotulo}</p>
+      <p
+        className={`mt-0.5 text-sm font-semibold ${
+          destaque ? "text-[#C9A962]" : "text-[#F5F5F5]"
+        }`}
+      >
+        {valor}
+      </p>
+      {nota && <p className="mt-0.5 text-[10px] text-[#5F5F5F]">{nota}</p>}
     </div>
   );
 }

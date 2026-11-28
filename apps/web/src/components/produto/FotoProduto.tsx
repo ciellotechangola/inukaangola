@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
  * Os ficheiros das fotografias **não** são tocados — isto é só o palco.
  */
 const RAIO = {
+  nenhum: "",
   sm: "rounded",
   md: "rounded-lg",
   lg: "rounded-xl",
