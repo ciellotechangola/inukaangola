@@ -1,8 +1,11 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { ArrowRight, MessageSquare } from "lucide-react";
 import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
 import { formatCurrency } from "@/lib/utils";
+import { conversasDosPedidos, type ConversaDePedido } from "@/lib/conversas-pedidos-server";
+import MarcarPedidosVistos from "@/components/MarcarPedidosVistos";
 import ConfirmarEntrega from "./ConfirmarEntrega";
 import SeguirEncomendas from "./SeguirEncomendas";
 
@@ -64,6 +67,13 @@ export default async function MyOrdersPage() {
     porEncomenda.set(linha.order_id, lista);
   }
 
+  // Conversa de cada encomenda (0036). Uma consulta para a lista toda.
+  const conversas: Map<string, ConversaDePedido> = await conversasDosPedidos(
+    supabase,
+    profile.id,
+    "encomenda"
+  ).catch(() => new Map<string, ConversaDePedido>());
+
   return (
     <>
       <main className="mx-auto max-w-4xl px-4 py-10">
@@ -89,6 +99,7 @@ export default async function MyOrdersPage() {
             {orders.map((order) => {
               const hist = porEncomenda.get(order.id) ?? [];
               const emCurso = order.status !== "completed" && order.status !== "cancelled";
+              const conversa = conversas.get(order.id);
               return (
               <div key={order.id} className="rounded-xl border border-[#262626] bg-[#1A1A1A] p-5">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -157,12 +168,31 @@ export default async function MyOrdersPage() {
                 {(order.status === "in_delivery" || order.status === "ready_pickup") && (
                   <ConfirmarEntrega orderId={order.id} />
                 )}
+
+                {/* Falar com a gestão sobre esta encomenda. Uma conversa por
+                    encomenda, sempre a mesma (0036). */}
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[#262626] pt-3">
+                  <Link
+                    href={`/cliente/conversas?encomenda=${order.id}`}
+                    className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-[#C9A962] transition hover:underline"
+                  >
+                    <MessageSquare className="h-3.5 w-3.5" />
+                    Abrir conversa
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </Link>
+                  {conversa && conversa.naoLidas > 0 && (
+                    <span className="rounded-full bg-[#C9A962] px-2 py-0.5 text-[10px] font-semibold text-[#0A0A0A]">
+                      {conversa.naoLidas} nova{conversa.naoLidas === 1 ? "" : "s"}
+                    </span>
+                  )}
+                </div>
               </div>
               );
             })}
           </div>
         )}
       </main>
+      <MarcarPedidosVistos />
     </>
   );
 }

@@ -15,6 +15,8 @@ import Link from "next/link";
 import {
   ArrowLeft,
   Check,
+  CheckCheck,
+  ClipboardList,
   Download,
   FileText,
   Loader2,
@@ -36,6 +38,8 @@ import { descarregar } from "@/lib/descarregar";
 import VisualizadorAnexo from "@/components/chat/VisualizadorAnexo";
 import {
   abrirConversaDirecta,
+  abrirConversaEncomenda,
+  abrirConversaPedido,
   adicionarMembroGrupo,
   carregarAnexosDe,
   carregarContactos,
@@ -48,6 +52,7 @@ import {
   ETIQUETA_PAPEL,
   horaCurta,
   iniciais,
+  lidaAte,
   LIMITE_ANEXO,
   marcarLida,
   mesmoDia,
@@ -69,6 +74,20 @@ interface Props {
   voltarLabel: string;
   /** Texto mostrado quando ainda não há conversas. */
   vazioTexto?: string;
+  /**
+   * Pedido de grosso a abrir (0036).
+   *
+   * A conversa é criada na primeira vez e reutilizada sempre. É o que o botão
+   * «Abrir conversa →» dos pedidos manda para cá — não o id da conversa, que
+   * ainda pode não existir.
+   */
+  pedidoGrosso?: string;
+  /** Encomenda de loja a abrir. Mesma regra do pedido de grosso. */
+  encomenda?: string;
+  /** Mostra os filtros por tipo de utilizador (só a gestão precisa deles). */
+  filtros?: boolean;
+  /** Para onde o selo do pedido leva (lista de pedidos de quem está a ver). */
+  pedidoHref?: string;
 }
 
 function formatarTamanho(bytes: number): string {
@@ -323,14 +342,39 @@ function VistaAnexo({
   );
 }
 
-function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
+function ChatInner({
+  voltarHref,
+  voltarLabel,
+  vazioTexto,
+  pedidoGrosso,
+  encomenda,
+  filtros,
+  pedidoHref,
+}: Props) {
   const searchParams = useSearchParams();
   const pedido = searchParams.get("c");
+
+  // O pedido pode chegar por prop (a página do pedido já sabe qual é) ou pela
+  // URL (`?pedido=`), para o link poder ser copiado e guardado.
+  const pedidoAbrir = searchParams.get("pedido") ?? pedidoGrosso ?? null;
+  const encomendaAbrir = searchParams.get("encomenda") ?? encomenda ?? null;
 
   const [eu, setEu] = useState<{ id: string; nome: string; papel: Papel } | null>(null);
   const [conversas, setConversas] = useState<Conversa[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [mensagens, setMensagens] = useState<Mensagem[]>([]);
+  /**
+   * Até quando o outro lado leu, por conversa (0036).
+   *
+   * É um mapa e não um valor único: trocar de conversa não pode mostrar o ✓✓
+   * da anterior, e limpar o valor num efeito era um `setState` a mais no
+   * primeiro pintado.
+   */
+  const [lidoPor, setLidoPor] = useState<Record<string, string | null>>({});
+  /** Filtro da lista (só a gestão o vê). */
+  const [filtro, setFiltro] = useState<"todas" | "clientes" | "revendedores" | "pedidos">(
+    "todas"
+  );
   const [rascunho, setRascunho] = useState("");
   const [erro, setErro] = useState("");
   const [aCarregar, setACarregar] = useState(true);
@@ -446,10 +490,30 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
       });
 
       try {
+        // 0. Pedido ou encomenda: a base devolve a conversa que já existe, ou
+        //    cria a primeira. Nunca duas para o mesmo pedido (0036).
+        let forcada: string | null = null;
+        if (pedidoAbrir || encomendaAbrir) {
+          try {
+            forcada = pedidoAbrir
+              ? await abrirConversaPedido(pedidoAbrir)
+              : await abrirConversaEncomenda(encomendaAbrir as string);
+          } catch (e) {
+            // Sem conversa do pedido ainda se lê a caixa de entrada — a falha
+            // aparece em cima, não substitui a página por um erro.
+            if (!cancelado) {
+              setErro(
+                e instanceof Error ? e.message : "Não foi possível abrir a conversa do pedido."
+              );
+            }
+          }
+        }
+
         const lista = await recarregarInbox(user.id, papel);
         if (cancelado) return;
 
-        const alvo = pedido && lista.some((c) => c.id === pedido) ? pedido : null;
+        const alvo =
+          forcada ?? (pedido && lista.some((c) => c.id === pedido) ? pedido : null);
         if (alvo) {
           setActiveId(alvo);
         } else if (window.matchMedia("(min-width: 768px)").matches && lista.length > 0) {
@@ -466,7 +530,7 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
     return () => {
       cancelado = true;
     };
-  }, [pedido, recarregarInbox]);
+  }, [pedido, pedidoAbrir, encomendaAbrir, recarregarInbox]);
 
   // --- Conversa activa ------------------------------------------------------
   useEffect(() => {
@@ -493,6 +557,40 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
       cancelado = true;
     };
   }, [activeId, eu]);
+
+  // --- Estado de leitura (✓ / ✓✓) -------------------------------------------
+  const carregarLeitura = useCallback(async (id: string) => {
+    try {
+      const quando = await lidaAte(id);
+      setLidoPor((antes) => (antes[id] === quando ? antes : { ...antes, [id]: quando }));
+    } catch {
+      // Sem a 0036 aplicada não há ✓✓ — e não é motivo para um aviso.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!activeId) return;
+    let cancelado = false;
+
+    // IIFE assíncrona: o `setState` acontece depois do `await`, não no corpo
+    // do efeito — é o que evita a cascata de renderizações.
+    (async () => {
+      try {
+        const quando = await lidaAte(activeId);
+        if (!cancelado) {
+          setLidoPor((antes) =>
+            antes[activeId] === quando ? antes : { ...antes, [activeId]: quando }
+          );
+        }
+      } catch {
+        // Sem a 0036 aplicada não há ✓✓ — e não é motivo para um aviso.
+      }
+    })();
+
+    return () => {
+      cancelado = true;
+    };
+  }, [activeId]);
 
   // --- Realtime -------------------------------------------------------------
   // Sem filtro por conversa: um único canal serve a conversa aberta e a lista.
@@ -551,12 +649,22 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
           });
         }
       )
+      // O outro lado abriu a conversa: `last_read_at` mudou e o ✓ passa a ✓✓
+      // sem esperar por nada. Também chega quando sou eu que leio — recarregar
+      // o mesmo valor não muda o estado (ver `carregarLeitura`).
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "conversation_members" },
+        () => {
+          if (activeId) carregarLeitura(activeId);
+        }
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(canal);
     };
-  }, [eu, activeId, juntarMensagem, recarregarInbox]);
+  }, [eu, activeId, juntarMensagem, recarregarInbox, carregarLeitura]);
 
   // Apagar chega aos outros ecrãs: sem isto, a mensagem ficava à vista de quem
   // já tinha a conversa aberta. O `payload.old` de um DELETE traz só a chave.
@@ -959,13 +1067,26 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
 
   const conversasVisiveis = useMemo(() => {
     const q = pesquisaLista.trim().toLowerCase();
-    if (!q) return conversas;
+
+    // O filtro da gestão. Um grupo é sala da empresa: não é «cliente» nem
+    // «revendedor», por isso só aparece em «Todas».
+    const doTipo = (c: Conversa) => {
+      if (filtro === "todas") return true;
+      if (c.type === "group") return false;
+      if (filtro === "pedidos") return Boolean(c.pedidoId);
+      const outro = c.membros.find((m) => m.id !== eu?.id);
+      if (filtro === "revendedores") return outro?.role === "reseller";
+      return !outro || outro.role === "customer";
+    };
+
     return conversas.filter((c) => {
+      if (!doTipo(c)) return false;
+      if (!q) return true;
       const nome = nomeConversa(c, eu?.id ?? null).toLowerCase();
       const ultima = c.ultima ? previa(c.ultima).toLowerCase() : "";
       return nome.includes(q) || ultima.includes(q);
     });
-  }, [conversas, pesquisaLista, eu?.id]);
+  }, [conversas, pesquisaLista, eu?.id, filtro]);
 
   // --- Interface ------------------------------------------------------------
   return (
@@ -1054,6 +1175,34 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
               )}
             </div>
           </div>
+
+          {/* Filtros da gestão: clientes, revendedores, pedidos. Uma central de
+              atendimento com cem conversas não se lê por ordem alfabética. */}
+          {filtros && (
+            <div className="flex gap-1.5 overflow-x-auto px-2.5 pb-2.5">
+              {(
+                [
+                  ["todas", "Todas"],
+                  ["clientes", "Clientes"],
+                  ["revendedores", "Revendedores"],
+                  ["pedidos", "Pedidos"],
+                ] as const
+              ).map(([valor, rotulo]) => (
+                <button
+                  key={valor}
+                  onClick={() => setFiltro(valor)}
+                  aria-pressed={filtro === valor}
+                  className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
+                    filtro === valor
+                      ? "bg-[#C9A962] text-[#0A0A0A]"
+                      : "bg-[#1A1A1A] text-[#A3A3A3] hover:text-[#F5F5F5]"
+                  }`}
+                >
+                  {rotulo}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="min-h-0 flex-1 overflow-y-auto pb-2">
             {aCarregar ? (
@@ -1165,6 +1314,27 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
                       ? `grupo · ${activa.membros.length} ${activa.membros.length === 1 ? "membro" : "membros"}`
                       : (ETIQUETA_PAPEL[activa.membros.find((m) => m.id !== eu?.id)?.role ?? ""] ??
                         "conversa directa")}
+                    {/* O pedido a que a conversa pertence (0036) — e o caminho
+                        de volta para ele. Sem isto, a conversa ficava sem
+                        contexto: quem entra por «Mensagens» não sabia de que
+                        pedido se estava a falar. */}
+                    {activa.pedidoNumero && (
+                      <>
+                        {" · "}
+                        <Link
+                          href={
+                            pedidoHref ??
+                            (activa.pedidoTipo === "grosso"
+                              ? "/revenda/pedidos"
+                              : "/cliente/encomendas")
+                          }
+                          className="inline-flex items-center gap-1 align-middle text-[#C9A962] hover:underline"
+                        >
+                          <ClipboardList className="h-3 w-3" />
+                          {activa.pedidoNumero}
+                        </Link>
+                      </>
+                    )}
                   </p>
                 </div>
                 {eu?.papel === "manager" && (
@@ -1296,7 +1466,25 @@ function ChatInner({ voltarHref, voltarLabel, vazioTexto }: Props) {
                             >
                               {m.falhou ? "não enviada" : horaCurta(m.created_at)}
                               {minha && !m.falhou && !m.pendente && (
-                                <Check className="h-3 w-3" />
+                                // ✓ = enviada · ✓✓ = o outro lado abriu a
+                                // conversa depois de ela chegar (0036).
+                                // Sem `lidoPor` (migração por aplicar) fica ✓.
+                                (() => {
+                                  const lido = activeId ? lidoPor[activeId] : null;
+                                  const jaLida =
+                                    !!lido &&
+                                    new Date(m.created_at).getTime() <=
+                                      new Date(lido).getTime();
+                                  return jaLida ? (
+                                    <span title="Lida" className="inline-flex">
+                                      <CheckCheck className="h-3.5 w-3.5" aria-label="Lida" />
+                                    </span>
+                                  ) : (
+                                    <span title="Enviada" className="inline-flex">
+                                      <Check className="h-3 w-3" aria-label="Enviada" />
+                                    </span>
+                                  );
+                                })()
                               )}
                               {(minha || eu?.papel === "manager") && !m.pendente && (
                                 <button

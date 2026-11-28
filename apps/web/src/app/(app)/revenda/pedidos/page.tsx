@@ -5,6 +5,11 @@ import { createClientServer } from "@/lib/supabase-server";
 import { getProfile } from "@/lib/auth";
 import { formatCurrency } from "@/lib/utils";
 import { ESTADOS, estadoDe, normalizarPedido } from "@/lib/revenda";
+import {
+  conversasDosPedidos,
+  type ConversaDePedido,
+} from "@/lib/conversas-pedidos-server";
+import MarcarPedidosVistos from "@/components/MarcarPedidosVistos";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +37,14 @@ export default async function PedidosGrossoPage() {
 
   const pedidos = ((data ?? []) as unknown[]).map(normalizarPedido);
   const semTabela = error && /PGRST205|does not exist/i.test(error.message);
+
+  // Cada pedido tem (ou pode ter) a sua conversa. Uma consulta serve a lista
+  // toda — ver `conversasDosPedidos`.
+  const conversas: Map<string, ConversaDePedido> = semTabela
+    ? new Map()
+    : await conversasDosPedidos(supabase, profile.id, "grosso").catch(
+        () => new Map<string, ConversaDePedido>()
+      );
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-10">
@@ -84,6 +97,7 @@ export default async function PedidosGrossoPage() {
       <div className="space-y-3">
         {pedidos.map((p) => {
           const estado = estadoDe(p.status);
+          const conversa = conversas.get(p.id);
           return (
             <article key={p.id} className="rounded-xl border border-[#262626] bg-[#141414] p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -152,10 +166,31 @@ export default async function PedidosGrossoPage() {
                   </ul>
                 </details>
               )}
+
+              {/* O caminho para falar com a gestão. A conversa é a do pedido —
+                  abrir outra vez abre a mesma, com tudo o que já foi dito. */}
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[#1F1F1F] pt-3">
+                <Link
+                  href={`/revenda/conversas?pedido=${p.id}`}
+                  className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-[#C9A962] transition hover:underline"
+                >
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  Abrir conversa
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+                {conversa && conversa.naoLidas > 0 && (
+                  <span className="rounded-full bg-[#C9A962] px-2 py-0.5 text-[10px] font-semibold text-[#0A0A0A]">
+                    {conversa.naoLidas} nova{conversa.naoLidas === 1 ? "" : "s"}
+                  </span>
+                )}
+              </div>
             </article>
           );
         })}
       </div>
+
+      {/* A lista está à vista: o contador de pedidos pode voltar a zero. */}
+      <MarcarPedidosVistos />
     </main>
   );
 }

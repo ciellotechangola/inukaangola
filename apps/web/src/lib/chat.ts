@@ -66,6 +66,15 @@ export interface Conversa {
   naoLidas: number;
   /** Eu pertenço a esta conversa (o gestor vê todas, mas só é membro das suas). */
   souMembro: boolean;
+  /**
+   * Pedido a que a conversa pertence, quando pertence a algum (0036).
+   *
+   * `pedidoNumero` é o que o utilizador reconhece — «RV-2026-0001» ou a
+   * referência da encomenda. `pedidoId` serve para voltar ao pedido.
+   */
+  pedidoId: string | null;
+  pedidoNumero: string | null;
+  pedidoTipo: "grosso" | "encomenda" | null;
 }
 
 type Cliente = ReturnType<typeof createClientBrowser>;
@@ -113,20 +122,32 @@ export async function carregarInbox(
 
   // 2. As conversas. O gestor vê todas (política is_manager); os restantes só
   //    as suas — e nesse caso filtramos explicitamente pelos ids.
-  let consulta = supabase.from("conversations").select("id, type, title, members:conversation_members(user_id)");
+  let consulta = supabase
+    .from("conversations")
+    .select(
+      "id, type, title, pedido_grosso_id, order_id, members:conversation_members(user_id)"
+    );
   if (papel !== "manager") {
     const ids = [...lidoEm.keys()];
     if (ids.length === 0) return [];
     consulta = consulta.in("id", ids);
   }
 
-  const { data: conversasRaw, error: erroConversas } = await consulta.limit(LIMITE_CONVERSAS);
+  // Ordenar **antes** do limite: sem isto a gestão, que vê todas as conversas
+  // da empresa, levava as primeiras 60 que o Postgres devolvesse — e com uma
+  // conversa por pedido isso deixava conversas vivas de fora. `updated_at`
+  // passou a ser tocado por cada mensagem nova (0036).
+  const { data: conversasRaw, error: erroConversas } = await consulta
+    .order("updated_at", { ascending: false })
+    .limit(LIMITE_CONVERSAS);
   if (erroConversas) throw new Error(erroConversas.message);
 
   const conversas = (conversasRaw ?? []) as unknown as {
     id: string;
     type: string;
     title: string | null;
+    pedido_grosso_id: string | null;
+    order_id: string | null;
     members: { user_id: string }[];
   }[];
   if (conversas.length === 0) return [];
@@ -140,6 +161,32 @@ export async function carregarInbox(
 
   const porId = new Map<string, Membro>();
   for (const p of (perfis ?? []) as Membro[]) porId.set(p.id, p);
+
+  // 3b. O número do pedido de cada conversa (0036). Sem isto a lista mostrava
+  //     «Pedido RV-2026-0001» só no título, que a gestão pode mudar; o número
+  //     tem de vir do pedido, não do texto.
+  const numeroPorPedido = new Map<string, string>();
+  const idsGrosso = [...new Set(conversas.map((c) => c.pedido_grosso_id).filter(Boolean))] as string[];
+  const idsEncomenda = [...new Set(conversas.map((c) => c.order_id).filter(Boolean))] as string[];
+
+  if (idsGrosso.length > 0) {
+    const { data } = await supabase
+      .from("revendedor_pedidos")
+      .select("id, numero")
+      .in("id", idsGrosso);
+    for (const p of (data ?? []) as { id: string; numero: string }[]) {
+      numeroPorPedido.set(p.id, p.numero);
+    }
+  }
+  if (idsEncomenda.length > 0) {
+    const { data } = await supabase
+      .from("orders")
+      .select("id, reference")
+      .in("id", idsEncomenda);
+    for (const o of (data ?? []) as { id: string; reference: string }[]) {
+      numeroPorPedido.set(o.id, o.reference);
+    }
+  }
 
   // 4. Última mensagem e não lidas, por conversa, em paralelo.
   const detalhes = await Promise.all(
@@ -183,6 +230,7 @@ export async function carregarInbox(
 
   const saida: Conversa[] = conversas.map((c) => {
     const d = detalhePorId.get(c.id)!;
+    const pedidoId = c.pedido_grosso_id ?? c.order_id ?? null;
     return {
       id: c.id,
       type: c.type,
@@ -191,6 +239,9 @@ export async function carregarInbox(
       ultima: d.ultima,
       naoLidas: d.naoLidas,
       souMembro: d.souMembro,
+      pedidoId,
+      pedidoNumero: pedidoId ? (numeroPorPedido.get(pedidoId) ?? null) : null,
+      pedidoTipo: c.pedido_grosso_id ? "grosso" : c.order_id ? "encomenda" : null,
     };
   });
 
@@ -371,7 +422,46 @@ export async function entrarNaConversa(supabase: Cliente, conversationId: string
 export async function marcarLida(supabase: Cliente, conversationId: string) {
   // Falha com 42501 se não for membro (gestor a observar) — não é erro.
   await supabase.rpc("mark_conversation_read", { p_conversation_id: conversationId });
+  // O cabeçalho tem contadores próprios: avisá-lo evita esperar pelo ciclo.
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("inuka:mensagens"));
 }
+
+/**
+ * A conversa de um pedido de grosso (0036).
+ *
+ * A base garante uma só conversa por pedido: se já existir, devolve a mesma e
+ * as mensagens antigas ficam lá. É este o «Abrir conversa →» dos pedidos.
+ */
+export async function abrirConversaPedido(pedidoId: string): Promise<string> {
+  const supabase = createClientBrowser();
+  const { data, error } = await supabase.rpc("abrir_conversa_pedido", { p_pedido: pedidoId });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+/** A conversa de uma encomenda de loja (0036). Mesma regra: uma por encomenda. */
+export async function abrirConversaEncomenda(orderId: string): Promise<string> {
+  const supabase = createClientBrowser();
+  const { data, error } = await supabase.rpc("abrir_conversa_encomenda", { p_order: orderId });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+/**
+ * Até quando o outro lado leu.
+ *
+ * É o que distingue ✓ (enviada) de ✓✓ (lida). `null` = ainda não leu. Num
+ * grupo é o mínimo entre os restantes: só fica lida quando todos leram.
+ */
+export async function lidaAte(conversationId: string): Promise<string | null> {
+  const supabase = createClientBrowser();
+  const { data, error } = await supabase.rpc("lida_ate_conversa", {
+    p_conversation_id: conversationId,
+  });
+  if (error) return null;
+  return (data as string | null) ?? null;
+}
+
 
 export interface Contacto {
   id: string;

@@ -492,6 +492,22 @@ function DetalheProduto({ p }: { p: PedidoProduto }) {
         </div>
       )}
 
+      {/* A conversa do pedido: é aqui que o assunto continua depois da
+          primeira resposta. Uma por pedido, sempre a mesma (0036) — abrir
+          outra vez carrega tudo o que já foi dito. */}
+      <Link
+        href={
+          p.origem === "grosso"
+            ? `/gerente/conversas?pedido=${p.id}`
+            : `/gerente/conversas?encomenda=${p.id}`
+        }
+        className="inline-flex items-center gap-2 rounded-lg border border-[#C9A962]/50 bg-[#C9A962]/10 px-4 py-2 text-xs font-semibold text-[#C9A962] transition hover:bg-[#C9A962] hover:text-[#0A0A0A]"
+      >
+        <MessageSquare className="h-3.5 w-3.5" />
+        Abrir conversa
+        <ArrowRight className="h-3.5 w-3.5" />
+      </Link>
+
       <Historico eventos={p.historico} />
 
       <div className="rounded-lg border border-[#262626] bg-[#0A0A0A] p-3">

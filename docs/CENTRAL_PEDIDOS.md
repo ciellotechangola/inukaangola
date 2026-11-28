@@ -43,6 +43,14 @@ Repetir o filtro na página só arriscava esconder linhas que a base já tinha a
 existir e a funcionar. A central lê as mesmas tabelas — não copia, não duplica e não cria
 registos.
 
+## Falar com quem pediu
+
+Cada pedido tem um botão **«Abrir conversa»** que leva à conversa daquele pedido em
+`/gerente/conversas?pedido=…` (ou `?encomenda=…`). A conversa é uma só por pedido e
+guarda todo o histórico — ver `docs/MENSAGENS_E_PEDIDOS.md` (migração 0036). A resposta
+formal continua a ser escrita aqui, no campo «Resposta ao solicitante»; a conversa é um
+canal a mais, não a substitui.
+
 # Ordem dos produtos nos catálogos
 
 `lib/ordenacao-catalogo.ts` — **perfumes → cremes → restantes**, nos dois catálogos

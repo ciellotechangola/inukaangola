@@ -22,6 +22,7 @@ export default async function RevendaConversasPage() {
       voltarHref="/revenda"
       voltarLabel="Área de revenda"
       vazioTexto="Ainda não tem conversas. Abra uma com o gerente da sua província na área de revenda."
+      pedidoHref="/revenda/pedidos"
     />
   );
 }

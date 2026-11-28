@@ -50,6 +50,7 @@ const PARTES = [
   { ficheiro: "migrations/0033_preco_revenda_oficial.sql", titulo: "PREÇO DE REVENDA OFICIAL (TABELA 2026)" },
   { ficheiro: "migrations/0034_situacao_da_venda.sql", titulo: "SITUAÇÃO DA VENDA: PENDENTE → PAGO, HISTÓRICO E SALDOS" },
   { ficheiro: "migrations/0035_catalogo_grosso_por_unidades.sql", titulo: "GROSSO POR UNIDADES E CATÁLOGO PELO ÚLTIMO SUBMETIDO" },
+  { ficheiro: "migrations/0036_conversas_de_pedidos.sql", titulo: "CONVERSAS DE PEDIDO, CONTADORES E ESTADO DE LEITURA" },
 ];
 
 const cabecalho = `-- =============================================================================

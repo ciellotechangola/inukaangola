@@ -19,5 +19,18 @@ export default async function ConversasPage() {
             ? { href: "/revenda", label: "Área de revenda" }
             : { href: "/cliente", label: "Área de cliente" };
 
-  return <Chat voltarHref={voltar.href} voltarLabel={voltar.label} />;
+  // O selo do pedido dentro da conversa leva à lista de pedidos de quem está a
+  // ver — cada perfil tem a sua (0036).
+  const pedidoHref =
+    profile.role === "manager"
+      ? "/gerente/pedidos"
+      : profile.role === "reseller"
+        ? "/revenda/pedidos"
+        : profile.role === "customer"
+          ? "/cliente/encomendas"
+          : undefined;
+
+  return (
+    <Chat voltarHref={voltar.href} voltarLabel={voltar.label} pedidoHref={pedidoHref} />
+  );
 }

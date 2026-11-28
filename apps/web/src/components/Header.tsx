@@ -4,10 +4,32 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Menu, X, ShoppingBag, User, LogOut } from "lucide-react";
+import { Menu, X, ShoppingBag, User, LogOut, MessageSquare, ClipboardList } from "lucide-react";
 import { createClientBrowser } from "@/lib/supabase-browser";
 import { useCart } from "@/components/cart-context";
+import { useNotificacoes } from "@/lib/notificacoes";
 import type { Profile, Provincia } from "@/types";
+
+/**
+ * O número pequeno por cima do ícone.
+ *
+ * `99+` porque um contador de quatro dígitos rebenta a pastilha — e o número
+ * exacto acima de cem não muda a decisão de ninguém.
+ */
+function Contador({ valor, pequeno = false }: { valor: number; pequeno?: boolean }) {
+  if (valor <= 0) return null;
+  return (
+    <span
+      className={`absolute flex items-center justify-center rounded-full bg-[#C9A962] font-semibold text-[#0A0A0A] ${
+        pequeno
+          ? "right-1 top-1 h-4 min-w-4 px-1 text-[10px]"
+          : "-right-2 -top-2 h-5 min-w-5 px-1 text-[11px]"
+      }`}
+    >
+      {valor > 99 ? "99+" : valor}
+    </span>
+  );
+}
 
 export default function Header() {
   const router = useRouter();
@@ -16,6 +38,9 @@ export default function Header() {
   const [loading, setLoading] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
   const { count, ready } = useCart();
+  // Contadores vivos (0036). Só depois de haver sessão: sem perfil a RPC
+  // devolveria zeros e o cabeçalho ficava a bater na base sem motivo.
+  const { contadores } = useNotificacoes(Boolean(profile));
 
   useEffect(() => {
     const supabase = createClientBrowser();
@@ -56,6 +81,18 @@ export default function Header() {
     router.push("/");
     router.refresh();
   }
+
+  // Os dois destinos com contador. A gestão tem uma central de mensagens com
+  // filtros; os restantes usam o mensageiro comum.
+  const conversasHref = profile?.role === "manager" ? "/gerente/conversas" : "/conversas";
+  const pedidosHref =
+    profile?.role === "manager"
+      ? "/gerente/pedidos"
+      : profile?.role === "reseller"
+        ? "/revenda/pedidos"
+        : profile?.role === "customer"
+          ? "/cliente/encomendas"
+          : null;
 
   // `desde` adia a ligação para ecrãs largos: com as áreas novas (conteúdos e
   // formação) o menu passava a não caber a partir de 768 px.
@@ -150,7 +187,7 @@ export default function Header() {
     // Colaborador — uma vez, e com o botão de copiar. A aba «Referência» fica
     // para clientes e gestão, que não têm esse cartão.
     ...(profile && profile.role !== "seller" ? [{ href: "/referencia", label: "Referência" }] : []),
-    ...(profile ? [{ href: "/conversas", label: "Mensagens" }] : []),
+    ...(profile ? [{ href: conversasHref, label: "Mensagens" }] : []),
     { href: "/sobre", label: "Sobre", desde: "lg" },
     // «Ser colaborador» e «Ser revendedor» são as portas de quem ainda não
     // trabalha com a INUKA: uma por comissão, outra por margem. Quem já é da
@@ -187,6 +224,18 @@ export default function Header() {
   // isso o ícone não lhe aparece — dois carrinhos davam dois totais.
   const temCarrinho = profile?.role !== "reseller";
 
+  /**
+   * Que contador pertence a cada link do menu.
+   *
+   * Só dois links têm número — «Mensagens» e «Pedidos». O resto devolve zero e
+   * a pastilha nem chega a nascer.
+   */
+  function contadorDe(href: string): number {
+    if (href === conversasHref) return contadores.mensagens;
+    if (pedidosHref && href === pedidosHref) return contadores.pedidos;
+    return 0;
+  }
+
   return (
     <header className="sticky top-0 z-50 border-b border-[#262626] bg-[#0A0A0A]/95 backdrop-blur">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4">
@@ -196,20 +245,58 @@ export default function Header() {
         </Link>
 
         <nav className="hidden items-center gap-6 md:flex">
-          {navLinks.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className={`text-sm font-medium text-[#A3A3A3] transition hover:text-[#C9A962] ${
-                link.desde === "lg" ? "hidden lg:inline" : link.desde === "md" ? "hidden md:inline" : ""
-              }`}
-            >
-              {link.label}
-            </Link>
-          ))}
+          {navLinks.map((link) => {
+            const n = contadorDe(link.href);
+            return (
+              <Link
+                key={link.href}
+                href={link.href}
+                className={`inline-flex items-center gap-1.5 text-sm font-medium text-[#A3A3A3] transition hover:text-[#C9A962] ${
+                  link.desde === "lg" ? "hidden lg:inline-flex" : link.desde === "md" ? "hidden md:inline-flex" : ""
+                }`}
+              >
+                {link.label}
+                {n > 0 && (
+                  <span className="rounded-full bg-[#C9A962] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[#0A0A0A]">
+                    {n > 99 ? "99+" : n}
+                  </span>
+                )}
+              </Link>
+            );
+          })}
         </nav>
 
         <div className="hidden items-center gap-4 md:flex">
+          {/* Mensagens e pedidos com contador, ao lado do carrinho: são os dois
+              números que mudam sozinhos enquanto a pessoa navega. */}
+          {profile && (
+            <Link
+              href={conversasHref}
+              className="relative text-[#A3A3A3] transition hover:text-[#C9A962]"
+              aria-label={
+                contadores.mensagens > 0
+                  ? `Mensagens, ${contadores.mensagens} por ler`
+                  : "Mensagens"
+              }
+            >
+              <MessageSquare className="h-5 w-5" />
+              <Contador valor={contadores.mensagens} />
+            </Link>
+          )}
+          {profile && pedidosHref && (
+            <Link
+              href={pedidosHref}
+              className="relative text-[#A3A3A3] transition hover:text-[#C9A962]"
+              aria-label={
+                contadores.pedidos > 0
+                  ? `Pedidos, ${contadores.pedidos} novidades`
+                  : "Pedidos"
+              }
+            >
+              <ClipboardList className="h-5 w-5" />
+              <Contador valor={contadores.pedidos} />
+            </Link>
+          )}
           {temCarrinho && (
             <Link
               href="/carrinho"
@@ -254,6 +341,36 @@ export default function Header() {
         </div>
 
         <div className="flex items-center gap-1 md:hidden">
+          {/* No telemóvel o contador tem de estar à vista: é lá que a pessoa
+              está quando chega a resposta. */}
+          {profile && (
+            <Link
+              href={conversasHref}
+              className="relative flex h-10 w-10 items-center justify-center text-[#A3A3A3] transition hover:text-[#C9A962]"
+              aria-label={
+                contadores.mensagens > 0
+                  ? `Mensagens, ${contadores.mensagens} por ler`
+                  : "Mensagens"
+              }
+            >
+              <MessageSquare className="h-5 w-5" />
+              <Contador valor={contadores.mensagens} pequeno />
+            </Link>
+          )}
+          {profile && pedidosHref && (
+            <Link
+              href={pedidosHref}
+              className="relative flex h-10 w-10 items-center justify-center text-[#A3A3A3] transition hover:text-[#C9A962]"
+              aria-label={
+                contadores.pedidos > 0
+                  ? `Pedidos, ${contadores.pedidos} novidades`
+                  : "Pedidos"
+              }
+            >
+              <ClipboardList className="h-5 w-5" />
+              <Contador valor={contadores.pedidos} pequeno />
+            </Link>
+          )}
           {/* No telemóvel o carrinho fica sempre à vista: é o que mais se usa.
               Para o revendedor não há carrinho de cliente — ele leva o pedido
               de grosso no próprio catálogo. */}
@@ -309,16 +426,24 @@ export default function Header() {
       {mobileOpen && (
         <div className="border-t border-[#262626] bg-[#1A1A1A] px-4 py-4 md:hidden">
           <nav className="flex flex-col gap-4">
-            {navLinks.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="text-[#A3A3A3] transition hover:text-[#C9A962]"
-                onClick={() => setMobileOpen(false)}
-              >
-                {link.label}
-              </Link>
-            ))}
+            {navLinks.map((link) => {
+              const n = contadorDe(link.href);
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className="flex items-center gap-2 text-[#A3A3A3] transition hover:text-[#C9A962]"
+                  onClick={() => setMobileOpen(false)}
+                >
+                  {link.label}
+                  {n > 0 && (
+                    <span className="rounded-full bg-[#C9A962] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[#0A0A0A]">
+                      {n > 99 ? "99+" : n}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
             {temCarrinho && (
               <Link
                 href="/carrinho"

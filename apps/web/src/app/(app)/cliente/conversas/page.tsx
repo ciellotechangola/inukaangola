@@ -7,5 +7,11 @@ export const dynamic = "force-dynamic";
  * A conversa em si vive em `components/Chat.tsx`, partilhada por todos os perfis.
  */
 export default function ClienteConversasPage() {
-  return <Chat voltarHref="/cliente" voltarLabel="Área de cliente" />;
+  return (
+    <Chat
+      voltarHref="/cliente"
+      voltarLabel="Área de cliente"
+      pedidoHref="/cliente/encomendas"
+    />
+  );
 }
